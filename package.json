@@ -1,0 +1,79 @@
+{
+  "name": "recruitment-tool",
+  "version": "0.10.10",
+  "description": "Electron tool for editing RTW mod recruitment in export_descr_buildings.txt",
+  "author": "Tarnholm",
+  "license": "MIT",
+  "homepage": ".",
+  "main": "main.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "electron": "electron .",
+    "electron-dev": "cross-env DEV_USE_SERVER=1 electron .",
+    "import-xlsm": "node scripts/import-from-xlsm.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
+    "react-scripts": "^5.0.1"
+  },
+  "build": {
+    "extends": null,
+    "appId": "com.tarnholm.recruitment-tool",
+    "productName": "Recruitment Tool",
+    "directories": {
+      "buildResources": "public",
+      "output": "dist"
+    },
+    "files": [
+      "build/**",
+      "main.js",
+      "preload.js",
+      "xlsmReader.js",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "main.js"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Tarnholm",
+        "repo": "recruitment-tool"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Recruitment Tool"
+    }
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
+  }
+}
