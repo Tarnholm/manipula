@@ -20,8 +20,13 @@
 //   pinFirstColumn    — sticky-left first column on horizontal scroll, useful
 //                        for wide tables (Units has 30+ columns) so the unit
 //                        name stays visible.
+//
+// Performance: each Cell owns its own "is editing" state and is React.memo'd.
+// That means a click in one cell does not re-render the other 25,000 cells in
+// the table — only the clicked cell. Commits update project state, but
+// memoization ensures only the cell whose value actually changed re-renders.
 
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 
 function isSection(row) { return row && !Array.isArray(row) && typeof row.section === "string"; }
 
@@ -37,8 +42,6 @@ export default function DataTable({
   searchable = false,
 }) {
   const [q, setQ] = useState("");
-  // Filter rows but keep the original-row index alongside each kept row, so we
-  // can hand the caller the right rowId no matter the current search state.
   const filteredEntries = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const all = rows.map((r, i) => ({ row: r, origIdx: i }));
@@ -58,17 +61,19 @@ export default function DataTable({
   const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isSection(r) ? 0 : 1), 0), [rows]);
   const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isSection(e.row) ? 0 : 1), 0), [filteredEntries]);
 
-  // Active edit cell — stored as { rowOrigIdx, columnKey, draft }. Only one cell
-  // is editable at a time; clicking another commits the previous one.
-  const [editing, setEditing] = useState(null);
-
-  const commit = (next) => {
-    if (!editing || !onEdit) { setEditing(next); return; }
-    const rowId = rowIds ? rowIds[editing.rowOrigIdx] : editing.rowOrigIdx;
-    onEdit(rowId, editing.columnKey, editing.draft);
-    setEditing(next);
-  };
-  const cancel = () => setEditing(null);
+  // Stable per-cell commit callback. Each Cell calls this with its rowOrigIdx +
+  // columnKey + newValue; we resolve the rowId and forward to onEdit. The ref
+  // is stable across renders so memoized Cells don't re-render just because
+  // the parent re-rendered.
+  const commitRef = useRef({ onEdit, rowIds });
+  commitRef.current.onEdit = onEdit;
+  commitRef.current.rowIds = rowIds;
+  const commitCell = useCallback((rowOrigIdx, columnKey, newValue) => {
+    const { onEdit: f, rowIds: ids } = commitRef.current;
+    if (!f) return;
+    const rowId = ids ? ids[rowOrigIdx] : rowOrigIdx;
+    f(rowId, columnKey, newValue);
+  }, []);
 
   return (
     <div className="dtable-wrap">
@@ -98,7 +103,7 @@ export default function DataTable({
             </tr>
           </thead>
           <tbody>
-            {filteredEntries.map(({ row, origIdx }, i) => {
+            {filteredEntries.map(({ row, origIdx }) => {
               if (isSection(row)) {
                 return (
                   <tr key={`s${origIdx}`} className="dtable-section">
@@ -108,34 +113,17 @@ export default function DataTable({
               }
               return (
                 <tr key={`r${origIdx}`}>
-                  {columns.map((c, j) => {
-                    const isEditing = editable && editing && editing.rowOrigIdx === origIdx && editing.columnKey === c;
-                    const text = row[j] != null ? String(row[j]) : "";
-                    return (
-                      <td
-                        key={j}
-                        title={text}
-                        className={editable ? "dtable-editable" : ""}
-                        onClick={() => {
-                          if (!editable) return;
-                          if (isEditing) return;
-                          commit({ rowOrigIdx: origIdx, columnKey: c, draft: row[j] != null ? String(row[j]) : "" });
-                        }}
-                      >
-                        {isEditing ? (
-                          <CellEditor
-                            value={editing.draft}
-                            meta={columnMeta && columnMeta[c]}
-                            onChange={(v) => setEditing({ ...editing, draft: v })}
-                            onCommit={() => commit(null)}
-                            onCancel={cancel}
-                          />
-                        ) : (
-                          renderCell(row[j])
-                        )}
-                      </td>
-                    );
-                  })}
+                  {columns.map((c, j) => (
+                    <Cell
+                      key={c}
+                      value={row[j]}
+                      columnKey={c}
+                      rowOrigIdx={origIdx}
+                      meta={columnMeta && columnMeta[c]}
+                      editable={editable}
+                      onCommit={commitCell}
+                    />
+                  ))}
                 </tr>
               );
             })}
@@ -149,42 +137,102 @@ export default function DataTable({
   );
 }
 
+// Cell — owns its own editing state. Memoized so only the clicked cell (or a
+// cell whose underlying value just changed) re-renders. Without this, a click
+// on one cell would re-render the whole 25k-cell table.
+const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const text = value != null ? String(value) : "";
+  const startEdit = () => {
+    if (!editable) return;
+    setDraft(text);
+    setEditing(true);
+  };
+  const commit = () => {
+    if (!editing) return;
+    setEditing(false);
+    if (draft !== text) onCommit(rowOrigIdx, columnKey, draft);
+  };
+  const cancel = () => setEditing(false);
+  return (
+    <td
+      title={text}
+      className={editable ? "dtable-editable" : ""}
+      onClick={startEdit}
+    >
+      {editing ? (
+        <CellEditor
+          value={draft}
+          meta={meta}
+          onChange={setDraft}
+          onCommit={commit}
+          onCancel={cancel}
+        />
+      ) : (
+        renderCell(value)
+      )}
+    </td>
+  );
+}, (prev, next) => {
+  // Re-render only when something visible changes. editable/meta refs are
+  // stable across DataTable renders, so this collapses click-elsewhere into a
+  // no-op for unaffected cells.
+  return prev.value === next.value
+      && prev.columnKey === next.columnKey
+      && prev.rowOrigIdx === next.rowOrigIdx
+      && prev.meta === next.meta
+      && prev.editable === next.editable
+      && prev.onCommit === next.onCommit;
+});
+
+// Monotonic id for <datalist>s so the same lookup column rendered across many
+// cells doesn't collide. Each editor mount gets a fresh id.
+let datalistSeq = 0;
+
 function CellEditor({ value, meta, onChange, onCommit, onCancel }) {
   const ref = useRef(null);
-  // Auto-focus when an editor mounts so the user doesn't need a second click.
-  // For selects we also open the dropdown on mount via showPicker() where
-  // available, falling back gracefully on older Chromium.
+  const idRef = useRef(`dt-opts-${++datalistSeq}`);
+  // Auto-focus + select-all so the user can type-to-filter immediately. For
+  // datalist-backed inputs the suggestion popover opens on focus/typing, no
+  // showPicker() workaround needed.
   useEffect(() => {
     if (!ref.current) return;
     ref.current.focus();
-    if (meta && meta.type === "select" && typeof ref.current.showPicker === "function") {
-      try { ref.current.showPicker(); } catch {}
-    } else if (ref.current.select) {
+    if (ref.current.select) {
       try { ref.current.select(); } catch {}
     }
-  }, [meta]);
+  }, []);
   const onKeyDown = (e) => {
     if (e.key === "Enter") { e.preventDefault(); onCommit(); }
     else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
   };
   if (meta && meta.type === "select") {
+    // Datalist input: visible chevron, opens on focus, type-to-filter, and the
+    // user can type a value not in the list (which we keep — useful for older
+    // workbooks with values that newer ones dropped). Earlier we used a
+    // <select> + showPicker() but Chrome's user-activation rule made the
+    // dropdown silently fail to open most of the time, leaving the user
+    // staring at a blank cell that didn't seem to do anything.
     const opts = meta.options || [];
-    // Include the current value in the option list even if it's not in opts
-    // (so we don't silently lose unknown values from older workbooks).
     const seen = new Set(opts);
     const augmented = seen.has(value) || !value ? opts : [value, ...opts];
     return (
-      <select
-        ref={ref}
-        className="dtable-cell-input"
-        value={value || ""}
-        onChange={(e) => { onChange(e.target.value); /* commit immediately on select */ setTimeout(onCommit, 0); }}
-        onKeyDown={onKeyDown}
-        onBlur={onCommit}
-      >
-        <option value="">—</option>
-        {augmented.map((o) => <option key={o} value={o}>{o}</option>)}
-      </select>
+      <>
+        <input
+          ref={ref}
+          type="text"
+          list={idRef.current}
+          className="dtable-cell-input dtable-cell-input--combo"
+          value={value || ""}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={onCommit}
+        />
+        <datalist id={idRef.current}>
+          {augmented.map((o) => <option key={o} value={o} />)}
+        </datalist>
+      </>
     );
   }
   return (

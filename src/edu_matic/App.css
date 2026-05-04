@@ -252,6 +252,41 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elev);
+  /* Mac-style scrollbars — thin, semi-transparent, pad away from the edge.
+   * Both axes get the same treatment so horizontal scrolling on the wide
+   * UnitDefinitions sheet feels native, not like a Windows-default chunk. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+.dtable-scroll::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+.dtable-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dtable-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  min-width: 28px;
+  min-height: 28px;
+}
+.dtable-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.42);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+.dtable-scroll::-webkit-scrollbar-thumb:active {
+  background: rgba(220, 166, 74, 0.55);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+/* The corner where horizontal + vertical tracks meet. Default is a square
+ * Windows chrome chip — kill it so the scrollbars look continuous. */
+.dtable-scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }
 .dtable {
   border-collapse: collapse;
@@ -346,6 +381,18 @@ select.dtable-cell-input {
    * with the other cells. */
   font-family: var(--mono);
   font-size: 12px;
+}
+/* Combo (datalist-backed) input — adds a subtle ▾ chevron on the right so
+ * users can tell it's a dropdown, even though it's structurally an input.
+ * The native datalist popover opens reliably on focus + keystroke, sidestepping
+ * Chrome's showPicker user-activation rule. */
+.dtable-cell-input--combo {
+  padding-right: 18px;
+  background-image: linear-gradient(45deg, transparent 50%, rgba(220, 166, 74, 0.6) 50%),
+                    linear-gradient(135deg, rgba(220, 166, 74, 0.6) 50%, transparent 50%);
+  background-position: calc(100% - 9px) center, calc(100% - 5px) center;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
 }
 
 /* Pinned first column — sticky-left so the unit name stays visible while the
