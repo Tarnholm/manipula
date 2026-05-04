@@ -33,6 +33,13 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 
+// Wide-table scrolling: relies on native overflow-x:auto on .dtable-scroll.
+// The min-width:0 chain on the parent containers (App.js: flex children below
+// the row-flex level) lets the scroll container constrain its width to the
+// viewport, so wide tables overflow inside it instead of expanding it. If the
+// horizontal bar disappears again, the regression is almost certainly a parent
+// flex item missing min-width:0 — not a bug in this component.
+
 function isSection(row) { return row && !Array.isArray(row) && typeof row.section === "string"; }
 function isSeparator(row) { return row && !Array.isArray(row) && row.separator === true; }
 function isNonData(row) { return isSection(row) || isSeparator(row); }
@@ -85,131 +92,12 @@ export default function DataTable({
     f(rowId, columnKey, newValue);
   }, []);
 
-  // Custom horizontal scrollbar — rendered as a sibling of .dtable-scroll so
-  // it's always visible regardless of native scrollbar quirks, embed-layout
-  // height bugs, or the global ::-webkit-scrollbar overrides in index.css.
-  // The native horizontal bar is suppressed via overflow-x:hidden on
-  // .dtable-scroll; this overlay drives scrollLeft programmatically.
   const scrollRef = useRef(null);
-  const trackRef = useRef(null);
-  const [hbar, setHbar] = useState({ thumbLeft: 0, thumbWidth: 0, scrollable: false, diag: 0, diagClient: 0, innerW: -1, innerOffsetW: -1, tableW: -1 });
-  const dragRef = useRef(null);
-
-  const refreshHBar = useCallback(() => {
-    const sc = scrollRef.current;
-    const track = trackRef.current;
-    if (!sc || !track) return;
-    const trackW = track.clientWidth;
-    const scrollW = sc.scrollWidth;
-    const clientW = sc.clientWidth;
-    const ratio = clientW / scrollW;
-    const scrollable = scrollW > clientW + 1;
-    // Diagnostic: also measure the inner table-wrap so we can tell whether
-    // it's the scroll container or the table content that's collapsing.
-    const inner = sc.querySelector(".dtable-table-wrap");
-    const innerW = inner ? inner.scrollWidth : -1;
-    const innerOffsetW = inner ? inner.offsetWidth : -1;
-    const tableEl = sc.querySelector("table.dtable");
-    const tableW = tableEl ? tableEl.offsetWidth : -1;
-    if (!scrollable) {
-      setHbar({ thumbLeft: 0, thumbWidth: trackW, scrollable: false, diag: scrollW, diagClient: clientW, innerW, innerOffsetW, tableW });
-      return;
-    }
-    const thumbWidth = Math.max(48, trackW * ratio);
-    const maxScrollLeft = scrollW - clientW;
-    const thumbLeft = maxScrollLeft > 0 ? (sc.scrollLeft / maxScrollLeft) * (trackW - thumbWidth) : 0;
-    setHbar({ thumbLeft, thumbWidth, scrollable: true, diag: scrollW, diagClient: clientW, innerW, innerOffsetW, tableW });
-  }, []);
-
-  // One-shot diagnostic dump to the userData log file when the table mounts
-  // or rows change. Lets us inspect actual DOM measurements without DevTools.
-  // File location: %APPDATA%/recruitment-tool/edu-matic.log
-  useEffect(() => {
-    if (!window.eduAPI || typeof window.eduAPI.logMessage !== "function") return;
-    const t = setTimeout(() => {
-      const sc = scrollRef.current;
-      if (!sc) return;
-      const tableEl = sc.querySelector("table.dtable");
-      const inner = sc.querySelector(".dtable-table-wrap");
-      const msg = JSON.stringify({
-        columns: columns.length,
-        rows: rows.length,
-        scrollContainer: { scrollWidth: sc.scrollWidth, clientWidth: sc.clientWidth, offsetWidth: sc.offsetWidth },
-        tableWrap: inner ? { scrollWidth: inner.scrollWidth, clientWidth: inner.clientWidth, offsetWidth: inner.offsetWidth } : null,
-        table: tableEl ? { offsetWidth: tableEl.offsetWidth, scrollWidth: tableEl.scrollWidth } : null,
-        cssWidth: tableEl ? getComputedStyle(tableEl).width : null,
-        cssMinWidth: tableEl ? getComputedStyle(tableEl).minWidth : null,
-        wrapDisplay: inner ? getComputedStyle(inner).display : null,
-        scrollOverflowX: getComputedStyle(sc).overflowX,
-      });
-      window.eduAPI.logMessage("dtable", msg);
-    }, 250);
-    return () => clearTimeout(t);
-  }, [rows, columns]);
-
-  // Watch scrolls + size changes on .dtable-scroll.
-  useEffect(() => {
-    const sc = scrollRef.current;
-    if (!sc) return;
-    refreshHBar();
-    const onScroll = () => refreshHBar();
-    sc.addEventListener("scroll", onScroll, { passive: true });
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(refreshHBar) : null;
-    if (ro) ro.observe(sc);
-    window.addEventListener("resize", refreshHBar);
-    return () => {
-      sc.removeEventListener("scroll", onScroll);
-      if (ro) ro.disconnect();
-      window.removeEventListener("resize", refreshHBar);
-    };
-  }, [refreshHBar]);
-  // Refresh thumb sizing when row data / column count changes too.
-  useEffect(() => { refreshHBar(); }, [rows, columns, refreshHBar]);
 
   // Reset to leftmost on dataset change so the user sees the first column.
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollLeft = 0;
   }, [rows]);
-
-  const onThumbMouseDown = (e) => {
-    e.preventDefault();
-    const sc = scrollRef.current;
-    const track = trackRef.current;
-    if (!sc || !track) return;
-    dragRef.current = {
-      startX: e.clientX,
-      startScrollLeft: sc.scrollLeft,
-      trackW: track.clientWidth,
-      thumbW: hbar.thumbWidth,
-      maxScrollLeft: sc.scrollWidth - sc.clientWidth,
-    };
-    const onMove = (ev) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const dx = ev.clientX - d.startX;
-      const trackTravel = d.trackW - d.thumbW;
-      const ratio = trackTravel > 0 ? dx / trackTravel : 0;
-      sc.scrollLeft = Math.max(0, Math.min(d.maxScrollLeft, d.startScrollLeft + ratio * d.maxScrollLeft));
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-  // Click on track (not thumb) → page-jump in that direction.
-  const onTrackMouseDown = (e) => {
-    if (e.target !== trackRef.current) return; // ignore thumb clicks
-    const sc = scrollRef.current;
-    const track = trackRef.current;
-    if (!sc || !track) return;
-    const rect = track.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const dir = clickX < hbar.thumbLeft ? -1 : 1;
-    sc.scrollLeft = Math.max(0, Math.min(sc.scrollWidth - sc.clientWidth, sc.scrollLeft + dir * sc.clientWidth * 0.9));
-  };
 
   // Wheel: shift+wheel scrolls horizontally; plain wheel scrolls vertically
   // (which the native scrollbar handles). Without an explicit handler some
@@ -255,12 +143,6 @@ export default function DataTable({
         onKeyDown={onKeyDown}
         tabIndex={0}
       >
-        {/* inline-block wrapper forces this region to be content-sized
-          * regardless of how Chrome wants to lay out the table. Without
-          * this, with the table's parent constrained to clientWidth, Chrome
-          * occasionally compresses the table to fit instead of letting it
-          * overflow — masking scrollable distance from scrollWidth. */}
-        <div className="dtable-table-wrap">
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
           <thead>
             <tr>
@@ -309,33 +191,6 @@ export default function DataTable({
             )}
           </tbody>
         </table>
-        </div>
-      </div>
-      {/* Custom horizontal scrollbar — ALWAYS rendered, regardless of whether
-        * the browser thinks content overflows. Earlier versions hid the bar
-        * when scrollable=false but that conflated "no overflow" with "user
-        * doesn't need to see it" — the user kept reporting "no scrollbar"
-        * when in fact the bar was just gated off by detection logic. Now it's
-        * always there; if no overflow exists, the thumb fills the track and
-        * dragging is a no-op (which is honest about there being nothing to
-        * scroll). */}
-      <div
-        className="dtable-hbar"
-        ref={trackRef}
-        onMouseDown={onTrackMouseDown}
-        title={hbar.scrollable ? "Drag to scroll horizontally" : `No overflow — table is ${hbar.diag} px in a ${hbar.diagClient} px container`}
-      >
-        <div
-          className="dtable-hbar-thumb"
-          style={{ left: hbar.thumbLeft, width: hbar.thumbWidth }}
-          onMouseDown={onThumbMouseDown}
-        />
-      </div>
-      {/* Live diagnostic so we can finally see what's happening when the
-        * scrollbar isn't behaving — shows actual DOM measurements. */}
-      <div className="dtable-diag" title="scroll width / visible width / inner wrap / table">
-        cols: {columns.length} · scroll {hbar.diag}/{hbar.diagClient} · inner {hbar.innerW}/{hbar.innerOffsetW} · table {hbar.tableW} {hbar.scrollable ? "(scrollable)" : "(fits)"}
-        {" · log: %APPDATA%\\recruitment-tool\\edu-matic.log"}
       </div>
     </div>
   );

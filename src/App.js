@@ -1006,9 +1006,9 @@ export default function App() {
           title="Drag to resize"
           style={{ width: 4, cursor: "col-resize", background: "rgba(220,166,74,0.10)", flexShrink: 0 }}
         />
-        <div style={{ flex: 1, height: "100%", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, height: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <Tabs activeTab={activeTab} onChange={setActiveTab} validationSummary={validationSummary} />
-          <div style={{ flex: 1, overflow: "hidden" }}>
+          <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
             {activeTab === "editor" && (
               <div style={{ height: "100%", overflow: "auto" }}>
                 {listFilter.mode === "faction" && listFilter.value && (
