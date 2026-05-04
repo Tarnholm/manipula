@@ -3,6 +3,10 @@
 // rows can be either:
 //   - a plain Cell[][]                    (data row)
 //   - { section: string }                 (full-width divider, e.g. "#MACEDON")
+//   - { separator: true }                 (thin band — used between groups of
+//                                          rows belonging to the same unit,
+//                                          e.g. armour-tier rows for one
+//                                          legion's helmet/torso variants)
 // Section rows mirror EDU-matic's faction-block separators. They are excluded
 // from the search filter and skipped from "x of y rows" counts.
 //
@@ -29,6 +33,8 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 
 function isSection(row) { return row && !Array.isArray(row) && typeof row.section === "string"; }
+function isSeparator(row) { return row && !Array.isArray(row) && row.separator === true; }
+function isNonData(row) { return isSection(row) || isSeparator(row); }
 
 export default function DataTable({
   columns = [],
@@ -48,18 +54,21 @@ export default function DataTable({
     if (!needle) return all;
     const kept = [];
     for (const e of all) {
-      if (isSection(e.row)) {
-        if (kept.length && isSection(kept[kept.length - 1].row)) kept[kept.length - 1] = e;
+      if (isNonData(e.row)) {
+        // Replace any trailing run of non-data rows (sections / separators) with
+        // the latest one, so we never get two stacked decorations and we drop
+        // them entirely if no following data row matches.
+        if (kept.length && isNonData(kept[kept.length - 1].row)) kept[kept.length - 1] = e;
         else kept.push(e);
         continue;
       }
       if (e.row.some((cell) => cell != null && String(cell).toLowerCase().includes(needle))) kept.push(e);
     }
-    while (kept.length && isSection(kept[kept.length - 1].row)) kept.pop();
+    while (kept.length && isNonData(kept[kept.length - 1].row)) kept.pop();
     return kept;
   }, [q, rows]);
-  const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isSection(r) ? 0 : 1), 0), [rows]);
-  const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isSection(e.row) ? 0 : 1), 0), [filteredEntries]);
+  const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isNonData(r) ? 0 : 1), 0), [rows]);
+  const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isNonData(e.row) ? 0 : 1), 0), [filteredEntries]);
 
   // Stable per-cell commit callback. Each Cell calls this with its rowOrigIdx +
   // columnKey + newValue; we resolve the rowId and forward to onEdit. The ref
@@ -111,6 +120,13 @@ export default function DataTable({
                   </tr>
                 );
               }
+              if (isSeparator(row)) {
+                return (
+                  <tr key={`d${origIdx}`} className="dtable-separator" aria-hidden="true">
+                    <td colSpan={columns.length} />
+                  </tr>
+                );
+              }
               return (
                 <tr key={`r${origIdx}`}>
                   {columns.map((c, j) => (
@@ -143,18 +159,31 @@ export default function DataTable({
 const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const touchedRef = useRef(false);
   const text = value != null ? String(value) : "";
   const startEdit = () => {
     if (!editable) return;
-    setDraft(text);
+    // For dropdowns, start with an empty input so the datalist popover shows
+    // ALL options instead of filtering to only those matching the current
+    // value. The prior value lives in the placeholder. Bare-text cells start
+    // pre-filled (and select-all'd) since users typically want to overwrite.
+    const isCombo = meta && meta.type === "select";
+    setDraft(isCombo ? "" : text);
+    touchedRef.current = false;
     setEditing(true);
   };
   const commit = () => {
     if (!editing) return;
     setEditing(false);
+    // If the user opened a dropdown and clicked away without picking, draft
+    // is "" but they didn't actually mean to clear the cell — restore to the
+    // prior value by not committing. They can still type a single space then
+    // delete to explicitly clear.
+    if (!touchedRef.current) return;
     if (draft !== text) onCommit(rowOrigIdx, columnKey, draft);
   };
   const cancel = () => setEditing(false);
+  const onDraftChange = (v) => { touchedRef.current = true; setDraft(v); };
   return (
     <td
       title={text}
@@ -164,8 +193,9 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       {editing ? (
         <CellEditor
           value={draft}
+          placeholder={text}
           meta={meta}
-          onChange={setDraft}
+          onChange={onDraftChange}
           onCommit={commit}
           onCancel={cancel}
         />
@@ -190,7 +220,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
 // cells doesn't collide. Each editor mount gets a fresh id.
 let datalistSeq = 0;
 
-function CellEditor({ value, meta, onChange, onCommit, onCancel }) {
+function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel }) {
   const ref = useRef(null);
   const idRef = useRef(`dt-opts-${++datalistSeq}`);
   // Auto-focus + select-all so the user can type-to-filter immediately. For
@@ -225,6 +255,7 @@ function CellEditor({ value, meta, onChange, onCommit, onCancel }) {
           list={idRef.current}
           className="dtable-cell-input dtable-cell-input--combo"
           value={value || ""}
+          placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           onBlur={onCommit}
@@ -241,6 +272,7 @@ function CellEditor({ value, meta, onChange, onCommit, onCancel }) {
       type={meta && meta.type === "number" ? "number" : "text"}
       className="dtable-cell-input"
       value={value || ""}
+      placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
       onBlur={onCommit}

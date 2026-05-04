@@ -319,10 +319,13 @@ function UnitsScreen({ project, setProject }) {
       if (opts.length) meta[col] = { type: "select", options: opts };
     }
     // Armour upgrades — pulled from the user's Armour Definitions sheet, not
-    // coreData. Each row's `name` (first key) is the id referenced here.
+    // coreData. The "Model Set Name" column is what gets referenced from a
+    // unit's Armour Upgr0..3 fields. (Note: Object.keys(armour[0])[0] is "row",
+    // an internal ordering field, not the id we want — use the explicit key.)
     if (Array.isArray(project.armour) && project.armour.length) {
-      const idKey = Object.keys(project.armour[0])[0];
-      const opts = [...new Set(project.armour.map((r) => r[idKey]).filter(Boolean).map(String))];
+      const opts = [...new Set(
+        project.armour.map((r) => r["Model Set Name"]).filter((v) => v && !String(v).startsWith("#")).map(String)
+      )];
       for (const c of ["Armour Upgr0", "Armour Upgr1", "Armour Upgr2", "Armour Upgr3"]) {
         if (allKeys.includes(c)) meta[c] = { type: "select", options: opts };
       }
@@ -541,22 +544,53 @@ function ArmourScreen({ project }) {
   const rows = project.armour;
   const slotKeys = ["Head1","Head2","Torso1","Torso2","Torso3","UpArm","LowArm","Hand","UpLeg","LowLeg","Foot","Shield"];
   const cols = ["Model Set Name", ...slotKeys];
+  // Walk the sheet's natural row order. Names starting with "#" are section
+  // markers (#NON REMASTERED ROMANS, #POLYBIAN ROMANS, …) — render them as
+  // full-width gold bands. Consecutive rows that share a Model Set Name belong
+  // to one unit (different helmet/armour tiers); when the name changes we emit
+  // a thin separator so the eye can pick the unit boundary at a glance without
+  // having to read the leftmost column.
+  const tableRows = useMemo(() => {
+    const out = [];
+    let prevName = null;
+    let lastWasDecoration = true; // suppresses a separator at the very top
+    for (const r of rows) {
+      const name = String(r["Model Set Name"] || "").trim();
+      if (!name) continue;
+      if (name.startsWith("#")) {
+        // Skip the auto-generated "#ACTUAL EDU STARTS HERE" marker; useful in
+        // the EDU file but visual noise above the first faction header.
+        if (/^#?actual edu starts here\s*$/i.test(name)) { prevName = null; continue; }
+        out.push({ section: name.replace(/^#/, "") });
+        prevName = null;
+        lastWasDecoration = true;
+        continue;
+      }
+      if (prevName !== null && name !== prevName && !lastWasDecoration) {
+        out.push({ separator: true });
+      }
+      out.push(cols.map((c) => {
+        if (c === "Model Set Name") return r[c];
+        const v = r[c];
+        if (!v) return "";
+        const parts = [];
+        if (v.type)     parts.push(v.type);
+        if (v.material) parts.push(v.material);
+        if (v.size)     parts.push(v.size);
+        if (v.onBack)   parts.push(`(onBack: ${v.onBack})`);
+        return parts.join(" · ");
+      }));
+      prevName = name;
+      lastWasDecoration = false;
+    }
+    return out;
+  }, [rows]);
   return (
     <div className="screen">
       <h2>Armour Models <span className="dim">({rows.length})</span></h2>
       <DataTable
         columns={cols}
-        rows={rows.map((r) => cols.map((c) => {
-          if (c === "Model Set Name") return r[c];
-          const v = r[c];
-          if (!v) return "";
-          const parts = [];
-          if (v.type)     parts.push(v.type);
-          if (v.material) parts.push(v.material);
-          if (v.size)     parts.push(v.size);
-          if (v.onBack)   parts.push(`(onBack: ${v.onBack})`);
-          return parts.join(" · ");
-        }))}
+        rows={tableRows}
         maxHeight="75vh"
         searchable
       />

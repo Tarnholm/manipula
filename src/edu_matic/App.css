@@ -241,7 +241,17 @@ body {
 
 /* ── Data table ───────────────────────────────────────────────── */
 
-.dtable-wrap { display: flex; flex-direction: column; gap: 8px; }
+.dtable-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Allow the wrap (and the .dtable-scroll inside it) to shrink below the
+   * table's intrinsic content width — without min-width:0, flex/grid parents
+   * push the wrap to fit content, ancestor overflow takes over, and the
+   * dtable's own horizontal scrollbar never appears. */
+  min-width: 0;
+  width: 100%;
+}
 .dtable-toolbar {
   display: flex;
   align-items: center;
@@ -252,6 +262,12 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elev);
+  /* Same min-width:0 dance — combined with the wrap's constraint above, this
+   * forces the table to overflow horizontally inside this container instead
+   * of expanding the column and leaving the user without a sidescrollbar. */
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   /* Mac-style scrollbars — thin, semi-transparent, pad away from the edge.
    * Both axes get the same treatment so horizontal scrolling on the wide
    * UnitDefinitions sheet feels native, not like a Windows-default chunk. */
@@ -352,6 +368,20 @@ body {
   left: 0;
 }
 .dtable tr.dtable-section:hover td { background: rgba(220, 166, 74, 0.18); }
+
+/* Thin separator row — used between groups of rows belonging to the same unit
+ * (e.g. one legion's helmet/torso variants), without the heavy uppercase
+ * branding of a section divider. Just a hairline gold rule + a few pixels of
+ * breathing room. */
+.dtable tr.dtable-separator td {
+  background: transparent;
+  padding: 0;
+  height: 5px;
+  border-bottom: 1px solid rgba(220, 166, 74, 0.28);
+  border-top: none;
+  border-right: none;
+}
+.dtable tr.dtable-separator:hover td { background: transparent; }
 
 /* Editable cells — subtle hover affordance so users can tell something happens
  * on click. Solid background on the inputs so they don't blend with the row. */
