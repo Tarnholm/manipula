@@ -404,15 +404,10 @@ function UnitsScreen({ project, setProject }) {
         onEdit={onEdit}
         editable
         pinFirstColumn
-        /* calc(100vh - 280px) instead of 75vh so the scroll container's
-         * bottom edge — where the horizontal scrollbar lives — stays
-         * inside the visible EDU Builder panel. With 75vh, when the
-         * recruitment-tool's top chrome (titlebar + toolbar + tabs +
-         * sub-tabs + screen heading + table search) eats more than 25%
-         * of the viewport, the horizontal bar fell below the visible
-         * area entirely. The 280px reserves ~265px for chrome above
-         * + ~15px buffer below. */
-        maxHeight="calc(100vh - 280px)"
+        /* No maxHeight — .dtable-wrap and .dtable-scroll use flex:1 inside
+         * .screen, so the scroll container's height matches the visible
+         * panel exactly. Bottom edge stays in viewport at any window size,
+         * which means the horizontal scrollbar is always reachable. */
         searchable
       />
     </div>

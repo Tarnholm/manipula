@@ -30,20 +30,42 @@ body {
 
 .app {
   display: flex;
-  height: 100vh;
+  /* height: 100% (inherits from parent) instead of 100vh — when EduMaticApp
+   * is embedded inside the recruitment-tool's tab panel, the parent has a
+   * bounded height that's smaller than the viewport (chrome above eats
+   * pixels). 100vh would extend .app past the panel and the scroll
+   * container inside ended up below the visible area, hiding its
+   * horizontal bar. With 100% the flex chain (.app → .app-main → .screen
+   * → .dtable-wrap → .dtable-scroll) propagates the panel's actual height
+   * end-to-end. */
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 .app-main {
   flex: 1;
-  /* Vertical scroll lives here for the surrounding screen, but horizontal
-   * overflow must NOT scroll here — otherwise wide tables expand this
-   * container and the dtable's own horizontal bar never has anything to
-   * scroll. The dtable-scroll inside is the only place a horizontal
-   * scrollbar should appear. */
+  /* Column flex so .screen inside can stretch to fill available height —
+   * the DataTable inside Units sits inside .screen and uses flex:1 to fit
+   * exactly the visible panel without me having to guess at chrome heights
+   * via vh-based math. Horizontal overflow is forbidden here so wide tables
+   * scroll inside their own container, not on this one. */
+  display: flex;
+  flex-direction: column;
   overflow-x: hidden;
   overflow-y: auto;
   padding: 24px 32px;
   min-width: 0;
+  min-height: 0;
+}
+.screen {
+  /* Fill the remaining height of .app-main. Children stack vertically; the
+   * DataTable's wrap inside has flex:1 so its scroll container's bottom
+   * edge — where the horizontal scrollbar lives — is always within the
+   * visible viewport. */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Sidebar ───────────────────────────────────────────────────── */
@@ -252,11 +274,16 @@ body {
   flex-direction: column;
   gap: 8px;
   /* Allow the wrap (and the .dtable-scroll inside it) to shrink below the
-   * table's intrinsic content width — without min-width:0, flex/grid parents
-   * push the wrap to fit content, ancestor overflow takes over, and the
-   * dtable's own horizontal scrollbar never appears. */
+   * table's intrinsic content width. */
   min-width: 0;
   width: 100%;
+  /* Flex grow so the wrap fills its parent .screen vertically — combined
+   * with .dtable-scroll's flex:1 below this means the scroll container's
+   * height matches the visible panel exactly, not an arbitrary vh-based
+   * cap. Bottom edge of the scroll container = bottom of visible area =
+   * horizontal scrollbar visible without window resizing. */
+  flex: 1;
+  min-height: 0;
 }
 .dtable-toolbar {
   display: flex;
@@ -266,10 +293,15 @@ body {
 .dtable-scroll {
   /* Both axes auto so we don't render an empty horizontal track when the
    * table happens to fit the panel. The scrollbar styling below makes the
-   * thumb obvious enough that auto-mode is no longer "where is the bar?" —
-   * forcing it always-on (overflow-x: scroll) just left users with a
-   * thumb that filled the entire track and looked un-grabbable. */
+   * thumb obvious enough that auto-mode is no longer "where is the bar?". */
   overflow: auto;
+  /* Flex grow within .dtable-wrap so this container fills exactly the
+   * available height of the panel. min-height:0 is required so flex children
+   * can shrink below their content height — without it the table inside
+   * dictates the height and the scroll container ends up taller than the
+   * panel, hiding the horizontal scrollbar below the visible area. */
+  flex: 1;
+  min-height: 0;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elev);
