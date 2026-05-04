@@ -291,14 +291,17 @@ body {
   gap: 12px;
 }
 .dtable-scroll {
-  /* Back to overflow:auto. With v0.19.7's flex chain bounding the scroll
-   * container's height to the visible panel, the bar appears at the panel
-   * bottom whenever content overflows — and stays absent when content fits,
-   * which avoids the "thumb fills the track because there's nothing to
-   * scroll" non-grabbable state. */
   overflow: auto;
   flex: 1;
   min-height: 0;
+  /* Belt-and-suspenders cap on top of flex:1. Even if the flex chain above
+   * fails to propagate a bounded height (something the recruitment-tool
+   * embed has been doing intermittently), this keeps the scroll container's
+   * bottom edge — and therefore the horizontal scrollbar — comfortably
+   * within the visible viewport. 260px reserves room for window chrome +
+   * recruitment-tool toolbars + tabs + sub-tabs + screen heading + table
+   * search bar. */
+  max-height: calc(100vh - 260px);
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elev);
