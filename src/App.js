@@ -787,7 +787,7 @@ export default function App() {
             <li style={{ marginBottom: 8 }}><strong style={{ color: "#dca64a" }}>Start authoring.</strong> Pick a unit on the left, edit recruitment in the centre, watch the recruitable-regions map update live. <strong>Ctrl+S</strong> writes to EDB, <strong>Ctrl+E</strong> exports both files.</li>
           </ol>
           <div style={{ marginTop: 12, fontSize: 11, color: "#888" }}>
-            EDU pipeline based on Biggus_Dickus' <em>BD's New Base</em> + Aradan's EDU-matic — credits in the EDU Builder tab.
+            EDU pipeline based on Aradan's original EDU-matic, with the bulk of the VBA / DATA-layout work by <em>Tone</em>; smaller recent updates from Biggus_Dickus' <em>BD's New Base</em>. Full credits in the EDU Builder tab.
           </div>
           <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <label style={{ fontSize: 11, color: "#888", display: "flex", alignItems: "center", gap: 6 }}>

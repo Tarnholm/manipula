@@ -190,7 +190,7 @@ function ProjectScreen({ project, onImport }) {
         </div>
       )}
       <div style={{ marginTop: 18, padding: 12, background: "rgba(220,166,74,0.05)", border: "1px solid rgba(220,166,74,0.2)", borderRadius: 8, fontSize: 12, color: "#bca", lineHeight: 1.6 }}>
-        <strong style={{ color: "#dca64a" }}>Credits — EDU pipeline:</strong> The compute / format / validate pipeline used here ports the VBA macros from <strong>BD's New Base</strong> EDUMatic spreadsheet. <strong>BiggusDickus (BD)</strong> built the original spreadsheet — the balance system, formula semantics, the 512-column DATA layout and the VLOOKUP-driven core-data tables are all his work. <strong>Aradan</strong> developed and maintains the EDU-matic toolset that this JavaScript port is based on. Manipula bundles their work into the same window as recruitment authoring; the EDU-matic logic and the underlying balance design are theirs.
+        <strong style={{ color: "#dca64a" }}>Credits — EDU pipeline:</strong> The compute / format / validate pipeline used here ports the VBA macros from the <strong>EDU-matic</strong> spreadsheet. <strong>Aradan</strong> built the original spreadsheet that this whole lineage descends from. <strong>Tone</strong> did the bulk of the adaptation work on top of Aradan's original — most of the VBA coding, the 512-column DATA layout, the VLOOKUP-driven core-data tables, and the balance-formula semantics that this JavaScript port mirrors are Tone's work. <strong>BiggusDickus (BD)</strong> contributed smaller more recent updates ("BD's New Base"). Manipula bundles their work into the same window as recruitment authoring; the EDU-matic logic and the underlying balance design are theirs.
       </div>
     </div>
   );
