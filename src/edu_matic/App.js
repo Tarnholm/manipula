@@ -565,11 +565,6 @@ function PreviewScreen({ project }) {
           searchable
         />
       )}
-      {rows && (
-        <p className="dim" style={{ marginTop: 16 }}>
-          The format.js stage (DATA → EDU text blocks) hasn't been ported yet — the Export screen will be wired up in the next pass.
-        </p>
-      )}
     </div>
   );
 }
