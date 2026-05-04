@@ -319,8 +319,12 @@ body {
   border-collapse: collapse;
   font-family: var(--mono);
   font-size: 12px;
+  /* width: max-content alone means the table is exactly as wide as its
+   * widest column needs. Dropping the prior `min-width: 100%` so columns
+   * don't auto-inflate to fill the container — empty space on the right
+   * for narrow tables is preferable to widely-spaced columns that don't
+   * reflect actual content widths. */
   width: max-content;
-  min-width: 100%;
 }
 .dtable th {
   position: sticky;
@@ -329,7 +333,7 @@ body {
   color: var(--accent, #dca64a);
   font-weight: 700;
   text-align: left;
-  padding: 4px 8px;
+  padding: 3px 6px;
   border-bottom: 1px solid var(--border-strong);
   border-right: 1px solid var(--border);
   white-space: nowrap;
@@ -342,22 +346,23 @@ body {
  * arrows. Decorative for now; clicks fall through to the cell's existing behavior. */
 .dtable th .dtable-caret {
   display: inline-block;
-  margin-left: 6px;
+  margin-left: 3px;
   opacity: 0.35;
   font-size: 9px;
   vertical-align: middle;
   user-select: none;
 }
 .dtable td {
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-bottom: 1px solid var(--border);
   border-right: 1px solid var(--border);
   white-space: nowrap;
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* No max-width — let columns size to their longest content. With the
+   * horizontal scrollbar (v0.19.3) wide tables scroll cleanly, so clipping
+   * to 320px just left ugly empty space in narrow columns and ellipsis on
+   * long ones. */
   color: var(--fg);
-  line-height: 1.35;
+  line-height: 1.25;
 }
 .dtable tr:hover td { background: var(--bg-elev2); }
 
