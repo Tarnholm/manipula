@@ -34,6 +34,20 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
     return fields.length ? fields.join("  ·  ") : null;
   };
   selectedIds = selectedIds || new Set();
+  // Count how many authored entries share each EDU unit id. When >1, the import
+  // produced multiple variants (e.g. an AOR/hinterland recruitment path AND a
+  // Factional MIC-chain path for the same `roman hastati early`). Both end up
+  // with the same "Standard · t1" subtitle, which makes the cards look like
+  // duplicates. The badge below disambiguates them.
+  const variantCounts = useMemo(() => {
+    const m = new Map();
+    for (const u of units) {
+      const k = String(u.unit || "");
+      if (!k) continue;
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }, [units]);
   const [q, setQ] = useState("");
   const searchRef = React.useRef(null);
   // Compact mode toggle — when on, rows shrink to ~40px (no portrait, just name + tier).
@@ -322,6 +336,16 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                     {u.homelandMicTier && u.homelandMicTier !== (u.canonicalMicTier ?? u.minTier) ? `(home t${u.homelandMicTier})` : ""}
                     {u.aor && u.aor.enabled ? " · +AOR" : ""}
                   </span>
+                  {/* Variant disambiguator — only shown when the same EDU unit id is authored
+                   *  more than once. Without this, the two `roman hastati early` cards (one
+                   *  AOR-only, one Factional-only) look identical in the list. */}
+                  {variantCounts.get(u.unit) > 1 && (
+                    u.aor && u.aor.enabled ? (
+                      <span title="AOR variant — recruits via hidden_resource regions, not the main faction MIC pool" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>AOR</span>
+                    ) : (
+                      <span title="Factional variant — main MIC-chain recruitment for the unit's faction list" style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>FACTIONAL</span>
+                    )
+                  )}
                   {(u.factions || []).slice(0, 6).map(fid => (
                     fid === "all" ? null : (
                       <FactionIcon
