@@ -1051,6 +1051,14 @@ ipcMain.handle("edm-write-project-file", async (_e, dir, name, content) => {
 });
 ipcMain.handle("edm-log-message", async (_e, level, text) => {
   console.log(`[edm-${level}]`, text);
+  // Also write to userData/edu-matic.log so we can inspect renderer-side
+  // diagnostics (DOM dimensions, scroll widths, …) without needing DevTools.
+  // Useful for debugging the EDU Builder layout against user reports.
+  try {
+    const logPath = path.join(app.getPath("userData"), "edu-matic.log");
+    const ts = new Date().toISOString();
+    fs.appendFileSync(logPath, `[${ts}] [${level}] ${text}\n`);
+  } catch {}
 });
 ipcMain.handle("edm-get-log-path", () => path.join(app.getPath("userData"), "edu-matic.log"));
 ipcMain.handle("edm-reveal-log-file", () => false);

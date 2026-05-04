@@ -360,16 +360,19 @@ body {
 .dtable-scroll::-webkit-scrollbar-corner {
   background: transparent;
 }
+/* Inline-block wrapper between .dtable-scroll and the actual <table>.
+ * Chrome's table layout was compressing tables to their parent's clientWidth
+ * even with width:max-content set directly on the table — this wrapper sits
+ * outside the table-layout context and is content-sized via inline-block,
+ * so the table inside is free to render at its natural max-content width. */
+.dtable-table-wrap {
+  display: inline-block;
+  min-width: max-content;
+}
 .dtable {
   border-collapse: collapse;
   font-family: var(--mono);
   font-size: 12px;
-  /* width: max-content + min-width: max-content together force the table
-   * to render at its full content width and never shrink to fit the
-   * container. Without min-width, Chrome's table layout was occasionally
-   * compressing the table to the .dtable-scroll's clientWidth when the
-   * container was narrower — masking overflow and making the custom
-   * horizontal scrollbar think there was nothing to scroll. */
   width: max-content;
   min-width: max-content;
 }

@@ -92,7 +92,7 @@ export default function DataTable({
   // .dtable-scroll; this overlay drives scrollLeft programmatically.
   const scrollRef = useRef(null);
   const trackRef = useRef(null);
-  const [hbar, setHbar] = useState({ thumbLeft: 0, thumbWidth: 0, scrollable: false, diag: 0, diagClient: 0 });
+  const [hbar, setHbar] = useState({ thumbLeft: 0, thumbWidth: 0, scrollable: false, diag: 0, diagClient: 0, innerW: -1, innerOffsetW: -1, tableW: -1 });
   const dragRef = useRef(null);
 
   const refreshHBar = useCallback(() => {
@@ -104,15 +104,48 @@ export default function DataTable({
     const clientW = sc.clientWidth;
     const ratio = clientW / scrollW;
     const scrollable = scrollW > clientW + 1;
+    // Diagnostic: also measure the inner table-wrap so we can tell whether
+    // it's the scroll container or the table content that's collapsing.
+    const inner = sc.querySelector(".dtable-table-wrap");
+    const innerW = inner ? inner.scrollWidth : -1;
+    const innerOffsetW = inner ? inner.offsetWidth : -1;
+    const tableEl = sc.querySelector("table.dtable");
+    const tableW = tableEl ? tableEl.offsetWidth : -1;
     if (!scrollable) {
-      setHbar({ thumbLeft: 0, thumbWidth: trackW, scrollable: false, diag: scrollW, diagClient: clientW });
+      setHbar({ thumbLeft: 0, thumbWidth: trackW, scrollable: false, diag: scrollW, diagClient: clientW, innerW, innerOffsetW, tableW });
       return;
     }
     const thumbWidth = Math.max(48, trackW * ratio);
     const maxScrollLeft = scrollW - clientW;
     const thumbLeft = maxScrollLeft > 0 ? (sc.scrollLeft / maxScrollLeft) * (trackW - thumbWidth) : 0;
-    setHbar({ thumbLeft, thumbWidth, scrollable: true, diag: scrollW, diagClient: clientW });
+    setHbar({ thumbLeft, thumbWidth, scrollable: true, diag: scrollW, diagClient: clientW, innerW, innerOffsetW, tableW });
   }, []);
+
+  // One-shot diagnostic dump to the userData log file when the table mounts
+  // or rows change. Lets us inspect actual DOM measurements without DevTools.
+  // File location: %APPDATA%/recruitment-tool/edu-matic.log
+  useEffect(() => {
+    if (!window.eduAPI || typeof window.eduAPI.logMessage !== "function") return;
+    const t = setTimeout(() => {
+      const sc = scrollRef.current;
+      if (!sc) return;
+      const tableEl = sc.querySelector("table.dtable");
+      const inner = sc.querySelector(".dtable-table-wrap");
+      const msg = JSON.stringify({
+        columns: columns.length,
+        rows: rows.length,
+        scrollContainer: { scrollWidth: sc.scrollWidth, clientWidth: sc.clientWidth, offsetWidth: sc.offsetWidth },
+        tableWrap: inner ? { scrollWidth: inner.scrollWidth, clientWidth: inner.clientWidth, offsetWidth: inner.offsetWidth } : null,
+        table: tableEl ? { offsetWidth: tableEl.offsetWidth, scrollWidth: tableEl.scrollWidth } : null,
+        cssWidth: tableEl ? getComputedStyle(tableEl).width : null,
+        cssMinWidth: tableEl ? getComputedStyle(tableEl).minWidth : null,
+        wrapDisplay: inner ? getComputedStyle(inner).display : null,
+        scrollOverflowX: getComputedStyle(sc).overflowX,
+      });
+      window.eduAPI.logMessage("dtable", msg);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [rows, columns]);
 
   // Watch scrolls + size changes on .dtable-scroll.
   useEffect(() => {
@@ -222,6 +255,12 @@ export default function DataTable({
         onKeyDown={onKeyDown}
         tabIndex={0}
       >
+        {/* inline-block wrapper forces this region to be content-sized
+          * regardless of how Chrome wants to lay out the table. Without
+          * this, with the table's parent constrained to clientWidth, Chrome
+          * occasionally compresses the table to fit instead of letting it
+          * overflow — masking scrollable distance from scrollWidth. */}
+        <div className="dtable-table-wrap">
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
           <thead>
             <tr>
@@ -270,6 +309,7 @@ export default function DataTable({
             )}
           </tbody>
         </table>
+        </div>
       </div>
       {/* Custom horizontal scrollbar — ALWAYS rendered, regardless of whether
         * the browser thinks content overflows. Earlier versions hid the bar
@@ -293,8 +333,9 @@ export default function DataTable({
       </div>
       {/* Live diagnostic so we can finally see what's happening when the
         * scrollbar isn't behaving — shows actual DOM measurements. */}
-      <div className="dtable-diag" title="scroll width / visible width">
-        cols: {columns.length} · width {hbar.diag} / {hbar.diagClient} {hbar.scrollable ? "(scrollable)" : "(fits)"}
+      <div className="dtable-diag" title="scroll width / visible width / inner wrap / table">
+        cols: {columns.length} · scroll {hbar.diag}/{hbar.diagClient} · inner {hbar.innerW}/{hbar.innerOffsetW} · table {hbar.tableW} {hbar.scrollable ? "(scrollable)" : "(fits)"}
+        {" · log: %APPDATA%\\recruitment-tool\\edu-matic.log"}
       </div>
     </div>
   );
