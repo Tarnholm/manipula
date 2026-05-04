@@ -84,6 +84,17 @@ export default function DataTable({
     f(rowId, columnKey, newValue);
   }, []);
 
+  // Shift+wheel → horizontal scroll. Most browsers do this for free on regular
+  // overflow containers, but tables sometimes swallow the wheel events. Wire it
+  // explicitly so the gesture works no matter what.
+  const scrollRef = useRef(null);
+  const onWheel = (e) => {
+    if (!e.shiftKey) return;
+    if (!scrollRef.current) return;
+    e.preventDefault();
+    scrollRef.current.scrollLeft += e.deltaY || e.deltaX;
+  };
+
   return (
     <div className="dtable-wrap">
       {searchable && (
@@ -99,7 +110,7 @@ export default function DataTable({
           </span>
         </div>
       )}
-      <div className="dtable-scroll" style={{ maxHeight }}>
+      <div className="dtable-scroll" style={{ maxHeight }} ref={scrollRef} onWheel={onWheel}>
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
           <thead>
             <tr>

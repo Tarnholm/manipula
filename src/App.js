@@ -1063,7 +1063,7 @@ export default function App() {
             {activeTab === "edu" && (
               <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                 <EduSubTabs view={eduView} onView={setEduView} project={eduProject} />
-                <div style={{ flex: 1, overflow: "auto" }}>
+                <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minWidth: 0 }}>
                   <EduMaticApp
                     externalProject={eduProject}
                     onProjectChange={setEduProject}
