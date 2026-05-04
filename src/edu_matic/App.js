@@ -409,6 +409,7 @@ function UnitsScreen({ project, setProject }) {
          * panel exactly. Bottom edge stays in viewport at any window size,
          * which means the horizontal scrollbar is always reachable. */
         searchable
+        columnsToggleable
       />
     </div>
   );

@@ -358,11 +358,19 @@ body {
   border-bottom: 1px solid var(--border-strong);
   border-right: 1px solid var(--border);
   white-space: nowrap;
-  z-index: 1;
+  /* z-index stacking: column header > section divider > pinned-first body td.
+   * Bumped from 1 to 3 so the column header sits above the sticky-top section
+   * divider (z=2) when the page scrolls past one. */
+  z-index: 3;
   font-size: 11px;
   text-transform: none;
   letter-spacing: 0.02em;
+  /* Tracked here as a CSS variable so the section divider's sticky-top offset
+   * stays in lock-step with whatever height this rule produces — change padding
+   * or font-size and update this at the same time. Browser computed height for
+   * 11px text + 3px×2 padding + 1px border ≈ 22px. */
 }
+:root { --dtable-header-h: 22px; }
 /* Filter-caret affordance — a subtle ▾ that mirrors the spreadsheet's autofilter
  * arrows. Decorative for now; clicks fall through to the cell's existing behavior. */
 .dtable th .dtable-caret {
@@ -388,8 +396,9 @@ body {
 .dtable tr:hover td { background: var(--bg-elev2); }
 
 /* Section-divider row — full-width gold band echoing the spreadsheet's faction
- * separators (#MACEDON / #EPIRUS / …). Sticky-left so the label stays visible
- * when the user scrolls horizontally. */
+ * separators (#MACEDON / #EPIRUS / …). Sticky on both axes so the label stays
+ * visible during horizontal AND vertical scroll: top offset = column header
+ * height so it slides under the column header rather than overlapping it. */
 .dtable tr.dtable-section td {
   background: rgba(220, 166, 74, 0.14);
   color: var(--accent, #dca64a);
@@ -403,6 +412,11 @@ body {
   border-bottom: 1px solid rgba(220, 166, 74, 0.35);
   position: sticky;
   left: 0;
+  top: var(--dtable-header-h);
+  /* Above body cells (z=1 for pinned first column, default 0 for others) but
+   * below the column header (z=3) so the th draws over a section row that
+   * scrolled past it. */
+  z-index: 2;
 }
 .dtable tr.dtable-section:hover td { background: rgba(220, 166, 74, 0.18); }
 
@@ -519,9 +533,9 @@ select.dtable-cell-input {
 .dtable.dtable-pinfirst th:first-child {
   position: sticky;
   left: 0;
-  /* th already has top:0 + z-index:1 from the base rule; bump z so it stays
-   * above body cells that also become sticky-left. */
-  z-index: 3;
+  /* Top-left corner: must be above column header (z=3) and section dividers
+   * (z=2) so it covers both during scroll. */
+  z-index: 5;
   background: var(--bg-elev2);
 }
 .dtable.dtable-pinfirst tbody tr:not(.dtable-section) td:first-child {
@@ -536,6 +550,73 @@ select.dtable-cell-input {
 .dtable.dtable-pinfirst tbody tr:not(.dtable-section):hover td:first-child {
   background: var(--bg-elev2);
 }
+
+/* Columns picker — toolbar button + portal popover. Rendered into document.body
+ * so it can spill outside the table's scroll container without being clipped. */
+.btn.btn-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dtable-cols-pop {
+  position: fixed;
+  z-index: 10000;
+  width: 240px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev2);
+  border: 1px solid var(--accent, #dca64a);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+}
+.dtable-cols-actions {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  text-decoration: underline;
+}
+.link-btn:hover { color: #f0c080; }
+.dtable-cols-list {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.dtable-cols-list::-webkit-scrollbar { width: 12px; }
+.dtable-cols-list::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.04); }
+.dtable-cols-list::-webkit-scrollbar-thumb {
+  background: rgba(220, 166, 74, 0.7);
+  border-radius: 6px;
+}
+.dtable-cols-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  color: var(--fg);
+  user-select: none;
+}
+.dtable-cols-row:hover { background: rgba(220, 166, 74, 0.10); }
+.dtable-cols-row.is-locked {
+  cursor: default;
+  color: var(--fg-dim);
+}
+.dtable-cols-row.is-locked:hover { background: transparent; }
+.dtable-cols-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.dtable-cols-row.is-locked input[type="checkbox"] { cursor: default; }
 
 /* ── Toast ────────────────────────────────────────────────────── */
 

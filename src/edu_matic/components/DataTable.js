@@ -54,6 +54,7 @@ export default function DataTable({
   pinFirstColumn = false,
   maxHeight = "60vh",
   searchable = false,
+  columnsToggleable = false,
 }) {
   const [q, setQ] = useState("");
   const filteredEntries = useMemo(() => {
@@ -77,6 +78,38 @@ export default function DataTable({
   }, [q, rows]);
   const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isNonData(r) ? 0 : 1), 0), [rows]);
   const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isNonData(e.row) ? 0 : 1), 0), [filteredEntries]);
+
+  // Column visibility — opt-in via columnsToggleable. Internal state holds the
+  // *hidden* set so an unset visibility map still defaults to showing all
+  // columns when new ones are added to a project. Pinned-first-column key is
+  // never hidden (it'd defeat the pin) — guarded in the toggle handler below.
+  const [hiddenCols, setHiddenCols] = useState(() => new Set());
+  const [colsMenuOpen, setColsMenuOpen] = useState(false);
+  const visibleColIndices = useMemo(
+    () => columns.map((_, i) => i).filter((i) => !hiddenCols.has(columns[i])),
+    [columns, hiddenCols]
+  );
+  const visibleColumns = useMemo(
+    () => visibleColIndices.map((i) => columns[i]),
+    [columns, visibleColIndices]
+  );
+  const toggleCol = (key) => {
+    setHiddenCols((prev) => {
+      const next = new Set(prev);
+      // Don't allow hiding the first column when pinned — losing the unit name
+      // anchor while horizontally scrolled is worse than denying the toggle.
+      if (pinFirstColumn && columns[0] === key && !next.has(key)) return prev;
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const showAllCols = () => setHiddenCols(new Set());
+  const hideAllCols = () => {
+    // Always keep the pinned first column visible.
+    const next = new Set(columns.slice(pinFirstColumn ? 1 : 0));
+    setHiddenCols(next);
+  };
 
   // Stable per-cell commit callback. Each Cell calls this with its rowOrigIdx +
   // columnKey + newValue; we resolve the rowId and forward to onEdit. The ref
@@ -120,19 +153,38 @@ export default function DataTable({
     else if (e.key === "End")        { sc.scrollLeft = sc.scrollWidth; e.preventDefault(); }
   };
 
+  const showToolbar = searchable || columnsToggleable;
+  const hiddenCount = hiddenCols.size;
   return (
     <div className="dtable-wrap">
-      {searchable && (
+      {showToolbar && (
         <div className="dtable-toolbar">
-          <input
-            className="input"
-            placeholder="Search…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <span className="dim">
-            {dataCount} of {totalDataCount} row{totalDataCount === 1 ? "" : "s"}
-          </span>
+          {searchable && (
+            <>
+              <input
+                className="input"
+                placeholder="Search…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              <span className="dim">
+                {dataCount} of {totalDataCount} row{totalDataCount === 1 ? "" : "s"}
+              </span>
+            </>
+          )}
+          {columnsToggleable && (
+            <ColumnsPicker
+              columns={columns}
+              hiddenCols={hiddenCols}
+              hiddenCount={hiddenCount}
+              pinFirstColumn={pinFirstColumn}
+              open={colsMenuOpen}
+              onOpenChange={setColsMenuOpen}
+              onToggle={toggleCol}
+              onShowAll={showAllCols}
+              onHideAll={hideAllCols}
+            />
+          )}
         </div>
       )}
       <div
@@ -146,7 +198,7 @@ export default function DataTable({
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
           <thead>
             <tr>
-              {columns.map((c) => (
+              {visibleColumns.map((c) => (
                 <th key={c} title={c}>
                   {c}
                   <span className="dtable-caret" aria-hidden="true">▾</span>
@@ -159,40 +211,134 @@ export default function DataTable({
               if (isSection(row)) {
                 return (
                   <tr key={`s${origIdx}`} className="dtable-section">
-                    <td colSpan={columns.length} title={row.section}>{row.section}</td>
+                    <td colSpan={visibleColumns.length} title={row.section}>{row.section}</td>
                   </tr>
                 );
               }
               if (isSeparator(row)) {
                 return (
                   <tr key={`d${origIdx}`} className="dtable-separator" aria-hidden="true">
-                    <td colSpan={columns.length} />
+                    <td colSpan={visibleColumns.length} />
                   </tr>
                 );
               }
               return (
                 <tr key={`r${origIdx}`}>
-                  {columns.map((c, j) => (
-                    <Cell
-                      key={c}
-                      value={row[j]}
-                      columnKey={c}
-                      rowOrigIdx={origIdx}
-                      meta={columnMeta && columnMeta[c]}
-                      editable={editable}
-                      onCommit={commitCell}
-                    />
-                  ))}
+                  {visibleColIndices.map((origColIdx, j) => {
+                    const c = columns[origColIdx];
+                    return (
+                      <Cell
+                        key={c}
+                        value={row[origColIdx]}
+                        columnKey={c}
+                        rowOrigIdx={origIdx}
+                        meta={columnMeta && columnMeta[c]}
+                        editable={editable}
+                        onCommit={commitCell}
+                      />
+                    );
+                  })}
                 </tr>
               );
             })}
             {filteredEntries.length === 0 && (
-              <tr><td className="dim" colSpan={columns.length} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
+              <tr><td className="dim" colSpan={visibleColumns.length} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
             )}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+// Columns picker — small toolbar button + portal popover with a checkbox per
+// column. Renders via createPortal so the popover can spill outside the
+// table's scroll container without being clipped (same trick as the combobox).
+function ColumnsPicker({ columns, hiddenCols, hiddenCount, pinFirstColumn, open, onOpenChange, onToggle, onShowAll, onHideAll }) {
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    setPos({ left: r.left, top: r.bottom + 4 });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => {
+      if (!btnRef.current) return;
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: r.left, top: r.bottom + 4 });
+    };
+    const onDocMouseDown = (e) => {
+      if (popRef.current && popRef.current.contains(e.target)) return;
+      if (btnRef.current && btnRef.current.contains(e.target)) return;
+      onOpenChange(false);
+    };
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("mousedown", onDocMouseDown);
+    };
+  }, [open, onOpenChange]);
+
+  const label = hiddenCount === 0
+    ? `Columns (${columns.length})`
+    : `Columns (${columns.length - hiddenCount}/${columns.length})`;
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={"btn" + (hiddenCount > 0 ? " btn-active" : "")}
+        onClick={() => onOpenChange(!open)}
+        title="Show or hide columns"
+      >
+        {label} <span style={{ opacity: 0.5, marginLeft: 4 }}>▾</span>
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={popRef}
+          className="dtable-cols-pop"
+          style={{ left: pos.left, top: pos.top }}
+        >
+          <div className="dtable-cols-actions">
+            <button type="button" className="link-btn" onClick={onShowAll}>show all</button>
+            <span className="dim" style={{ margin: "0 6px" }}>·</span>
+            <button type="button" className="link-btn" onClick={onHideAll}>hide all</button>
+          </div>
+          <div className="dtable-cols-list">
+            {columns.map((c, i) => {
+              const isPinned = pinFirstColumn && i === 0;
+              const checked = !hiddenCols.has(c);
+              return (
+                <label
+                  key={c}
+                  className={"dtable-cols-row" + (isPinned ? " is-locked" : "")}
+                  title={isPinned ? "Pinned first column — always visible" : c}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isPinned}
+                    onChange={() => onToggle(c)}
+                  />
+                  <span>{c}</span>
+                  {isPinned && <span className="dim" style={{ marginLeft: "auto", fontSize: 10 }}>pinned</span>}
+                </label>
+              );
+            })}
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
