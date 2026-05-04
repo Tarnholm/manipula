@@ -264,12 +264,12 @@ body {
   gap: 12px;
 }
 .dtable-scroll {
-  /* overflow-x: scroll forces the horizontal bar to always be visible — auto
-   * was too sneaky with the Mac-style thin track on a dark background and
-   * users couldn't find it. Vertical stays auto-only since most of our
-   * tables fit. */
-  overflow-x: scroll;
-  overflow-y: auto;
+  /* Both axes auto so we don't render an empty horizontal track when the
+   * table happens to fit the panel. The scrollbar styling below makes the
+   * thumb obvious enough that auto-mode is no longer "where is the bar?" —
+   * forcing it always-on (overflow-x: scroll) just left users with a
+   * thumb that filled the entire track and looked un-grabbable. */
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elev);
@@ -285,31 +285,23 @@ body {
   scrollbar-color: rgba(220, 166, 74, 0.6) rgba(255, 255, 255, 0.06);
 }
 .dtable-scroll::-webkit-scrollbar {
-  width: 12px;
-  height: 14px;
+  /* Hefty enough that "where do I grab?" stops being the question. */
+  width: 14px;
+  height: 16px;
 }
 .dtable-scroll::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.06);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 .dtable-scroll::-webkit-scrollbar-thumb {
-  background: rgba(220, 166, 74, 0.55);
-  background-clip: padding-box;
-  border: 2px solid transparent;
+  background: rgba(220, 166, 74, 0.7);
   border-radius: 8px;
-  min-width: 40px;
-  min-height: 40px;
+  min-width: 48px;
+  min-height: 48px;
 }
-.dtable-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(220, 166, 74, 0.85);
-  background-clip: padding-box;
-  border: 2px solid transparent;
-}
-.dtable-scroll::-webkit-scrollbar-thumb:active {
-  background: rgba(220, 166, 74, 1);
-  background-clip: padding-box;
-  border: 2px solid transparent;
-}
+.dtable-scroll::-webkit-scrollbar-thumb:hover { background: rgba(220, 166, 74, 0.95); }
+.dtable-scroll::-webkit-scrollbar-thumb:active { background: rgba(220, 166, 74, 1); }
 /* The corner where horizontal + vertical tracks meet. Default is a square
  * Windows chrome chip — kill it so the scrollbars look continuous. */
 .dtable-scroll::-webkit-scrollbar-corner {
@@ -428,10 +420,9 @@ select.dtable-cell-input {
   font-family: var(--mono);
   font-size: 12px;
 }
-/* Combo (datalist-backed) input — adds a subtle ▾ chevron on the right so
- * users can tell it's a dropdown, even though it's structurally an input.
- * The native datalist popover opens reliably on focus + keystroke, sidestepping
- * Chrome's showPicker user-activation rule. */
+/* Combobox input — gold ▾ chevron on the right so users can tell it's a
+ * dropdown. The actual options popover renders separately via portal — see
+ * .dtable-combo-pop below. */
 .dtable-cell-input--combo {
   padding-right: 18px;
   background-image: linear-gradient(45deg, transparent 50%, rgba(220, 166, 74, 0.6) 50%),
@@ -439,6 +430,50 @@ select.dtable-cell-input {
   background-position: calc(100% - 9px) center, calc(100% - 5px) center;
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
+}
+
+/* Combobox popover — rendered into document.body via portal so it can spill
+ * outside the table's scroll container without being clipped. Internal
+ * overflow:auto so long option lists (the 56-row qualityClasses table, …)
+ * scroll reliably — the native <datalist> popover didn't behave consistently
+ * in Electron, leaving users stuck at the first 10-ish weapons. */
+.dtable-combo-pop {
+  position: fixed;
+  z-index: 10000;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-elev2, #2a2a2a);
+  border: 1px solid var(--accent, #dca64a);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 0;
+}
+.dtable-combo-pop::-webkit-scrollbar { width: 12px; }
+.dtable-combo-pop::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.04); }
+.dtable-combo-pop::-webkit-scrollbar-thumb {
+  background: rgba(220, 166, 74, 0.7);
+  border-radius: 6px;
+  min-height: 32px;
+}
+.dtable-combo-pop::-webkit-scrollbar-thumb:hover { background: rgba(220, 166, 74, 0.95); }
+.dtable-combo-opt {
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--fg);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.dtable-combo-opt.is-active,
+.dtable-combo-opt:hover {
+  background: rgba(220, 166, 74, 0.18);
+  color: var(--accent, #dca64a);
+}
+.dtable-combo-empty {
+  padding: 6px 10px;
+  color: var(--fg-dim, #888);
+  font-style: italic;
 }
 
 /* Pinned first column — sticky-left so the unit name stays visible while the

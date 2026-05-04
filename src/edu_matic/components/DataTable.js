@@ -30,7 +30,8 @@
 // the table — only the clicked cell. Commits update project state, but
 // memoization ensures only the cell whose value actually changed re-renders.
 
-import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 
 function isSection(row) { return row && !Array.isArray(row) && typeof row.section === "string"; }
 function isSeparator(row) { return row && !Array.isArray(row) && row.separator === true; }
@@ -170,31 +171,31 @@ export default function DataTable({
 const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  // Ref alongside state so commit() reads the latest typed/picked value even
+  // when the editor calls onChange + onCommit in the same tick (combobox
+  // option-click does this — without the ref, setDraft hasn't flushed before
+  // commit captures `draft`, and commit gets the stale prior value).
+  const draftRef = useRef("");
   const touchedRef = useRef(false);
   const text = value != null ? String(value) : "";
   const startEdit = () => {
     if (!editable) return;
-    // For dropdowns, start with an empty input so the datalist popover shows
-    // ALL options instead of filtering to only those matching the current
-    // value. The prior value lives in the placeholder. Bare-text cells start
-    // pre-filled (and select-all'd) since users typically want to overwrite.
     const isCombo = meta && meta.type === "select";
-    setDraft(isCombo ? "" : text);
+    const initial = isCombo ? "" : text;
+    setDraft(initial);
+    draftRef.current = initial;
     touchedRef.current = false;
     setEditing(true);
   };
   const commit = () => {
     if (!editing) return;
     setEditing(false);
-    // If the user opened a dropdown and clicked away without picking, draft
-    // is "" but they didn't actually mean to clear the cell — restore to the
-    // prior value by not committing. They can still type a single space then
-    // delete to explicitly clear.
     if (!touchedRef.current) return;
-    if (draft !== text) onCommit(rowOrigIdx, columnKey, draft);
+    const final = draftRef.current;
+    if (final !== text) onCommit(rowOrigIdx, columnKey, final);
   };
   const cancel = () => setEditing(false);
-  const onDraftChange = (v) => { touchedRef.current = true; setDraft(v); };
+  const onDraftChange = (v) => { touchedRef.current = true; draftRef.current = v; setDraft(v); };
   return (
     <td
       title={text}
@@ -227,54 +228,29 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       && prev.onCommit === next.onCommit;
 });
 
-// Monotonic id for <datalist>s so the same lookup column rendered across many
-// cells doesn't collide. Each editor mount gets a fresh id.
-let datalistSeq = 0;
-
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel }) {
   const ref = useRef(null);
-  const idRef = useRef(`dt-opts-${++datalistSeq}`);
-  // Auto-focus + select-all so the user can type-to-filter immediately. For
-  // datalist-backed inputs the suggestion popover opens on focus/typing, no
-  // showPicker() workaround needed.
+  // Auto-focus + select-all so the user can immediately type to filter or
+  // overwrite.
   useEffect(() => {
     if (!ref.current) return;
     ref.current.focus();
-    if (ref.current.select) {
-      try { ref.current.select(); } catch {}
-    }
+    if (ref.current.select) { try { ref.current.select(); } catch {} }
   }, []);
   const onKeyDown = (e) => {
     if (e.key === "Enter") { e.preventDefault(); onCommit(); }
     else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
   };
   if (meta && meta.type === "select") {
-    // Datalist input: visible chevron, opens on focus, type-to-filter, and the
-    // user can type a value not in the list (which we keep — useful for older
-    // workbooks with values that newer ones dropped). Earlier we used a
-    // <select> + showPicker() but Chrome's user-activation rule made the
-    // dropdown silently fail to open most of the time, leaving the user
-    // staring at a blank cell that didn't seem to do anything.
-    const opts = meta.options || [];
-    const seen = new Set(opts);
-    const augmented = seen.has(value) || !value ? opts : [value, ...opts];
     return (
-      <>
-        <input
-          ref={ref}
-          type="text"
-          list={idRef.current}
-          className="dtable-cell-input dtable-cell-input--combo"
-          value={value || ""}
-          placeholder={placeholder}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={onKeyDown}
-          onBlur={onCommit}
-        />
-        <datalist id={idRef.current}>
-          {augmented.map((o) => <option key={o} value={o} />)}
-        </datalist>
-      </>
+      <ComboboxEditor
+        value={value}
+        placeholder={placeholder}
+        options={meta.options || []}
+        onChange={onChange}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
     );
   }
   return (
@@ -288,6 +264,143 @@ function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCance
       onKeyDown={onKeyDown}
       onBlur={onCommit}
     />
+  );
+}
+
+// ComboboxEditor — custom dropdown that scrolls reliably (the native <datalist>
+// popover doesn't in Electron/Chromium for long lists, leaving users unable to
+// reach later options). The popover renders via createPortal into document.body
+// with position:fixed coords, so it can spill outside the table's scroll
+// container without being clipped.
+function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCancel }) {
+  const inputRef = useRef(null);
+  const popRef = useRef(null);
+  const [pos, setPos] = useState(null);   // {left, top, width}
+  const [highlightIdx, setHighlightIdx] = useState(0);
+
+  const filtered = useMemo(() => {
+    const q = (value || "").trim().toLowerCase();
+    if (!q) return options;
+    // Show "starts with" matches first, then "contains" matches — feels more
+    // predictable when typing the start of a name.
+    const starts = [], contains = [];
+    for (const o of options) {
+      const lc = String(o).toLowerCase();
+      if (lc.startsWith(q)) starts.push(o);
+      else if (lc.includes(q)) contains.push(o);
+    }
+    return starts.concat(contains);
+  }, [value, options]);
+
+  useEffect(() => { setHighlightIdx(0); }, [value]);
+
+  useLayoutEffect(() => {
+    if (!inputRef.current) return;
+    inputRef.current.focus();
+    if (inputRef.current.select) { try { inputRef.current.select(); } catch {} }
+    const r = inputRef.current.getBoundingClientRect();
+    setPos({ left: r.left, top: r.bottom + 2, width: Math.max(r.width, 180) });
+  }, []);
+
+  // Keep popover anchored if the page scrolls / window resizes while it's open.
+  useEffect(() => {
+    const reposition = () => {
+      if (!inputRef.current) return;
+      const r = inputRef.current.getBoundingClientRect();
+      setPos({ left: r.left, top: r.bottom + 2, width: Math.max(r.width, 180) });
+    };
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, []);
+
+  const commitWith = (val) => {
+    onChange(val);
+    // Defer commit to after the parent applies the new value, so the editor's
+    // touched flag captures the intent before the cell tears down.
+    setTimeout(onCommit, 0);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.min(filtered.length - 1, i + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.max(0, i - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (filtered[highlightIdx] != null) commitWith(filtered[highlightIdx]);
+      else onCommit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    } else if (e.key === "Tab") {
+      // Don't preventDefault so focus moves naturally; commit the current
+      // typed value.
+      onCommit();
+    }
+  };
+
+  // Blur commits *unless* the new focus target is inside our own popover (so
+  // clicking an option doesn't fire blur-cancel before the click takes effect).
+  const onBlur = (e) => {
+    if (popRef.current && popRef.current.contains(e.relatedTarget)) return;
+    onCommit();
+  };
+
+  // Scroll the highlighted option into view as the user arrows through.
+  useEffect(() => {
+    if (!popRef.current) return;
+    const el = popRef.current.querySelector(`[data-combo-idx="${highlightIdx}"]`);
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlightIdx]);
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="text"
+        className="dtable-cell-input dtable-cell-input--combo"
+        value={value || ""}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={onBlur}
+      />
+      {pos && createPortal(
+        <div
+          ref={popRef}
+          className="dtable-combo-pop"
+          // tabIndex so the popover itself can hold focus when the user
+          // mouses over it without the input losing focus and triggering
+          // blur-commit. We rely on relatedTarget logic in onBlur instead.
+          style={{ left: pos.left, top: pos.top, width: pos.width }}
+          onMouseDown={(e) => e.preventDefault() /* prevent input blur */}
+        >
+          {filtered.length === 0 && (
+            <div className="dtable-combo-empty">no match — Enter to keep "{value}"</div>
+          )}
+          {filtered.map((opt, i) => (
+            <div
+              key={opt}
+              data-combo-idx={i}
+              className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "")}
+              onMouseEnter={() => setHighlightIdx(i)}
+              onClick={() => commitWith(opt)}
+            >
+              {opt}
+            </div>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
