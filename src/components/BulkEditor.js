@@ -24,7 +24,7 @@ export default function BulkEditor({ selectedUnits, onApply, modIndex, onClearSe
   };
 
   return (
-    <div style={{ padding: 20, height: "100%", overflow: "auto" }}>
+    <div style={{ padding: 20 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline", marginBottom: 14 }}>
         <span style={{ fontSize: 16, fontWeight: 700 }}>Bulk edit</span>
         <span style={{ color: "#999" }}>{selectedUnits.length} units selected</span>

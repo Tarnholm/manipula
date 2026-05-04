@@ -1,14 +1,29 @@
 import React, { useMemo } from "react";
 import Picker from "./Picker";
 import UnitStats from "./UnitStats";
-import { renderUnitPreview } from "../generator";
+import EDBOccurrences from "./EDBOccurrences";
+import FactionIcon from "./FactionIcon";
+import RegionMap from "./RegionMap";
+import { renderUnitPreview, generatePlayerLines, generateAORPlayerLines, generateAILines } from "../generator";
 import { GRADE_DEFAULTS, GRADES } from "../grades";
 import { QUALITY_CLASSES, findQualityClass } from "../qualityClasses";
 
 // Unit family editor — grade-driven authoring.
 // Layout: Identity → Grade → Player section → AOR sibling → AI section → Common requires → Stats + Preview.
-export default function UnitEditor({ unit, onChange, modIndex }) {
+export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilterFaction, onSelectUnit, eduProject, onJumpToEdu, onCreateEduStub }) {
   const opts = useMemo(() => buildOptions(modIndex), [modIndex]);
+
+  // Live emit-count: how many EDB recruit lines this unit will produce given current toggles.
+  // MUST be declared before the early return so the hook order stays stable across renders.
+  const emitCounts = useMemo(() => {
+    if (!unit) return { player: 0, aor: 0, ai: 0, total: 0 };
+    try {
+      const player = generatePlayerLines(unit).length;
+      const aor = generateAORPlayerLines(unit).length;
+      const ai = generateAILines(unit).length;
+      return { player, aor, ai, total: player + aor + ai };
+    } catch { return { player: 0, aor: 0, ai: 0, total: 0 }; }
+  }, [unit]);
 
   if (!unit) {
     return <div style={{ padding: 30, color: "#777", textAlign: "center" }}>Select a unit to edit, or click ＋ New unit.</div>;
@@ -44,8 +59,37 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
     set({ commonRequires: merged });
   };
 
+  const ar = parseExtras(u.aorRequires || []);
+  const updateAorRequires = (kind, list) => {
+    const merged = serializeExtras({ ...ar, [kind]: list });
+    set({ aorRequires: merged });
+  };
+
   return (
-    <div style={{ padding: 16, overflow: "auto", height: "100%" }}>
+    <div style={{ padding: 16 }}>
+      <div style={{ marginBottom: 10, padding: "6px 10px", background: "rgba(220,166,74,0.06)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 6, fontSize: 11.5, color: "#bca", display: "flex", gap: 14, alignItems: "center" }}>
+        <span>Will emit <strong style={{ color: emitCounts.total > 0 ? "#dca64a" : "#a77" }}>{emitCounts.total}</strong> EDB lines</span>
+        <span style={{ color: "#888" }}>player: {emitCounts.player}</span>
+        {emitCounts.aor > 0 && <span style={{ color: "#888" }}>AOR: {emitCounts.aor}</span>}
+        <span style={{ color: "#888" }}>AI: {emitCounts.ai}</span>
+        {/* Cross-link to EDU Builder when the loaded EDU project has a row for this unit. */}
+        {eduProject && (eduProject.units || []).some(eu => (eu.Unit || eu.unit || eu.Type || eu.type) === u.unit) && onJumpToEdu && (
+          <button
+            onClick={onJumpToEdu}
+            title="Jump to this unit's stats row in the EDU Builder"
+            style={{ marginLeft: "auto", background: "rgba(220,166,74,0.18)", border: "1px solid rgba(220,166,74,0.35)", color: "#dca64a", padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+          >View EDU stats →</button>
+        )}
+        {/* Auto-create the EDU stub when there's no matching row yet, so authoring on one
+            side automatically scaffolds the other. */}
+        {eduProject && onCreateEduStub && !(eduProject.units || []).some(eu => (eu.Unit || eu.unit || eu.Type || eu.type) === u.unit) && (
+          <button
+            onClick={() => onCreateEduStub(u)}
+            title="Append a stub row to the loaded EDU project for this unit name"
+            style={{ marginLeft: "auto", background: "rgba(124,201,153,0.10)", border: "1px solid rgba(124,201,153,0.35)", color: "#7c9", padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+          >+ Create EDU stub</button>
+        )}
+      </div>
       {/* IDENTITY */}
       <Section title="Unit identity">
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -159,6 +203,13 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
             placeholder="add hidden_resource (e.g. horse_supply)"
           />
           <Picker
+            label="Excluded hidden_resources (emits not hidden_resource X — gates regions OUT)"
+            options={opts.hiddenResources}
+            value={ex.not_hidden_resource || []}
+            onChange={(v) => updateOutsideExtras("not_hidden_resource", v)}
+            placeholder="add not hidden_resource (e.g. island_settlement)"
+          />
+          <Picker
             label=""
             options={opts.aliases}
             value={ex.alias || []}
@@ -207,13 +258,13 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
         {u.aor && u.aor.enabled && (
           <div style={{ marginTop: 10, padding: 10, background: "rgba(255,255,255,0.03)", borderRadius: 6 }}>
             <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-              <Field label="AOR recruit name">
+              <Field label="AOR recruit name (auto)">
                 <input
                   type="text"
-                  value={u.aor.aorOnly ? (u.aor.recruitName || "") : `aor ${u.unit}`}
-                  readOnly={!u.aor.aorOnly}
-                  onChange={(e) => set({ aor: { ...u.aor, recruitName: e.target.value } })}
-                  style={{ ...input(280), background: u.aor.aorOnly ? "#252525" : "#1a1a1a", color: u.aor.aorOnly ? "#ddd" : "#aaa" }}
+                  value={`aor ${String(u.unit || "").replace(/^aor\s+/i, "")}`}
+                  readOnly
+                  title="Auto-derived from the unit name. Strips any existing 'aor ' prefix and re-adds it."
+                  style={{ ...input(280), background: "#1a1a1a", color: "#aaa" }}
                 />
               </Field>
               <Field label="gov_tier">
@@ -270,6 +321,9 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
           value={u.factions || []}
           onChange={(v) => set({ factions: v })}
           placeholder='Type to search factions, or add "all"'
+          renderIcon={(o) => o.value === "all" ? null : (
+            <FactionIcon iconPath={`faction_icons/${o.value}.tga`} alt={o.value} size={16} modIconsDir={modIndex.factionIconsDir} />
+          )}
         />
         <Picker
           label='Exclude factions ("not factions { … }")'
@@ -277,8 +331,69 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
           value={u.excludeFactions || []}
           onChange={(v) => set({ excludeFactions: v })}
           placeholder="rare — used for explicit exclusions"
+          renderIcon={(o) => o.value === "all" ? null : (
+            <FactionIcon iconPath={`faction_icons/${o.value}.tga`} alt={o.value} size={16} modIconsDir={modIndex.factionIconsDir} />
+          )}
         />
       </Section>
+
+      {/* AOR-SPECIFIC REQUIRES — only visible when an AOR sibling is enabled */}
+      {u.aor && u.aor.enabled && (
+        <Section title="AOR-only requires (apply only to the AOR sibling's lines)">
+          <Picker
+            label="Hidden resources"
+            options={opts.hiddenResources}
+            value={ar.hidden_resource || []}
+            onChange={(v) => updateAorRequires("hidden_resource", v)}
+            placeholder="add hidden_resource (only on AOR variant)"
+          />
+          {(ar.hidden_resource || []).length > 0 && modIndex.regionsByHR && (
+            <div style={{ marginTop: -8, marginBottom: 12, padding: "6px 10px", background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 3, fontSize: 11.5, color: "#9b9" }}>
+              {(ar.hidden_resource || []).map(hr => {
+                const regs = (modIndex.regionsByHR[hr] || []);
+                return (
+                  <div key={hr} style={{ marginBottom: 4 }}>
+                    <span style={{ color: "#bcb", fontFamily: "Consolas, monospace" }}>{hr}</span>
+                    <span style={{ color: "#666" }}> — </span>
+                    {regs.length === 0
+                      ? <span style={{ color: "#a77" }}>not present in any region</span>
+                      : <span>{regs.length} region{regs.length === 1 ? "" : "s"}: {regs.slice(0, 6).map(r => r.region).join(", ")}{regs.length > 6 ? `, +${regs.length - 6} more` : ""}</span>
+                    }
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <Picker
+            label="Excluded hidden_resources (emits not hidden_resource X — prevents AOR overlap with faction sibling regions)"
+            options={opts.hiddenResources}
+            value={ar.not_hidden_resource || []}
+            onChange={(v) => updateAorRequires("not_hidden_resource", v)}
+            placeholder="add not hidden_resource (e.g. iberia)"
+          />
+          <Picker
+            label="Reforms required (major_event)"
+            options={opts.reforms}
+            value={ar.major_event || []}
+            onChange={(v) => updateAorRequires("major_event", v)}
+          />
+          <Picker
+            label="Aliases"
+            options={opts.aliases}
+            value={ar.alias || []}
+            onChange={(v) => updateAorRequires("alias", v)}
+          />
+          <Field label="Custom requires (one per line — verbatim)">
+            <textarea
+              value={(ar.raw || []).join("\n")}
+              onChange={(e) => updateAorRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
+              rows={2}
+              style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
+              placeholder='e.g. not hidden_resource island_settlement'
+            />
+          </Field>
+        </Section>
+      )}
 
       {/* COMMON REQUIRES */}
       <Section title="Common requires (apply to every emitted line)">
@@ -307,6 +422,13 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
           </div>
         )}
         <Picker
+          label="Excluded hidden_resources (emits not hidden_resource X — gates regions OUT)"
+          options={opts.hiddenResources}
+          value={cr.not_hidden_resource || []}
+          onChange={(v) => updateCommonRequires("not_hidden_resource", v)}
+          placeholder="add not hidden_resource (e.g. island_settlement)"
+        />
+        <Picker
           label="Reforms required (major_event)"
           options={opts.reforms}
           value={cr.major_event || []}
@@ -330,6 +452,21 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
         </Field>
       </Section>
 
+      {/* RECRUITABLE REGIONS MAP */}
+      <RegionMap
+        unit={u}
+        modIndex={modIndex}
+        allUnits={allUnits}
+        onAddRequire={(bucket, kind, value) => {
+          const cur = u[bucket] || [];
+          const clause = kind === "not_hidden_resource" ? `not hidden_resource ${value}` : `hidden_resource ${value}`;
+          if (cur.includes(clause)) return;
+          set({ [bucket]: [...cur, clause] });
+        }}
+        onFilterFaction={onFilterFaction}
+        onUnitClick={onSelectUnit}
+      />
+
       {/* NOTES */}
       <Section title="Notes (not emitted)">
         <textarea
@@ -340,11 +477,14 @@ export default function UnitEditor({ unit, onChange, modIndex }) {
         />
       </Section>
 
+      {/* CURRENT IN EDB — read-only existing recruit lines for this unit */}
+      <EDBOccurrences recruitName={u.unit} modIndex={modIndex} />
+
       {/* STATS */}
       <UnitStats recruitName={u.unit} modIndex={modIndex} />
 
       {/* PREVIEW */}
-      <div style={{ marginTop: 14, padding: 12, background: "rgba(22,22,22,0.7)", border: "1px solid rgba(220,166,74,0.15)", borderRadius: 10 }}>
+      <div style={{ marginTop: 14, padding: 12, background: "rgba(15,17,18,0.7)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 12, backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
         <Label>Preview</Label>
         <pre style={{ whiteSpace: "pre-wrap", fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb", margin: 0 }}>
 {renderUnitPreview(u)}
@@ -370,10 +510,27 @@ function GradeChips({ current, qualityClass }) {
 const Chip = ({ children }) => <span style={{ padding: "2px 8px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10 }}>{children}</span>;
 
 function Section({ title, children }) {
+  // Per-section collapse state, keyed by title and persisted across launches. Lets the
+  // user hide sections they don't actively edit (e.g. always-collapsed AI section if
+  // they never touch AI tuning).
+  const storageKey = `rt:section:${String(title || "").replace(/\s+/g, "_").toLowerCase()}`;
+  const [collapsed, setCollapsed] = React.useState(() => {
+    try { return localStorage.getItem(storageKey) === "1"; } catch { return false; }
+  });
+  const toggle = () => {
+    setCollapsed(c => {
+      const next = !c;
+      try { localStorage.setItem(storageKey, next ? "1" : "0"); } catch {}
+      return next;
+    });
+  };
   return (
-    <div style={{ marginBottom: 18, padding: 14, background: "rgba(28,30,32,0.4)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10 }}>
-      <div style={{ fontSize: 11, color: "#dca64a", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700 }}>{title}</div>
-      {children}
+    <div style={{ marginBottom: 18, padding: collapsed ? "8px 14px" : 14, background: "rgba(24,26,27,0.55)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", boxShadow: "0 2px 12px rgba(0,0,0,0.2)" }}>
+      <div onClick={toggle} style={{ fontSize: 11, color: "#dca64a", marginBottom: collapsed ? 0 : 10, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ display: "inline-block", width: 10, transition: "transform 0.15s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>▾</span>
+        <span>{title}</span>
+      </div>
+      {!collapsed && children}
     </div>
   );
 }
@@ -410,12 +567,13 @@ function input(width, bold) {
 // Parse a list of requires-strings ("hidden_resource X", "alias_name", "major_event \"Y\"", "raw ...")
 // into structured kinds for the editor's pickers.
 function parseExtras(reqs) {
-  const ex = { hidden_resource: [], resource: [], major_event: [], building_present: [], alias: [], raw: [] };
+  const ex = { hidden_resource: [], not_hidden_resource: [], resource: [], major_event: [], building_present: [], alias: [], raw: [] };
   for (const r of reqs || []) {
     const s = (r || "").trim();
     if (!s) continue;
     let m;
-    if ((m = s.match(/^hidden_resource\s+(\S+)$/))) ex.hidden_resource.push(m[1]);
+    if ((m = s.match(/^not\s+hidden_resource\s+(\S+)$/))) ex.not_hidden_resource.push(m[1]);
+    else if ((m = s.match(/^hidden_resource\s+(\S+)$/))) ex.hidden_resource.push(m[1]);
     else if ((m = s.match(/^resource\s+(\S+)$/))) ex.resource.push(m[1]);
     else if ((m = s.match(/^major_event\s+"([^"]+)"$/))) ex.major_event.push(m[1]);
     else if ((m = s.match(/^building_present_min_level\s+(\S+)\s+(\S+)$/))) ex.building_present.push(`${m[1]}:${m[2]}`);
@@ -428,6 +586,7 @@ function parseExtras(reqs) {
 function serializeExtras(ex) {
   const out = [];
   for (const v of ex.hidden_resource || []) out.push(`hidden_resource ${v}`);
+  for (const v of ex.not_hidden_resource || []) out.push(`not hidden_resource ${v}`);
   for (const v of ex.resource || []) out.push(`resource ${v}`);
   for (const v of ex.alias || []) out.push(v);
   for (const v of ex.building_present || []) {

@@ -98,7 +98,64 @@ export function parseEDB(text) {
       curBuilding.levels[curLevelIdx].recruits.push(rec);
     }
   }
+  finalizeBuildings(buildings);
+  return { aliases, buildings, recruits };
+}
 
+// Async variant — yields the event loop every CHUNK lines so the renderer thread stays
+// responsive while parsing the EDB (often 100k+ lines / 10MB+ of text).
+const EDB_CHUNK = 4000;
+const edbTick = () => new Promise(r => setTimeout(r, 0));
+export async function parseEDBAsync(text) {
+  const lines = text.split(/\r?\n/);
+  const aliases = [];
+  const buildings = [];
+  const recruits = [];
+  let curBuilding = null, curBuildingLevels = [], curLevelIdx = -1, inAlias = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const am = line.match(ALIAS_RE);
+    if (am) { inAlias = { name: am[1], startLine: i, requires: null }; aliases.push(inAlias); continue; }
+    if (inAlias && /^\s*requires\s+/.test(line) && inAlias.requires == null) {
+      inAlias.requires = line.replace(/^\s*requires\s+/, "").trim();
+    }
+    if (inAlias && line.startsWith("}")) { inAlias.endLine = i; inAlias = null; }
+    const bm = line.match(BUILDING_RE);
+    if (bm) {
+      curBuilding = { name: bm[1], startLine: i, levels: [] };
+      buildings.push(curBuilding);
+      curBuildingLevels = []; curLevelIdx = -1;
+      continue;
+    }
+    if (curBuilding) {
+      const lm = line.match(LEVELS_RE);
+      if (lm) {
+        curBuildingLevels = lm[1].split(/\s+/).filter(Boolean);
+        for (const lvlName of curBuildingLevels) {
+          curBuilding.levels.push({ name: lvlName, building: curBuilding.name, startLine: -1, endLine: -1, recruits: [] });
+        }
+        continue;
+      }
+      const trimmed = line.trimStart();
+      const head = trimmed.match(/^([A-Za-z_][A-Za-z0-9_+\-]*)\s+requires\b/);
+      if (head && curBuildingLevels.includes(head[1])) {
+        const idx = curBuilding.levels.findIndex(l => l.name === head[1] && l.startLine === -1);
+        if (idx >= 0) { curBuilding.levels[idx].startLine = i; curLevelIdx = idx; }
+      }
+    }
+    const rm = line.match(RECRUIT_RE);
+    if (rm && curBuilding && curLevelIdx >= 0) {
+      const rec = { unit: rm[1], xp: parseInt(rm[2], 10), requires: rm[3].trim(), line: i, raw: line, building: curBuilding.name, level: curBuilding.levels[curLevelIdx].name };
+      recruits.push(rec);
+      curBuilding.levels[curLevelIdx].recruits.push(rec);
+    }
+    if ((i % EDB_CHUNK) === 0 && i > 0) await edbTick();
+  }
+  finalizeBuildings(buildings);
+  return { aliases, buildings, recruits };
+}
+
+function finalizeBuildings(buildings) {
   // Set endLine for each level to the start of the next level (or end of building).
   for (const b of buildings) {
     for (let li = 0; li < b.levels.length; li++) {
@@ -108,8 +165,6 @@ export function parseEDB(text) {
       lvl.endLine = next ? next.startLine - 1 : (b.startLine + 100000); // overshoots if last; fine
     }
   }
-
-  return { aliases, buildings, recruits };
 }
 
 // Group all recruit lines by unit name. Returns: Map<unitName, { totalLines, byBuilding: Map<building, [recruit...]> }>

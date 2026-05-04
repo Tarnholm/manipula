@@ -1,6 +1,6 @@
 {
   "name": "recruitment-tool",
-  "version": "0.10.10",
+  "version": "0.18.0",
   "description": "Electron tool for editing RTW mod recruitment in export_descr_buildings.txt",
   "author": "Tarnholm",
   "license": "MIT",
@@ -18,28 +18,38 @@
   "dependencies": {
     "electron-updater": "^6.8.3",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^41.2.1",
     "electron-builder": "^26.8.1",
-    "react-scripts": "^5.0.1"
+    "png-to-ico": "^3.0.1",
+    "react-scripts": "^5.0.1",
+    "sharp": "^0.34.5"
   },
   "build": {
     "extends": null,
     "appId": "com.tarnholm.recruitment-tool",
-    "productName": "Recruitment Tool",
+    "productName": "Manipula",
     "directories": {
       "buildResources": "public",
       "output": "dist"
     },
+    "icon": "public/icon.ico",
     "files": [
       "build/**",
       "main.js",
       "preload.js",
       "xlsmReader.js",
+      "tgaDecode.js",
+      "iconWorker.js",
       "package.json"
+    ],
+    "asarUnpack": [
+      "iconWorker.js",
+      "tgaDecode.js"
     ],
     "extraMetadata": {
       "main": "main.js"
@@ -47,13 +57,14 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "public/icon.ico"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "Tarnholm",
-        "repo": "recruitment-tool"
+        "repo": "manipula"
       }
     ],
     "nsis": {
@@ -63,7 +74,10 @@
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
-      "shortcutName": "Recruitment Tool"
+      "shortcutName": "Manipula",
+      "installerIcon": "public/icon.ico",
+      "uninstallerIcon": "public/icon.ico",
+      "guid": "8b3c1f24-a9d7-4f2e-9b8a-5c7e3d4a2b6f"
     }
   },
   "browserslist": {

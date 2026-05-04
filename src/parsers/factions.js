@@ -31,6 +31,14 @@ export function parseFactions(text) {
       if (c) cur.culture = c[1];
       const r = line.match(/"default religion"\s*:\s*"([^"]+)"/);
       if (r) cur.religion = r[1];
+      // Primary/secondary RGB live as either `"primary": [r,g,b]` (Provincia/some mods)
+      // or as `red 130, green 14, blue 8` lines (vanilla RTW). Match both.
+      const cm = line.match(/"(primary|secondary)"\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (cm) cur[cm[1] === "primary" ? "primaryRGB" : "secondaryRGB"] = [+cm[2], +cm[3], +cm[4]];
+      const pm = line.match(/^\s*primary_colour\s+red\s+(\d+),\s*green\s+(\d+),\s*blue\s+(\d+)/);
+      if (pm) cur.primaryRGB = [+pm[1], +pm[2], +pm[3]];
+      const sm = line.match(/^\s*secondary_colour\s+red\s+(\d+),\s*green\s+(\d+),\s*blue\s+(\d+)/);
+      if (sm) cur.secondaryRGB = [+sm[1], +sm[2], +sm[3]];
     }
 
     depth += opens - closes;

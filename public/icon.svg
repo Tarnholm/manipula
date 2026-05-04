@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Manipula app icon — a Mainz-pattern gladius on a dark sepia field, ringed by the same
+  gold accent the rest of the UI uses. Designed to read at every common app-icon size
+  (16, 32, 48, 64, 128, 256, 512). Strong silhouette: blade vertical, leaf-shaped, with
+  a fuller down the centre; bronze crossguard and pommel; dark wrapped grip.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Backdrop: deep sepia, subtle vignette so the blade catches the eye. -->
+    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+      <stop offset="0%"  stop-color="#231a13"/>
+      <stop offset="55%" stop-color="#16110b"/>
+      <stop offset="100%" stop-color="#080604"/>
+    </radialGradient>
+    <!-- Steel blade: cool highlight on the centre fuller, darker edges to imply bevel. -->
+    <linearGradient id="blade" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#7d848c"/>
+      <stop offset="20%"  stop-color="#b1bac3"/>
+      <stop offset="50%"  stop-color="#e6ecf2"/>
+      <stop offset="80%"  stop-color="#a4adb5"/>
+      <stop offset="100%" stop-color="#6e757d"/>
+    </linearGradient>
+    <linearGradient id="bladeShade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Bronze guard / pommel: warm, slightly burnished. -->
+    <linearGradient id="bronze" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#e8c373"/>
+      <stop offset="40%"  stop-color="#c79338"/>
+      <stop offset="100%" stop-color="#7a5418"/>
+    </linearGradient>
+    <!-- Wrapped leather / wood grip. -->
+    <linearGradient id="grip" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#52351c"/>
+      <stop offset="50%"  stop-color="#382112"/>
+      <stop offset="100%" stop-color="#221208"/>
+    </linearGradient>
+    <!-- Gold ring around the icon to match the app's accent (#dca64a). -->
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#f3c878"/>
+      <stop offset="50%"  stop-color="#b88a44"/>
+      <stop offset="100%" stop-color="#7a5a2a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Backdrop with rounded corners, gold border ring -->
+  <rect x="0" y="0" width="512" height="512" rx="92" ry="92" fill="url(#bg)"/>
+  <rect x="6" y="6" width="500" height="500" rx="86" ry="86"
+        fill="none" stroke="url(#ring)" stroke-width="6" stroke-opacity="0.9"/>
+
+  <!-- Gladius rotated -45° around the canvas centre so the point aims at the upper-left
+       corner. Diagonal composition reads stronger as an icon than the vertical stand,
+       and leaves the lower-right area free for breathing room (the M sits lower-left). -->
+  <g transform="rotate(-45 256 256)">
+  <!-- Blade: leaf-shaped Mainz-style gladius, point up before rotation. -->
+  <g>
+    <!-- Outer blade shape (5-point kite, broader at the fuller) -->
+    <path d="M 256 56
+             L 304 168
+             L 298 318
+             L 214 318
+             L 208 168 Z"
+          fill="url(#blade)" stroke="#3a4046" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- Centre fuller: thin highlight running most of the blade. -->
+    <path d="M 256 76
+             L 256 308"
+          stroke="#f0f4f8" stroke-width="3" stroke-linecap="round" stroke-opacity="0.55"/>
+    <!-- Top-right glint to suggest a polished surface. -->
+    <path d="M 256 70 L 300 168 L 256 168 Z"
+          fill="url(#bladeShade)" opacity="0.45"/>
+  </g>
+
+  <!-- Guard: bronze crossbar with subtle bevel. -->
+  <g>
+    <rect x="172" y="318" width="168" height="22" rx="6" ry="6"
+          fill="url(#bronze)" stroke="#3a2a10" stroke-width="2.5"/>
+    <!-- Highlight strip across the top of the guard. -->
+    <rect x="178" y="321" width="156" height="3" rx="1.5" ry="1.5"
+          fill="#ffe9b3" opacity="0.55"/>
+    <!-- Tiny rivets at each end. -->
+    <circle cx="186" cy="329" r="3.2" fill="#3a2a10"/>
+    <circle cx="326" cy="329" r="3.2" fill="#3a2a10"/>
+  </g>
+
+  <!-- Grip: wrapped leather with cross-hatching. -->
+  <g>
+    <rect x="234" y="340" width="44" height="76" rx="6" ry="6"
+          fill="url(#grip)" stroke="#1a0c04" stroke-width="2"/>
+    <!-- Diagonal wrap lines. -->
+    <g stroke="#1a0c04" stroke-width="1.6" stroke-opacity="0.7">
+      <line x1="234" y1="356" x2="278" y2="350"/>
+      <line x1="234" y1="372" x2="278" y2="366"/>
+      <line x1="234" y1="388" x2="278" y2="382"/>
+      <line x1="234" y1="404" x2="278" y2="398"/>
+    </g>
+  </g>
+
+  <!-- Pommel: bronze knob with a polished highlight. -->
+  <g>
+    <ellipse cx="256" cy="430" rx="34" ry="22"
+             fill="url(#bronze)" stroke="#3a2a10" stroke-width="2.5"/>
+    <ellipse cx="248" cy="424" rx="14" ry="6"
+             fill="#fff5d6" opacity="0.55"/>
+  </g>
+  </g><!-- /rotation group -->
+
+  <!-- Subtle SPQR-style M mark in the lower-left corner — a nod to the name without
+       crowding the silhouette at small sizes. -->
+  <g opacity="0.45">
+    <text x="36" y="476" font-family="Georgia, 'Times New Roman', serif"
+          font-size="42" font-weight="700" fill="#dca64a" letter-spacing="2">M</text>
+  </g>
+</svg>

@@ -6,9 +6,15 @@
 //   warn  — likely wrong but not fatal (unit name not in EDU, AOR with no exclusions, duplicate)
 //   info  — style/consistency hints (very short faction list with "all" alongside, etc.)
 
-export function validateUnits(units, modIndex) {
+export function validateUnits(units, modIndex, opts = {}) {
   const issues = [];
   if (!modIndex) return issues;
+  // opts.missingCards: Set<string> — recruit names whose unit_card.tga couldn't be located.
+  // Surface those as warnings so the validation view lists them alongside other issues.
+  const missingCards = opts.missingCards instanceof Set ? opts.missingCards : null;
+  // opts.skipCrossUnit: bypass the O(n²) conflict detector — used by the lightweight
+  // summary computation that runs on every render, since it can take 500ms+ for large profiles.
+  const skipCrossUnit = !!opts.skipCrossUnit;
 
   // Known names that are valid inside `factions { ... }` clauses:
   //   - Faction IDs from descr_sm_factions.txt
@@ -47,6 +53,15 @@ export function validateUnits(units, modIndex) {
     // Unit name should exist in EDU (or it won't recruit)
     if (knownEDUTypes.size && !knownEDUTypes.has(u.unit)) {
       issues.push(issue(u, "warn", "unknown-edu", `"${u.unit}" not found in export_descr_unit.txt`));
+      // Typo detector — Levenshtein distance ≤ 2 against any known EDU type. If we find
+      // a near-match, surface it as a stronger hint (the user almost certainly typo'd).
+      const near = findNearMatch(u.unit, knownEDUTypes, 2);
+      if (near) issues.push(issue(u, "warn", "typo-suspect", `Did you mean "${near}"? (one or two characters away from a real EDU type)`));
+    }
+
+    // Missing unit_card.tga — main process couldn't locate a portrait for this recruit name.
+    if (missingCards && missingCards.has(u.unit)) {
+      issues.push(issue(u, "warn", "missing-unit-card", `No unit_card.tga found in mod data for "${u.unit}"`));
     }
 
     // Tier sanity
@@ -56,6 +71,14 @@ export function validateUnits(units, modIndex) {
     }
     if (u.homelandMicTier != null && (u.homelandMicTier < 1 || u.homelandMicTier > 4)) {
       issues.push(issue(u, "error", "bad-homeland-tier", `Homeland mic_tier must be 1–4 (got ${u.homelandMicTier})`));
+    }
+
+    // gov_tier mismatch: AOR sibling's gov_tier must be ≥ canonicalMicTier, otherwise the
+    // AOR variant becomes unrecruitable in regions that hit the MIC tier check first.
+    if (u.aor && u.aor.enabled && u.canonicalMicTier != null && u.aor.govTier != null) {
+      if (u.aor.govTier < u.canonicalMicTier) {
+        issues.push(issue(u, "warn", "gov-tier-below-mic", `AOR gov_tier_${u.aor.govTier} is below canonical mic_tier_${u.canonicalMicTier} — AOR variant won't recruit until MIC tier is reached`));
+      }
     }
     // Outside-only extras shouldn't be set if no outside-homeland gov is emitted
     if ((u.outsideExtras && u.outsideExtras.length) && !u.emitGovB && !u.emitGovC) {
@@ -118,7 +141,171 @@ export function validateUnits(units, modIndex) {
       }
     }
   }
+
+  // ── Cross-unit conflict detector ──
+  // O(n²) — skip when caller explicitly asks (lightweight summary path) or when there are
+  // simply too many units to make the cost worth it.
+  if (skipCrossUnit || units.length > 1500) return issues;
+  const factionTierGroups = new Map(); // `${faction}|${tier}` → [{ unit, hrSet, notHrSet }]
+  for (const u of units) {
+    if (!u.unit || u.enabled === false) continue;
+    if (u.aor && u.aor.aorOnly) continue;
+    const tier = u.canonicalMicTier ?? u.minTier;
+    if (tier == null) continue;
+    const hrSet = new Set();
+    const notHrSet = new Set();
+    for (const c of [...(u.commonRequires || []), ...(u.outsideExtras || [])]) {
+      let m;
+      if ((m = c.match(/^hidden_resource\s+(\S+)$/))) hrSet.add(m[1]);
+      else if ((m = c.match(/^not\s+hidden_resource\s+(\S+)$/))) notHrSet.add(m[1]);
+    }
+    for (const f of (u.factions || [])) {
+      if (f === "all") continue;
+      const k = `${f}|${tier}`;
+      if (!factionTierGroups.has(k)) factionTierGroups.set(k, []);
+      factionTierGroups.get(k).push({ unit: u, hrSet, notHrSet });
+    }
+  }
+  const seenPair = new Set();
+  for (const [key, members] of factionTierGroups) {
+    if (members.length < 2) continue;
+    const [faction, tier] = key.split("|");
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        const a = members[i], b = members[j];
+        if (a.unit.id === b.unit.id) continue;
+        // Two units conflict if their HR-region sets overlap. Cheap upper-bound:
+        //   - both have empty positive HR sets → they overlap on every region (definite collision)
+        //   - they share at least one positive HR AND don't have mutually-exclusive negative HRs
+        const aPos = a.hrSet, bPos = b.hrSet;
+        const sharedPos = [...aPos].some(x => bPos.has(x));
+        const eitherEmpty = aPos.size === 0 && bPos.size === 0;
+        // Each side's negative HRs against the other's positives — if any of A's negatives is in B's positives, they don't share regions.
+        const mutuallyExclusive = [...a.notHrSet].some(x => bPos.has(x)) || [...b.notHrSet].some(x => aPos.has(x));
+        if (mutuallyExclusive) continue;
+        if (!eitherEmpty && !sharedPos && (aPos.size > 0 && bPos.size > 0)) continue;
+        const pairKey = [a.unit.id, b.unit.id].sort().join("|") + "|" + faction + "|" + tier;
+        if (seenPair.has(pairKey)) continue;
+        seenPair.add(pairKey);
+        issues.push(issue(a.unit, "info", "tier-conflict", `Recruits at the same (${faction}, mic_tier_${tier}) as "${b.unit.unit}" — overlapping regions, may collide`));
+      }
+    }
+  }
+
   return issues;
+}
+
+// Orphan detector — find recruit lines in the parsed EDB that reference units missing
+// from the EDU. Each becomes a `warn` issue surfaced in the validation tab. Useful for
+// catching dangling references after a unit rename.
+export function eduOrphanIssues(modIndex) {
+  if (!modIndex || !Array.isArray(modIndex.recruits) || !Array.isArray(modIndex.edu)) return [];
+  const eduSet = new Set(modIndex.edu.map(u => u.type));
+  const seen = new Set();
+  const out = [];
+  for (const r of modIndex.recruits) {
+    if (!r.unit || eduSet.has(r.unit) || seen.has(r.unit)) continue;
+    if (/^aor\s+/i.test(r.unit)) continue;        // AOR aliases — base type lookup elsewhere
+    if (/^merc\s+/i.test(r.unit)) continue;       // mercs declared in descr_mercenaries
+    seen.add(r.unit);
+    out.push({
+      unitId: `orphan:${r.unit}`,
+      unit: r.unit,
+      severity: "warn",
+      code: "edu-orphan",
+      message: `EDB references "${r.unit}" but no EDU entry exists for it (recruit will fail at game load)`,
+      source: "orphan",
+    });
+  }
+  return out;
+}
+
+// Cross-side consistency — for each authored recruitment unit, if the loaded EDU project
+// has a matching row, compare its EDB factions list with the EDU ownership field. Mismatches
+// usually mean the user renamed a faction on one side and forgot the other.
+export function crossSideIssues(units, eduProject) {
+  if (!units || !eduProject || !Array.isArray(eduProject.units)) return [];
+  const eduByName = new Map();
+  for (const eu of eduProject.units) {
+    const n = eu.Unit || eu.unit || eu.Type || eu.type;
+    if (n) eduByName.set(String(n), eu);
+  }
+  const out = [];
+  for (const u of units) {
+    if (!u.unit || u.enabled === false) continue;
+    const eu = eduByName.get(u.unit);
+    if (!eu) continue;
+    const eduOwnership = String(eu.Ownership || eu.ownership || "").split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+    if (eduOwnership.length === 0) continue;
+    const edbFacs = (u.factions || []).filter(f => f && f !== "all");
+    if (edbFacs.length === 0) continue;
+    const overlap = edbFacs.some(f => eduOwnership.includes(f));
+    if (!overlap) {
+      out.push({
+        unitId: u.id,
+        unit: u.unit,
+        severity: "warn",
+        code: "cross-faction-mismatch",
+        message: `EDB factions [${edbFacs.join(", ")}] don't overlap with EDU ownership [${eduOwnership.slice(0, 3).join(", ")}${eduOwnership.length > 3 ? "…" : ""}]`,
+        source: "cross",
+      });
+    }
+  }
+  return out;
+}
+
+// Wrap an EDU-matic ErrorEntry list as recruitment-tool-shaped issues so the unified
+// validation view can display both halves side by side. The EDU validator is statically
+// imported via the helper below so this module stays pure JS without a top-level import
+// cycle (validation.js is also pulled into App.js paths that don't need EDU).
+export function eduValidationIssues(eduProject, validateFn) {
+  if (!eduProject || typeof validateFn !== "function") return [];
+  try {
+    const errors = validateFn(eduProject) || [];
+    return errors.map(e => ({
+      unitId: `edu:${e.unit}`,
+      unit: e.unit,
+      severity: "error",
+      code: "edu-" + (e.category || "validate"),
+      message: `[EDU] ${e.message}`,
+      source: "edu",
+    }));
+  } catch (err) {
+    return [{ unitId: "edu:_self", unit: "(EDU validator)", severity: "warn", code: "edu-validator-failed", message: `EDU validator threw: ${err.message}`, source: "edu" }];
+  }
+}
+
+// Levenshtein distance, capped — if the running cost exceeds maxDist we bail early
+// without computing the rest. Only used for short strings (unit names) so the O(n²)
+// cost is fine.
+function levenshtein(a, b, maxDist) {
+  if (Math.abs(a.length - b.length) > maxDist) return maxDist + 1;
+  const m = a.length, n = b.length;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    let rowMin = dp[0];
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, dp[j], dp[j - 1]) + 1;
+      prev = tmp;
+      if (dp[j] < rowMin) rowMin = dp[j];
+    }
+    if (rowMin > maxDist) return maxDist + 1;
+  }
+  return dp[n];
+}
+function findNearMatch(query, candidates, maxDist) {
+  let bestMatch = null;
+  let bestDist = maxDist + 1;
+  for (const c of candidates) {
+    if (c === query) continue;
+    const d = levenshtein(query, c, maxDist);
+    if (d < bestDist) { bestDist = d; bestMatch = c; if (d === 1) break; }
+  }
+  return bestDist <= maxDist ? bestMatch : null;
 }
 
 function issue(u, severity, code, message) {

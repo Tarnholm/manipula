@@ -31,21 +31,35 @@ export function parseRegions(text) {
       j++;
     }
     if (block.length >= 5) {
-      const [r, settlement, owner, rebel, _color, traitLine] = block;
+      const [r, settlement, owner, rebel, color, traitLine] = block;
       const traits = (traitLine || "").split(",").map(s => s.trim()).filter(Boolean);
+      // RGB is whitespace-separated 3-tuple identifying this region's pixel color in map_regions.tga.
+      // Used by the in-app map view to colour regions matching a unit's HR requirements.
+      const rgbParts = (color || "").trim().split(/\s+/).map(n => parseInt(n, 10));
+      const rgb = rgbParts.length === 3 && rgbParts.every(n => Number.isFinite(n) && n >= 0 && n <= 255)
+        ? rgbParts
+        : null;
       out.push({
         region: r,
         settlement,
         owner,
         rebel,
         traits,
-        // Heuristic: hiddenResources are anything in traits — descr_regions doesn't distinguish.
-        // The parser keeps the whole list; the UI can cross-check against the resources/hiddenResources from descr_sm_resources.
+        rgb,                                   // [r, g, b] or null if unparsable
+        rgbKey: rgb ? rgb.join(",") : null,    // "r,g,b" — direct key for map_regions.tga pixel lookup
       });
     }
     i = j;
   }
   return out;
+}
+
+// Build a `${r},${g},${b}` → region lookup map for fast pixel-to-region resolution
+// when colouring map_regions.tga.
+export function regionsByRgbKey(regions) {
+  const m = {};
+  for (const r of regions) if (r.rgbKey) m[r.rgbKey] = r;
+  return m;
 }
 
 // Helper: which regions reference a given hidden_resource id?

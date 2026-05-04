@@ -53,9 +53,9 @@ export const QUALITY_CLASSES = [
   { id: "26. cataphract",                       role: "cavalry",  tierHint: 3 },
   { id: "27. chariot",                          role: "cavalry",  tierHint: 2 },
   { id: "28. scythed chariot",                  role: "cavalry",  tierHint: 2 },
-  { id: "29. forest elephant",                  role: "cavalry",  tierHint: 3 },
-  { id: "30. indian elephant",                  role: "cavalry",  tierHint: 3 },
-  { id: "31. armoured elephant",                role: "cavalry",  tierHint: 3 },
+  { id: "29. forest elephant",                  role: "elephant", tierHint: 3 },
+  { id: "30. indian elephant",                  role: "elephant", tierHint: 3 },
+  { id: "31. armoured elephant",                role: "elephant", tierHint: 3 },
   { id: "32. general",                          role: "general",  tierHint: 1 },
   { id: "32. chariot general",                  role: "general",  tierHint: 1 },
   { id: "33. infantry general",                 role: "general",  tierHint: 1 },
@@ -79,10 +79,56 @@ export function findQualityClass(id) {
   return QUALITY_CLASSES.find(q => q.id.toLowerCase() === norm) || null;
 }
 
-// Roles for the roster grid — the columns. "general" gets its own swimlane.
-export const ROSTER_ROLES = ["missile", "infantry", "cavalry", "general", "siege", "naval"];
+// Roster overview row order (top → bottom). Matches the recruitment output order.
+// Camels and elephants are conditional rows in the UI — hidden when the faction has zero
+// authored units in those categories. Same for siege and naval.
+export const ROSTER_ROLES = ["infantry", "missile", "cavalry", "camel", "elephant", "general", "siege", "naval"];
+
+// Classify a unit into a role bucket. Uses the Quality Class first (most reliable), then falls
+// back to recruit-name heuristics so manually authored units without a QC still land in the right
+// row. Same logic as the generator's bucketOf — kept unified to prevent the two views drifting.
+export function categorizeUnit(unit) {
+  if (!unit) return "infantry";
+  const qc = String(unit.qualityClass || "");
+  if (qc) {
+    if (/camel/i.test(qc)) return "camel";
+    if (/elephant/i.test(qc)) return "elephant";
+    if (/general/i.test(qc)) return "general";
+    if (/(slinger|archer|javelin|missile)/i.test(qc)) return "missile";
+    if (/(hoplite|spearman|infantry|fanatic|legionary|auxilia|phalangite|guard)/i.test(qc)) return "infantry";
+    if (/(cav|HA\b)/i.test(qc)) return "cavalry";
+  }
+  const n = String(unit.unit || "").toLowerCase();
+  if (/(elephant|olifant)/.test(n)) return "elephant";
+  if (/camel/.test(n)) return "camel";
+  if (/(\bgeneral\b|legatus|imperator|royal\s+escort)/.test(n)) return "general";
+  if (/(slinger|funditor|archer|toxotai|toxotes|javelinman|javelin|akontistai)/.test(n)) return "missile";
+  if (/(cavalry|horseman|equit(es)?\b|lancer|cataphract)/.test(n)) return "cavalry";
+  return "infantry";
+}
 
 export function roleOf(qc) {
   const q = findQualityClass(qc);
   return q ? q.role : "infantry";
+}
+
+// Units the tool ignores entirely — ships are out until the ports/recruitment overhaul,
+// and "mob" units (peasant mob, town mob, rebel mob, etc.) are uprising spawns that
+// don't get authored recruitment lines. Pass either the unit family or the EDU entry.
+export function isNonRecruitable(unitOrEdu) {
+  if (!unitOrEdu) return false;
+  const cat = String(unitOrEdu.category || "").toLowerCase();
+  const cls = String(unitOrEdu.class || "").toLowerCase();
+  if (cat === "ship") return true;
+  if (cat === "non_combatant") return true;
+  const name = String(unitOrEdu.unit || unitOrEdu.type || "").toLowerCase();
+  // Mob units = peasant rabble (peasants, barb peasants, slave/eastern/etc. peasants).
+  // These are uprising spawns / placeholder garrisons, never authored as proper recruits.
+  if (/\bmob\b/.test(name)) return true;
+  if (/\bpeasants?\b/.test(name)) return true;
+  if (/\bmob\b/.test(cls)) return true;
+  const qc = String(unitOrEdu.qualityClass || "").toLowerCase();
+  if (/\bship\b/.test(qc)) return true;
+  if (/\bpeasant\b/.test(qc)) return true;
+  return false;
 }

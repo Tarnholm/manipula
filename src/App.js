@@ -1,19 +1,44 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, Component } from "react";
+
+// Error boundary so a crash in the editor pane (e.g. a Hook order bug) doesn't blank the
+// whole app — it shows a recoverable error message + stack trace instead.
+class EditorErrorBoundary extends Component {
+  constructor(p) { super(p); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("[editor]", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 30, color: "#e88", fontFamily: "Consolas, monospace", fontSize: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Editor crashed: {String(this.state.error.message || this.state.error)}</div>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, color: "#888" }}>{(this.state.error.stack || "").split("\n").slice(0, 8).join("\n")}</pre>
+          <button onClick={() => this.setState({ error: null })} style={{ marginTop: 14, background: "#dca64a", color: "#1a1a1a", border: "none", padding: "8px 14px", borderRadius: 6, fontWeight: 700, cursor: "pointer" }}>Try again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import UnitList from "./components/UnitList";
 import UnitEditor from "./components/UnitEditor";
 import BulkEditor from "./components/BulkEditor";
 import ValidationView from "./components/ValidationView";
 import RosterOverview from "./components/RosterOverview";
+import { LightboxProvider } from "./components/UnitCard";
+// EDU-matic — bundled second app for generating export_descr_unit.txt from an EDUMatic xlsm.
+// Lives in src/edu_matic/ and shares window.eduAPI (defined in preload.js).
+import EduMaticApp from "./edu_matic/App";
 import { validateUnits, validateFactions, summarize } from "./validation";
 import useHistory, { useUndoShortcuts } from "./useHistory";
-import { parseEDB, groupByUnit, extractCoreRequires, extractFactions, detectMinTier } from "./parsers/edb";
+import { parseEDB, parseEDBAsync, groupByUnit, extractCoreRequires, extractFactions, detectMinTier } from "./parsers/edb";
 import { parseFactions } from "./parsers/factions";
 import { parseResources } from "./parsers/resources";
 import { parseRegions, regionsByHiddenResource } from "./parsers/regions";
-import { parseEDU } from "./parsers/edu";
-import { parseStrings } from "./parsers/strings";
+import { parseDescrStratFactions, regionToFaction } from "./parsers/strat";
+import { parseEDU, parseEDUAsync } from "./parsers/edu";
+import { parseStrings, parseStringsAsync } from "./parsers/strings";
 import { parseReforms } from "./parsers/reforms";
-import { renderAllPreview, applyUnitsToEDB, diffEDB } from "./generator";
+import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
 
 const api = window.electronAPI;
@@ -48,7 +73,9 @@ export default function App() {
     api.getActiveProfile().then(setActiveProfile);
     api.listProfiles().then(setProfiles);
     api.readUnits().then(d => history.reset((d.units || []).map(migrateV1)));
-    // Subscribe to update events so we can show a toast when an update is available/downloaded.
+    // Pull cached update status (for events the main process fired before this listener attached).
+    if (api.getUpdateStatus) api.getUpdateStatus().then(s => { if (s) setUpdateStatus(s); });
+    // Subscribe to live update events going forward.
     const unsub = api.onUpdateStatus && api.onUpdateStatus((s) => setUpdateStatus(s));
     return () => { if (typeof unsub === "function") unsub(); };
     // eslint-disable-next-line
@@ -101,6 +128,10 @@ export default function App() {
 
   const loadMod = useCallback(async () => {
     setLoading(true); setStatus("Loading mod files…");
+    // Yield to the event loop between each big parse step so the UI stays responsive while
+    // mod data (potentially 10MB+ of text) is parsed. Without this, the renderer thread
+    // is blocked for seconds on app start and the window appears frozen.
+    const tick = () => new Promise(r => setTimeout(r, 0));
     try {
       const r = await api.loadModFiles();
       if (!r.ok) { setStatus("Failed: " + (r.reason || "?")); return; }
@@ -108,26 +139,33 @@ export default function App() {
         setStatus("Missing: " + r.missing.join(", "));
       }
       const f = r.files;
+      setStatus("Parsing factions…"); await tick();
       const factions = f.factions ? parseFactions(f.factions) : [];
+      setStatus("Parsing resources…"); await tick();
       const { resources, hiddenResources } = f.resources ? parseResources(f.resources) : { resources: [], hiddenResources: [] };
+      setStatus("Parsing regions…"); await tick();
       const regions = f.regions ? parseRegions(f.regions) : [];
-      const edu = f.edu ? parseEDU(f.edu) : [];
-      const unitStrings = f.units ? parseStrings(f.units) : {};
-      const buildingStrings = f.buildings ? parseStrings(f.buildings) : {};
-      const expandedBi = f.expandedBi ? parseStrings(f.expandedBi) : {};
-      const { reforms, scriptFiles } = f.events ? parseReforms(f.events, f.eventScriptFiles || []) : { reforms: [], scriptFiles: [] };
-      const edb = f.edb ? parseEDB(f.edb) : { aliases: [], buildings: [], recruits: [] };
+      setStatus("Parsing campaign ownership…"); await tick();
+      const stratFactions = f.strat ? parseDescrStratFactions(f.strat) : {};
+      const regionOwner = regionToFaction(stratFactions);
+      for (const r of regions) {
+        const stratOwner = regionOwner[r.region];
+        if (stratOwner) r.stratOwner = stratOwner;
+      }
+      setStatus("Parsing units (EDU)…"); await tick();
+      const edu = f.edu ? await parseEDUAsync(f.edu) : [];
+      setStatus("Parsing strings…"); await tick();
+      const unitStrings = f.units ? await parseStringsAsync(f.units) : {};
+      await tick();
 
+      // Region HR index — needed by the unit list / map filters, fast to build.
       const regionsByHR = {};
       for (const r of regions) for (const t of r.traits) {
         if (!regionsByHR[t]) regionsByHR[t] = [];
         regionsByHR[t].push(r);
       }
-      // Dedup hiddenResource list to ones actually mentioned somewhere (resources file can list dozens that are unused).
-      const hrSet = new Set(hiddenResources.map(h => h.id));
       const hrEffective = hiddenResources.slice();
 
-      // Build a quick lookup: EDB recruit name (with spaces) → friendly display name (from strings).
       const eduByType = new Map(edu.map(u => [u.type, u]));
       const unitDisplayName = (recruitName) => {
         const u = eduByType.get(recruitName);
@@ -135,22 +173,83 @@ export default function App() {
         const k = u.dictionary || recruitName.replace(/\s+/g, "_");
         return unitStrings[k] || null;
       };
+      let factionIconsDir = null;
+      try { factionIconsDir = await api.findFactionIconsDir(); } catch {}
+      try { if (api.prewarmIcons) api.prewarmIcons(); } catch {}
+
+      // ── PARTIAL setModIndex (≈70% point) ──
+      // We have everything the UI needs to render the unit list, faction icons, region map,
+      // and unit editor. Reforms / building strings / EDB parse are still expensive — defer
+      // them to the next ticks so the splash can drop and the user can interact.
       setModIndex({
         factions, resources, hiddenResources: hrEffective, regions, regionsByHR,
-        aliases: edb.aliases, buildings: edb.buildings, recruits: edb.recruits,
-        reforms, scriptFiles, edu, eduByType,
-        strings: { units: unitStrings, buildings: buildingStrings, expandedBi },
+        stratFactions, regionOwner,
+        aliases: [], buildings: [], recruits: [],
+        reforms: [], scriptFiles: [], edu, eduByType,
+        strings: { units: unitStrings, buildings: {}, expandedBi: {} },
         unitDisplayName,
+        factionIconsDir,
       });
+      setLoadComplete(true);
+      setStatus("Loading the rest in background…");
+      // Yield enough for the splash drop animation + initial paint to settle.
+      await tick(); await tick();
+
+      // Background: finish parsing reforms, building strings, expanded_bi, and EDB. Each
+      // step uses the async variant so the renderer thread stays responsive while parsing
+      // the multi-MB string and EDB files.
+      const buildingStrings = f.buildings ? await parseStringsAsync(f.buildings) : {};
+      await tick();
+      const expandedBi = f.expandedBi ? await parseStringsAsync(f.expandedBi) : {};
+      setStatus("Parsing reforms…"); await tick();
+      const { reforms, scriptFiles } = f.events ? parseReforms(f.events, f.eventScriptFiles || []) : { reforms: [], scriptFiles: [] };
+      setStatus("Parsing buildings (EDB)…"); await tick();
+      const edb = f.edb ? await parseEDBAsync(f.edb) : { aliases: [], buildings: [], recruits: [] };
+      await tick();
+
+      setModIndex(prev => ({
+        ...prev,
+        aliases: edb.aliases, buildings: edb.buildings, recruits: edb.recruits,
+        reforms, scriptFiles,
+        strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
+      }));
       setEdbText(f.edb || "");
       setStatus(`Loaded: ${factions.length} factions, ${resources.length} resources, ${hiddenResources.length} hidden, ${regions.length} regions, ${edb.recruits.length} recruit lines, ${reforms.length} reforms.`);
     } catch (e) {
       console.error(e);
       setStatus("Error: " + e.message);
+      setLoadComplete(true);
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { if (api && dataDir) loadMod(); }, [dataDir, loadMod]);
+
+  // mtime watch — when the user returns to the window after editing files in another tool
+  // (e.g. EDU-matic standalone, a text editor), check the key mod files and prompt for a
+  // reload if any are newer than what we last loaded.
+  const lastLoadMtimes = React.useRef({});
+  useEffect(() => {
+    if (!api?.getModMtimes) return;
+    api.getModMtimes().then(m => { lastLoadMtimes.current = m || {}; });
+    let prompting = false;
+    const onFocus = async () => {
+      if (prompting) return;
+      try {
+        const cur = await api.getModMtimes();
+        if (!cur) return;
+        const last = lastLoadMtimes.current || {};
+        const stale = Object.entries(cur).filter(([k, v]) => v && last[k] && v > last[k]).map(([k]) => k);
+        if (stale.length === 0) return;
+        prompting = true;
+        const ok = window.confirm(`Mod files changed on disk: ${stale.join(", ")}\n\nReload now?`);
+        prompting = false;
+        if (ok) { lastLoadMtimes.current = cur; loadMod(); }
+        else lastLoadMtimes.current = cur; // dismiss — don't keep prompting for the same change
+      } catch {}
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [loadMod]);
 
   const selected = units.find(u => u.id === selectedId);
   const bulkSelected = units.filter(u => selectedIds.has(u.id));
@@ -242,8 +341,13 @@ export default function App() {
   const onDuplicate = (id) => {
     const src = units.find(u => u.id === id);
     if (!src) return;
+    // Prompt for the new recruit name up front so the user doesn't have to immediately
+    // rename "X (copy)" to something sensible. Defaults to the (copy) form on cancel.
+    const proposed = window.prompt(`Duplicate "${src.unit}" — new recruit name:`, src.unit + "_2");
+    if (proposed === null) return; // user cancelled
+    const newName = (proposed || "").trim() || (src.unit + " (copy)");
     const newId = "unit_" + Date.now().toString(36);
-    const dup = migrateV1({ ...src, id: newId, unit: src.unit + " (copy)" });
+    const dup = migrateV1({ ...src, id: newId, unit: newName });
     persistUnits([dup, ...units]);
     setSelectedId(newId);
   };
@@ -269,12 +373,38 @@ export default function App() {
     if (!api) return;
     const p = await api.pickEdumaticXlsm();
     if (!p) return;
+    // Re-import detection: if the user picks the same xlsm twice in a row, ask whether
+    // they want to refresh (replace existing imported units) vs append (current default).
+    const lastSrc = localStorage.getItem("rt:lastXlsmPath");
+    if (lastSrc === p && eduProject) {
+      const choice = window.confirm(`This is the same xlsm you imported last time:\n${p}\n\nRefresh (replace existing imported units) — OK\nAppend (keep current + add new) — Cancel`);
+      if (choice) {
+        // refresh: reset eduProject + drop import-flagged units before re-importing
+        setEduProject(null);
+      }
+    }
+    localStorage.setItem("rt:lastXlsmPath", p);
     setStatus("Reading " + p + "…");
     const r = await api.readEdumaticXlsm(p);
     if (!r.ok) { setStatus("Failed: " + r.reason); return; }
     const sel = new Set(r.rows.map((_, i) => i));
     setEdumaticPreview({ source: r.source, rows: r.rows, selected: sel });
-    setStatus(`Parsed ${r.count} rows from ${r.source}`);
+    // Same xlsm — feed it to the EDU Builder side too. One pick = one project across both
+    // halves of the app, instead of forcing the user to import twice.
+    try {
+      if (window.eduAPI && window.eduAPI.readFileBinary) {
+        const bytes = await window.eduAPI.readFileBinary(p);
+        if (bytes) {
+          const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+          const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
+          const eduProj = importXlsmBuffer(buf);
+          setEduProject(eduProj);
+          setEduProjectSource(p);
+        }
+      }
+    } catch (e) { console.warn("[edu] import failed:", e.message); }
+    setStatus(`Parsed ${r.count} rows from ${r.source}` + (eduProject ? " · EDU project also loaded" : ""));
+    toast(`Imported ${r.count} units from ${r.source.split(/[\\/]/).pop()}`, "success");
   };
 
   const confirmEdumaticImport = () => {
@@ -398,6 +528,199 @@ export default function App() {
   const [diff, setDiff] = useState(null); // { added, removed, kept } | null
   const [edumaticPreview, setEdumaticPreview] = useState(null); // { source, rows, selected: Set } | null
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
+  // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
+  // import populates both this and the recruitment-side import in one action.
+  const [eduProject, setEduProject] = useState(null);
+  const [eduView, setEduView] = useState("project"); // sub-view inside EDU Builder tab
+  const [eduProjectSource, setEduProjectSource] = useState(null); // path of the xlsm last imported, for the topbar pill
+  // EDU dirty state — flips on whenever the eduProject is mutated post-import (bulk
+  // edit, stub creation, etc.). Cleared when the user exports or re-imports.
+  const [eduDirty, setEduDirty] = useState(false);
+  const setEduProjectAndMark = useCallback((proj) => {
+    setEduProject(proj);
+    setEduDirty(true);
+  }, []);
+  // Warn before window close if EDU has unsaved changes.
+  useEffect(() => {
+    const handler = (e) => {
+      if (eduDirty) { e.preventDefault(); e.returnValue = ""; return ""; }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [eduDirty]);
+  // Welcome panel — first-launch onboarding. Dismissible forever via the "don't show again" checkbox.
+  const [showWelcome, setShowWelcome] = useState(() => localStorage.getItem("rt:welcomeDismissed") !== "1");
+  // Toast notifications — small queue with auto-expiry so action feedback (writes, exports,
+  // imports) is visible at a glance instead of buried in the status bar.
+  const [toasts, setToasts] = useState([]);
+  const toast = useCallback((text, kind = "info", ms = 3500) => {
+    const id = Date.now() + Math.random();
+    setToasts(t => [...t, { id, text, kind }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms);
+  }, []);
+  // Splash overlay — shown for SPLASH_MIN_MS (or until loadMod completes, whichever is later).
+  // Mirrors Provincia's pattern: the user sees a polished cover instead of a blank, half-rendered
+  // window while the parsers chew through ~10MB of mod text.
+  const [showSplash, setShowSplash] = useState(true);
+  const [loadComplete, setLoadComplete] = useState(false);
+  const SPLASH_MIN_MS = 350;
+  useEffect(() => {
+    const splashStart = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - splashStart;
+      const remaining = Math.max(0, SPLASH_MIN_MS - elapsed);
+      if (loadComplete) setTimeout(() => setShowSplash(false), remaining);
+    };
+    tick();
+  }, [loadComplete]);
+  const [missingCards, setMissingCards] = useState(() => new Set()); // recruit names with no unit_card.tga in mod data
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
+  // Resizable left-sidebar — persisted in localStorage so the user's preferred width sticks
+  // across launches.
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const v = parseInt(localStorage.getItem("rt:sidebarWidth") || "320", 10);
+    return Number.isFinite(v) && v >= 220 && v <= 720 ? v : 320;
+  });
+  useEffect(() => { localStorage.setItem("rt:sidebarWidth", String(sidebarWidth)); }, [sidebarWidth]);
+  const sidebarDragRef = React.useRef(null);
+  // Theme — sepia is the original gold-on-dark, "ink" is a colder grayscale alternative.
+  const [theme, setTheme] = useState(() => localStorage.getItem("rt:theme") || "sepia");
+  useEffect(() => {
+    localStorage.setItem("rt:theme", theme);
+    document.documentElement.setAttribute("data-rt-theme", theme);
+  }, [theme]);
+
+  // Drag-and-drop a .xlsm onto the window — same effect as clicking Import xlsm.
+  useEffect(() => {
+    const onDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; };
+    const onDrop = async (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f || !/\.xlsm?$|\.xlsx?$/i.test(f.name)) return;
+      try {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
+        const eduProj = importXlsmBuffer(buf);
+        setEduProject(eduProj);
+        setEduProjectSource(f.name);
+        setStatus(`Imported ${f.name} via drag-drop · ${eduProj.units.length} EDU rows`);
+        toast(`Imported ${f.name}`, "success");
+      } catch (err) { setStatus("Drag-drop import failed: " + err.message); toast("Drag-drop failed: " + err.message, "error"); }
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => { window.removeEventListener("dragover", onDragOver); window.removeEventListener("drop", onDrop); };
+  }, []);
+
+  // Keyboard shortcuts. Ctrl+S writes to EDB, Ctrl+E exports the bundle, Ctrl+F focuses
+  // the topbar quick-search, Ctrl+1..4 cycles tabs. Skipped when typing in an input/
+  // textarea so we don't steal Ctrl+A / Ctrl+Z from text editing.
+  useEffect(() => {
+    const handler = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tag = (e.target && e.target.tagName) || "";
+      const isText = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      const k = e.key.toLowerCase();
+      if (k === "s" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='write-edb']")?.click(); }
+      else if (k === "e" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='export-bundle']")?.click(); }
+      else if (k === "f" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='quick-search']")?.focus(); }
+      else if (k === "1") { e.preventDefault(); setActiveTab("editor"); }
+      else if (k === "2") { e.preventDefault(); setActiveTab("validation"); }
+      else if (k === "3") { e.preventDefault(); setActiveTab("exportAll"); }
+      else if (k === "4") { e.preventDefault(); setActiveTab("edu"); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const applyFindReplace = useCallback(({ find, replace }) => {
+    if (!find) return 0;
+    let n = 0;
+    const next = units.map(u => {
+      let changed = false;
+      const sub = (arr) => {
+        if (!Array.isArray(arr)) return arr;
+        const out = arr.map(s => {
+          if (typeof s !== "string") return s;
+          if (s.includes(find)) { changed = true; return s.split(find).join(replace); }
+          return s;
+        });
+        return out;
+      };
+      const patched = {
+        ...u,
+        commonRequires: sub(u.commonRequires),
+        outsideExtras: sub(u.outsideExtras),
+        aorRequires: sub(u.aorRequires),
+        requires: sub(u.requires),
+      };
+      if (changed) n++;
+      return patched;
+    });
+    if (n > 0) persistUnits(next);
+    return n;
+    // eslint-disable-next-line
+  }, [units]);
+
+  // Re-check missing unit cards whenever the unit set or EDU index changes. Runs through
+  // an IPC so main does the file existence checks (we don't want hundreds of fs.existsSync
+  // calls in the renderer). Debounced so a typing burst doesn't thrash main.
+  useEffect(() => {
+    if (!api?.checkUnitCards) return;
+    if (!units.length) { setMissingCards(new Set()); return; }
+    const stripPrefix = (s) => String(s || "").replace(/^(aor|merc)\s+/i, "");
+    const list = units.map(u => {
+      const eduEntry = modIndex.eduByType
+        ? (modIndex.eduByType.get(u.unit) || modIndex.eduByType.get(stripPrefix(u.unit)))
+        : null;
+      const faction =
+        (u.factions || []).find(f => f && f !== "all") ||
+        (eduEntry?.ownership || []).find(f => f && f !== "slave") ||
+        null;
+      return { unit: u.unit, faction, dictionary: eduEntry?.dictionary || null };
+    });
+    const t = setTimeout(() => {
+      api.checkUnitCards(list).then(missing => {
+        setMissingCards(new Set(missing || []));
+      }).catch(() => {});
+      // Fire-and-forget: pre-warm the PNG cache for every authored unit's portrait so the
+      // first scroll through UnitList shows them without any decode latency.
+      try { if (api.prewarmUnitCards) api.prewarmUnitCards(list); } catch {}
+    }, 300);
+    return () => clearTimeout(t);
+  }, [units, modIndex]);
+
+  // Single-click bundle export. Builds both texts in the renderer (EDB via applyUnitsToEDB,
+  // EDU via compute + formatEdu when an EDU project is loaded), then writes both into one
+  // user-picked folder. The recruitment side requires a fresh EDB read — same as the
+  // existing Write-to-EDB flow — and respects writeBack flags on each unit.
+  const exportBundle = async () => {
+    if (!api) return;
+    let edbText = null, eduText = null;
+    try {
+      if (units.length) {
+        const fresh = await api.readEDB();
+        if (fresh) edbText = applyUnitsToEDB(fresh, units);
+      }
+    } catch (e) { setStatus("EDB build failed: " + e.message); return; }
+    try {
+      if (eduProject) {
+        const { compute } = await import("./edu_matic/compute");
+        const { formatEdu } = await import("./edu_matic/format");
+        eduText = formatEdu(compute(eduProject), eduProject);
+      }
+    } catch (e) { setStatus("EDU build failed: " + e.message); return; }
+    if (!edbText && !eduText) { alert("Nothing to export — load a mod or import an xlsm first."); return; }
+    if (!api.exportBundle) { alert("Bundle export needs a newer build of the app."); return; }
+    const r = await api.exportBundle(edbText, eduText);
+    if (r.canceled) return;
+    if (r.error) { setStatus("Bundle export failed: " + r.error); return; }
+    const parts = [];
+    if (r.edbPath) parts.push("EDB → " + r.edbPath);
+    if (r.eduPath) parts.push("EDU → " + r.eduPath);
+    setStatus("Exported · " + parts.join(" · "));
+    setEduDirty(false);
+  };
 
   const previewWriteBack = async () => {
     if (!api) return;
@@ -405,7 +728,15 @@ export default function App() {
     const fresh = await api.readEDB();
     if (!fresh) { alert("Could not read EDB."); return; }
     const d = diffEDB(fresh, units);
-    setDiff({ ...d, fresh });
+    // Round-trip integrity check: dry-run the apply so we can warn in the diff modal if
+    // any expected line wouldn't actually appear in the resulting file (anchor heuristics
+    // sometimes drift on unusual EDB shapes). The check is cheap; surface it pre-confirm.
+    let integrity = null;
+    try {
+      const proposed = applyUnitsToEDB(fresh, units);
+      integrity = verifyRoundTrip(proposed, units);
+    } catch (e) { integrity = { ok: false, missing: [], error: e.message, expectedCount: 0 }; }
+    setDiff({ ...d, fresh, integrity });
   };
 
   const confirmWriteBack = async () => {
@@ -419,23 +750,147 @@ export default function App() {
 
   const exportAllText = useMemo(() => renderAllPreview(units), [units]);
   const validationSummary = useMemo(() => {
-    const sum = summarize(validateUnits(units, modIndex));
+    // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
+    // conflict pass. The full validation view (which only mounts when the user opens the tab)
+    // runs the full set including conflicts.
+    const sum = summarize(validateUnits(units, modIndex, { missingCards, skipCrossUnit: true }));
     const factionIssues = validateFactions(units, modIndex);
     return { ...sum, factionIssues: factionIssues.length };
-  }, [units, modIndex]);
+  }, [units, modIndex, missingCards]);
 
   return (
+    <LightboxProvider>
+    {/* Toast queue — fixed top-right, stacks bottom-down. */}
+    {toasts.length > 0 && (
+      <div style={{ position: "fixed", top: 16, right: 16, zIndex: 7000, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
+        {toasts.map(t => (
+          <div key={t.id} style={{
+            background: "rgba(28,30,32,0.96)",
+            border: `1px solid ${t.kind === "error" ? "rgba(232,136,136,0.5)" : t.kind === "success" ? "rgba(124,201,153,0.5)" : "rgba(220,166,74,0.5)"}`,
+            borderRadius: 6, padding: "8px 14px", color: "#ddd", fontSize: 13,
+            boxShadow: "0 4px 14px rgba(0,0,0,0.5)",
+            minWidth: 220, maxWidth: 380, pointerEvents: "auto",
+          }}>{t.text}</div>
+        ))}
+      </div>
+    )}
+    {/* First-launch welcome — covers the editor with a 3-step quick-start so a brand-new
+        user knows what to do. Dismissible forever via the checkbox. */}
+    {showWelcome && !showSplash && (
+      <div style={{ position: "fixed", inset: 0, zIndex: 5500, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "rgba(28,30,32,0.98)", border: "1px solid rgba(220,166,74,0.35)", borderRadius: 12, padding: 30, maxWidth: 560, color: "#ddd", boxShadow: "0 12px 40px rgba(0,0,0,0.6)" }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#dca64a", marginBottom: 4, fontFamily: "Georgia, serif", letterSpacing: 1 }}>Welcome to Manipula</div>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 20, fontStyle: "italic" }}>Author RTW recruitment + EDU stats in one window.</div>
+          <ol style={{ paddingLeft: 22, lineHeight: 1.7, fontSize: 13 }}>
+            <li style={{ marginBottom: 8 }}><strong style={{ color: "#dca64a" }}>Pick your mod data folder.</strong> Top-left "Mod data folder…" — point at your <code style={{ color: "#7c9" }}>RIS/data</code> directory (or wherever your <code>export_descr_buildings.txt</code> lives).</li>
+            <li style={{ marginBottom: 8 }}><strong style={{ color: "#dca64a" }}>Drop in your EDUMatic xlsm</strong> (optional but recommended). Drag the <code style={{ color: "#7c9" }}>.xlsm</code> straight onto this window — populates both recruitment data and EDU stats.</li>
+            <li style={{ marginBottom: 8 }}><strong style={{ color: "#dca64a" }}>Start authoring.</strong> Pick a unit on the left, edit recruitment in the centre, watch the recruitable-regions map update live. <strong>Ctrl+S</strong> writes to EDB, <strong>Ctrl+E</strong> exports both files.</li>
+          </ol>
+          <div style={{ marginTop: 12, fontSize: 11, color: "#888" }}>
+            EDU pipeline based on Biggus_Dickus' <em>BD's New Base</em> + Aradan's EDU-matic — credits in the EDU Builder tab.
+          </div>
+          <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <label style={{ fontSize: 11, color: "#888", display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" defaultChecked onChange={(e) => {
+                if (e.target.checked) localStorage.setItem("rt:welcomeDismissed", "1");
+                else localStorage.removeItem("rt:welcomeDismissed");
+              }} />
+              Don't show again
+            </label>
+            <button onClick={() => setShowWelcome(false)} style={{ background: "#dca64a", color: "#1a1a1a", border: "none", padding: "8px 18px", borderRadius: 6, fontWeight: 700, cursor: "pointer" }}>Get started</button>
+          </div>
+        </div>
+      </div>
+    )}
+    {showSplash && (
+      <div style={{
+        position: "fixed", inset: 0, zIndex: 6000, display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center", gap: 18,
+        // ONE 2400×2400 leather image as cover — no tiling, period. Source has fine
+        // uniform grain so cover-scaling on a 1920×1080 window shows the texture at
+        // ~0.8× source resolution: still sharp, no visible upscale, and structurally
+        // impossible to show seams because there's only one image.
+        backgroundImage: [
+          "linear-gradient(rgba(0,0,0,0.40), rgba(0,0,0,0.40))",
+          "url('./leather.jpg')",
+        ].join(","),
+        backgroundSize: "cover, cover",
+        backgroundRepeat: "no-repeat, no-repeat",
+        backgroundPosition: "center, center",
+        backgroundColor: "#3a1f0e",
+        color: "#dca64a", fontFamily: "Cinzel, Georgia, serif",
+      }}>
+        <div style={{ position: "absolute", inset: 28, border: "2px dashed #d4a85a", borderRadius: 14, pointerEvents: "none", boxShadow: "inset 0 0 120px rgba(0,0,0,0.45), 0 4px 30px rgba(0,0,0,0.6)" }} />
+        <div style={{ position: "absolute", inset: 30, border: "1px solid rgba(255,220,150,0.18)", borderRadius: 13, pointerEvents: "none" }} />
+        <div style={{ fontSize: 42, fontWeight: 700, letterSpacing: 6, textShadow: "0 2px 14px rgba(0,0,0,0.7), 0 0 20px rgba(220,166,74,0.4)", color: "#f1c878", zIndex: 1 }}>MANIPULA</div>
+        <div style={{ fontSize: 11, color: "#cba88a", letterSpacing: 1, textTransform: "uppercase", marginTop: -6, textShadow: "0 1px 4px rgba(0,0,0,0.7)", zIndex: 1 }}>handle the maniple · recruitment · units · map</div>
+        <div style={{ fontSize: 13, color: "#a8855a", letterSpacing: 1.2, textTransform: "uppercase", textShadow: "0 1px 4px rgba(0,0,0,0.7)", zIndex: 1 }}>{info && info.version ? `v${info.version}` : ""}</div>
+        <div style={{ marginTop: 30, fontSize: 12, color: "#e6cda0", fontStyle: "italic", letterSpacing: 0.5, fontFamily: "Georgia, serif", textShadow: "0 1px 3px rgba(0,0,0,0.6)", zIndex: 1 }}>{status || "Loading…"}</div>
+        <div style={{ marginTop: 16, width: 240, height: 3, background: "rgba(40,20,8,0.6)", borderRadius: 2, overflow: "hidden", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.7)", zIndex: 1 }}>
+          <div style={{
+            width: "30%", height: "100%",
+            background: "linear-gradient(90deg, transparent, #f1c878, transparent)",
+            animation: "splash-bar 1.4s linear infinite",
+          }} />
+        </div>
+        <style>{`
+          @keyframes splash-bar { 0% { transform: translateX(-100%); } 100% { transform: translateX(800%); } }
+        `}</style>
+      </div>
+    )}
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       <Topbar
         dataDir={dataDir}
         loading={loading}
         status={status}
+        eduProject={eduProject}
+        eduProjectSource={eduProjectSource}
+        eduDirty={eduDirty}
+        unitsCount={units.length}
+        units={units}
+        theme={theme}
+        onThemeToggle={() => setTheme(t => t === "sepia" ? "ink" : "sepia")}
+        onSaveProject={async () => {
+          if (!api?.saveManipulaProject) return;
+          const payload = {
+            version: 1,
+            savedAt: new Date().toISOString(),
+            units,
+            eduProject,
+            eduProjectSource,
+            mapZoom: parseFloat(localStorage.getItem("rt:mapZoom") || "1"),
+            mapPan: JSON.parse(localStorage.getItem("rt:mapPan") || "{}"),
+            activeProfile,
+          };
+          const r = await api.saveManipulaProject(payload, `${activeProfile || "default"}.manipula.json`);
+          if (r.ok) toast(`Saved → ${r.path}`, "success");
+          else if (!r.canceled) toast("Save failed: " + (r.reason || "?"), "error");
+        }}
+        onOpenProject={async () => {
+          if (!api?.openManipulaProject) return;
+          const r = await api.openManipulaProject();
+          if (r.canceled) return;
+          if (!r.ok) { toast("Open failed: " + (r.reason || "?"), "error"); return; }
+          const p = r.payload;
+          if (!p || p.version !== 1) { toast("Not a Manipula project file (or unsupported version)", "error"); return; }
+          if (!window.confirm("Loading this project will replace your current units and EDU project. Continue?")) return;
+          history.reset((p.units || []).map(migrateV1));
+          if (p.eduProject) setEduProject(p.eduProject);
+          if (p.eduProjectSource) setEduProjectSource(p.eduProjectSource);
+          if (p.mapZoom) localStorage.setItem("rt:mapZoom", String(p.mapZoom));
+          if (p.mapPan) localStorage.setItem("rt:mapPan", JSON.stringify(p.mapPan));
+          toast(`Loaded project from ${r.path.split(/[\\/]/).pop()} — ${(p.units || []).length} units`, "success");
+        }}
+        onJumpToUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); setActiveTab("editor"); }}
+        onJumpToEdu={() => { setEduView("units"); setActiveTab("edu"); }}
+        onFindReplace={() => setFindReplaceOpen(true)}
         onPick={async () => { const d = await api.pickDataDir(); if (d) { setDataDir(d); } }}
         onReload={loadMod}
         onImport={importFromEDB}
         onImportEdumatic={importFromEdumatic}
         onResetImportsToReferenceOnly={resetImportsToReferenceOnly}
         onWriteBack={previewWriteBack}
+        onExportBundle={exportBundle}
         onSaveText={async () => {
           const p = await api.saveTextAs("recruitment-export.txt", exportAllText);
           if (p) setStatus("Saved: " + p);
@@ -450,6 +905,28 @@ export default function App() {
         onRedo={history.redo}
         canUndo={history.canUndo}
         canRedo={history.canRedo}
+        onCheckUpdates={async () => {
+          if (!api) return;
+          // Pop the toast immediately so the click always produces visible feedback. autoUpdater
+          // events that follow will replace this state with available/none/downloaded/error.
+          setUpdateStatus({ state: "checking" });
+          setStatus("Checking for updates…");
+          const r = await api.updaterCheck();
+          if (!r.ok) {
+            setUpdateStatus({ state: "error", message: r.reason || "Update check failed" });
+            setStatus("Update check failed: " + (r.reason || "?"));
+            return;
+          }
+          // If autoUpdater is silent (already-cached state, no events emitted), pull whatever
+          // the main process last knew about and surface that — otherwise the toast hangs on "checking".
+          setTimeout(async () => {
+            if (api.getUpdateStatus) {
+              const s = await api.getUpdateStatus();
+              if (s) setUpdateStatus(s);
+              else setUpdateStatus({ state: "error", message: "no response from updater (check console)" });
+            }
+          }, 4000);
+        }}
         info={info}
       />
       {diff && (
@@ -467,8 +944,15 @@ export default function App() {
           }}
         />
       )}
-      {updateStatus && updateStatus.state !== "none" && updateStatus.state !== "error" && (
-        <UpdateToast status={updateStatus} onInstall={() => api.updaterQuitAndInstall()} onDismiss={() => setUpdateStatus(null)} />
+      {updateStatus && (
+        <UpdateToast status={updateStatus} currentVersion={info && info.version} onInstall={() => api.updaterQuitAndInstall()} onDismiss={() => setUpdateStatus(null)} />
+      )}
+      {findReplaceOpen && (
+        <FindReplaceModal
+          units={units}
+          onApply={applyFindReplace}
+          onClose={() => setFindReplaceOpen(false)}
+        />
       )}
       {edumaticPreview && (
         <EdumaticPreviewModal
@@ -486,7 +970,7 @@ export default function App() {
         />
       )}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <div style={{ width: 320, minWidth: 280, height: "100%" }}>
+        <div style={{ width: sidebarWidth, minWidth: 220, height: "100%", position: "relative" }}>
           <UnitList
             units={units}
             selectedId={selectedId}
@@ -499,8 +983,29 @@ export default function App() {
             modIndex={modIndex}
             filter={listFilter}
             onFilterChange={setListFilter}
+            eduProject={eduProject}
           />
         </div>
+        <div
+          onMouseDown={(e) => {
+            sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+            e.preventDefault();
+            const onMove = (ev) => {
+              if (!sidebarDragRef.current) return;
+              const w = sidebarDragRef.current.startWidth + (ev.clientX - sidebarDragRef.current.startX);
+              setSidebarWidth(Math.max(220, Math.min(720, w)));
+            };
+            const onUp = () => {
+              sidebarDragRef.current = null;
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          }}
+          title="Drag to resize"
+          style={{ width: 4, cursor: "col-resize", background: "rgba(220,166,74,0.10)", flexShrink: 0 }}
+        />
         <div style={{ flex: 1, height: "100%", display: "flex", flexDirection: "column" }}>
           <Tabs activeTab={activeTab} onChange={setActiveTab} validationSummary={validationSummary} />
           <div style={{ flex: 1, overflow: "hidden" }}>
@@ -508,41 +1013,110 @@ export default function App() {
               <div style={{ height: "100%", overflow: "auto" }}>
                 {listFilter.mode === "faction" && listFilter.value && (
                   <div style={{ padding: "12px 16px 0" }}>
-                    <RosterOverview units={units} faction={listFilter.value} onUnitClick={(id) => { setSelectedIds(new Set()); setSelectedId(id); }} />
+                    <RosterOverview units={units} faction={listFilter.value} modIconsDir={modIndex.factionIconsDir} modIndex={modIndex} onCreateFromEDU={onCreateFromEDU} onUnitClick={(id) => { setSelectedIds(new Set()); setSelectedId(id); }} />
                   </div>
                 )}
-                {selectedIds.size > 1
-                  ? <BulkEditor selectedUnits={bulkSelected} onApply={applyBulk} modIndex={modIndex} onClearSelection={clearSelection} />
-                  : <UnitEditor unit={selected} onChange={onChangeUnit} modIndex={modIndex} />}
+                <EditorErrorBoundary>
+                  {selectedIds.size > 1
+                    ? <BulkEditor selectedUnits={bulkSelected} onApply={applyBulk} modIndex={modIndex} onClearSelection={clearSelection} />
+                    : <UnitEditor unit={selected} onChange={onChangeUnit} modIndex={modIndex} allUnits={units} onFilterFaction={(faction) => { setListFilter({ mode: "faction", value: faction }); }} onSelectUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); }} eduProject={eduProject} onJumpToEdu={() => { setEduView("units"); setActiveTab("edu"); }} onCreateEduStub={(authoredUnit) => {
+                    if (!eduProject) return;
+                    // Append a minimal EDU row for this unit. User fills in the rest in the
+                    // EDU Builder Units screen — this just removes the friction of opening it
+                    // up and adding a row by hand.
+                    const stub = {
+                      kind: "unit",
+                      Unit: authoredUnit.unit,
+                      row: (eduProject.units || []).length + 3,
+                      Ownership: (authoredUnit.factions || []).filter(f => f && f !== "all").join(", "),
+                    };
+                    setEduProjectAndMark({ ...eduProject, units: [...(eduProject.units || []), stub] });
+                    setStatus(`Added EDU stub for "${authoredUnit.unit}" — open EDU Builder → Units to fill in stats.`);
+                  }} />}
+                </EditorErrorBoundary>
               </div>
             )}
             {activeTab === "validation" && (
               <ValidationView
                 units={units}
                 modIndex={modIndex}
+                missingCards={missingCards}
+                eduProject={eduProject}
                 onJump={(id) => { setSelectedIds(new Set()); setSelectedId(id); setActiveTab("editor"); }}
                 onFilterFaction={(faction) => { setListFilter({ mode: "faction", value: faction }); setActiveTab("editor"); }}
+                onCreateEduStubs={(missing) => {
+                  if (!eduProject) return;
+                  const stubs = missing.map(u => ({
+                    kind: "unit",
+                    Unit: u.unit,
+                    row: 0,
+                    Ownership: (u.factions || []).filter(f => f && f !== "all").join(", "),
+                  }));
+                  setEduProjectAndMark({ ...eduProject, units: [...(eduProject.units || []), ...stubs] });
+                  setStatus(`Added ${stubs.length} EDU stubs.`);
+                }}
               />
             )}
             {activeTab === "exportAll" && (
-              <pre style={{ height: "100%", overflow: "auto", padding: 16, margin: 0, fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb", background: "#161616", whiteSpace: "pre-wrap" }}>{exportAllText}</pre>
+              <pre style={{ height: "100%", overflow: "auto", padding: 16, margin: 0, fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb", background: "rgba(15,17,18,0.7)", whiteSpace: "pre-wrap" }}>{exportAllText}</pre>
+            )}
+            {activeTab === "edu" && (
+              <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+                <EduSubTabs view={eduView} onView={setEduView} project={eduProject} />
+                <div style={{ flex: 1, overflow: "auto" }}>
+                  <EduMaticApp
+                    externalProject={eduProject}
+                    onProjectChange={setEduProject}
+                    controlledView={eduView}
+                    onControlledView={setEduView}
+                    hideSidebar={true}
+                  />
+                </div>
+              </div>
             )}
           </div>
         </div>
       </div>
     </div>
+    </LightboxProvider>
   );
 }
 
-function Topbar({ dataDir, loading, status, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
   return (
-    <div style={{ borderBottom: "1px solid #333", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "#161616", flexWrap: "wrap" }}>
-      <div style={{ fontWeight: 700, fontSize: 14, marginRight: 8 }}>Recruitment Tool</div>
+    <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 6, fontSize: 10, color: "#888", fontFamily: "Consolas, monospace" }}>
+        <span title={`${unitsCount} authored recruit entries`} style={{ background: unitsCount > 0 ? "rgba(124,201,153,0.10)" : "rgba(255,255,255,0.04)", border: "1px solid " + (unitsCount > 0 ? "rgba(124,201,153,0.25)" : "rgba(255,255,255,0.08)"), color: unitsCount > 0 ? "#7c9" : "#666", padding: "1px 6px", borderRadius: 3 }}>
+          EDB · {unitsCount}
+        </span>
+        <span title={eduProject ? `${eduProject.units.length} EDU rows from ${eduProject.modInfo.name || "(unnamed)"}\n${eduProjectSource || ""}${eduDirty ? "\n— unsaved changes since import —" : ""}` : "No EDU project loaded"} style={{ background: eduProject ? "rgba(220,166,74,0.10)" : "rgba(255,255,255,0.04)", border: "1px solid " + (eduProject ? "rgba(220,166,74,0.25)" : "rgba(255,255,255,0.08)"), color: eduProject ? "#dca64a" : "#666", padding: "1px 6px", borderRadius: 3 }}>
+          EDU · {eduProject ? eduProject.units.length : "—"}{eduDirty ? "*" : ""}
+        </span>
+        {eduProjectSource && (
+          <span title={eduProjectSource} style={{ color: "#888", fontSize: 10, fontStyle: "italic", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {eduProjectSource.split(/[\\/]/).pop()}
+          </span>
+        )}
+      </div>
+      {info && info.version && (
+        <span
+          onClick={onCheckUpdates}
+          title="Click to check for updates"
+          style={{ color: "#777", fontSize: 11, marginRight: 8, fontFamily: "Consolas, monospace", cursor: "pointer", padding: "2px 4px", borderRadius: 3 }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(220,166,74,0.12)"; e.currentTarget.style.color = "#dca64a"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = ""; e.currentTarget.style.color = "#777"; }}
+        >v{info.version}</span>
+      )}
+      <QuickSearch units={units} eduProject={eduProject} onJumpToUnit={onJumpToUnit} onJumpToEdu={onJumpToEdu} />
       <button onClick={onPick} style={tbtn("#3a4a5a")}>Mod data folder…</button>
       <span style={{ color: "#999", fontSize: 12, fontFamily: "Consolas, monospace" }}>{dataDir}</span>
       <button onClick={onReload} disabled={loading} style={tbtn("#446")}>{loading ? "Loading…" : "Reload"}</button>
       <button onClick={onImport} style={tbtn("#665")}>Import from EDB</button>
-      <button onClick={onImportEdumatic} style={tbtn("#665")}>Import EDUMatic…</button>
+      <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
+      <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — bundles units + EDU + map view into one .manipula file">Save project</button>
+      <button onClick={onOpenProject} style={tbtn("#465")} title="Open a saved Manipula project bundle">Open project</button>
+      <button onClick={onFindReplace} title="Bulk find/replace across all units' requires" style={tbtn("#564")}>Find/Replace…</button>
       <button
         onClick={onResetImportsToReferenceOnly}
         title="Set every imported unit to reference-only (writeBack: false). Manually authored units are untouched."
@@ -565,7 +1139,9 @@ function Topbar({ dataDir, loading, status, onPick, onReload, onImport, onImport
       <div style={{ flex: 1 }} />
       <button onClick={onOpenBackups} style={tbtn("#446")}>Backups…</button>
       <button onClick={onSaveText} style={tbtn("#446")}>Save preview…</button>
-      <button onClick={onWriteBack} style={{ ...tbtn(ACCENT), color: "#1a1a1a", fontWeight: 700 }}>Write to EDB</button>
+      <button data-rtshortcut="write-edb" onClick={onWriteBack} title="Write to EDB (Ctrl+S)" style={{ ...tbtn(ACCENT), color: "#1a1a1a", fontWeight: 700 }}>Write to EDB</button>
+      <button data-rtshortcut="export-bundle" onClick={onExportBundle} title="Export both EDB and EDU together (Ctrl+E)" style={{ ...tbtn("#5a4a36"), color: "#dca64a", fontWeight: 700, border: "1px solid rgba(220,166,74,0.4)" }}>Export all</button>
+      <button onClick={onThemeToggle} title={`Theme: ${theme} — click to switch`} style={{ ...tbtn("rgba(255,255,255,0.05)"), color: "#bbb", padding: "4px 7px", fontSize: 12 }}>{theme === "sepia" ? "🌒" : "🜂"}</button>
       <span style={{ color: "#bbb", fontSize: 11, marginLeft: 8, flexBasis: "100%" }}>{status}</span>
     </div>
   );
@@ -667,6 +1243,142 @@ function BackupsModal({ backups, onClose, onRestore, onDelete }) {
   );
 }
 
+// Quick-jump search box in the topbar. Searches both authored recruitment units AND the
+// loaded EDU project simultaneously; the dropdown shows where each match exists with a
+// small badge ("EDB" / "EDU" / "EDB+EDU"). Picking a result jumps to the right view.
+function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [history, setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("rt:searchHistory") || "[]"); } catch { return []; }
+  });
+  const pushHistory = (term) => {
+    if (!term) return;
+    const next = [term, ...history.filter(h => h !== term)].slice(0, 8);
+    setHistory(next);
+    try { localStorage.setItem("rt:searchHistory", JSON.stringify(next)); } catch {}
+  };
+  const matches = useMemo(() => {
+    if (!q || q.length < 2) return [];
+    const lc = q.toLowerCase();
+    const out = [];
+    const seen = new Set();
+    for (const u of units || []) {
+      const name = u.unit || "";
+      if (name.toLowerCase().includes(lc)) {
+        out.push({ name, id: u.id, edb: true, edu: false });
+        seen.add(name);
+      }
+    }
+    if (eduProject && Array.isArray(eduProject.units)) {
+      for (const eu of eduProject.units) {
+        const name = eu.Unit || eu.unit || eu.Type || eu.type;
+        if (!name) continue;
+        const lcname = String(name).toLowerCase();
+        if (lcname.includes(lc)) {
+          if (seen.has(name)) {
+            const ex = out.find(x => x.name === name);
+            if (ex) ex.edu = true;
+          } else {
+            out.push({ name, id: null, edb: false, edu: true });
+            seen.add(name);
+          }
+        }
+      }
+    }
+    return out.slice(0, 12);
+  }, [q, units, eduProject]);
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        data-rtshortcut="quick-search"
+        type="text"
+        value={q}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder="Find unit (Ctrl+F)…"
+        style={{ background: "#252525", border: "1px solid #333", color: "#ddd", padding: "5px 8px", borderRadius: 4, fontSize: 11.5, width: 200, fontFamily: "Consolas, monospace" }}
+      />
+      {open && q.length < 2 && history.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, background: "rgba(20,22,23,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, minWidth: 280, maxHeight: 360, overflowY: "auto", zIndex: 800, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+          <div style={{ padding: "4px 8px", fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: 0.6 }}>Recent</div>
+          {history.map((h, i) => (
+            <div key={i} onMouseDown={(e) => { e.preventDefault(); setQ(h); }}
+              style={{ padding: "4px 8px", cursor: "pointer", borderRadius: 3, fontSize: 12, fontFamily: "Consolas, monospace", color: "#bbb" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.08)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+              {h}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && matches.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, background: "rgba(20,22,23,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, minWidth: 280, maxHeight: 360, overflowY: "auto", zIndex: 800, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+          {matches.map((m, i) => (
+            <div
+              key={i}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                pushHistory(q);
+                if (m.edb && m.id && onJumpToUnit) onJumpToUnit(m.id);
+                else if (m.edu && onJumpToEdu) onJumpToEdu();
+                setOpen(false);
+              }}
+              style={{ padding: "5px 8px", cursor: "pointer", borderRadius: 3, display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.10)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+            >
+              <span style={{ flex: 1, fontFamily: "Consolas, monospace" }}>{m.name}</span>
+              {m.edb && <span style={{ fontSize: 9, color: "#7c9", border: "1px solid rgba(124,201,153,0.4)", padding: "0 4px", borderRadius: 2, fontWeight: 700 }}>EDB</span>}
+              {m.edu && <span style={{ fontSize: 9, color: "#dca64a", border: "1px solid rgba(220,166,74,0.4)", padding: "0 4px", borderRadius: 2, fontWeight: 700 }}>EDU</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sub-tab strip for the EDU Builder tab. Picks which EDU-matic screen is shown.
+// Disabled until a project is loaded (matches EDU-matic's own sidebar logic).
+function EduSubTabs({ view, onView, project }) {
+  const VIEWS = [
+    { key: "project",  label: "Project" },
+    { key: "modinfo",  label: "Mod Info" },
+    { key: "coredata", label: "Core Data" },
+    { key: "units",    label: "Units" },
+    { key: "bulk",     label: "Bulk Edit" },
+    { key: "armour",   label: "Armour" },
+    { key: "merc",     label: "Mercenaries" },
+    { key: "validate", label: "Validate" },
+    { key: "preview",  label: "Preview EDU" },
+    { key: "export",   label: "Export EDU" },
+  ];
+  return (
+    <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(20,22,23,0.4)", padding: "0 8px", flexWrap: "wrap" }}>
+      {VIEWS.map(v => {
+        const disabled = !project && v.key !== "project";
+        const active = view === v.key;
+        return (
+          <div
+            key={v.key}
+            onClick={() => !disabled && onView(v.key)}
+            style={{
+              padding: "6px 14px",
+              borderBottom: active ? "2px solid #dca64a" : "2px solid transparent",
+              cursor: disabled ? "not-allowed" : "pointer",
+              color: disabled ? "#555" : active ? "#fff" : "#999",
+              fontSize: 12,
+              fontWeight: active ? 600 : 400,
+            }}
+          >{v.label}</div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Tabs({ activeTab, onChange, validationSummary }) {
   const tab = (id, label, badge) => (
     <div
@@ -694,10 +1406,11 @@ function Tabs({ activeTab, onChange, validationSummary }) {
     <span style={{ background: "#dca64a", color: "#1a1a1a", borderRadius: 8, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{validationSummary.warn}</span>
   ) : null;
   return (
-    <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" }}>
+    <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(20,22,23,0.55)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
       {tab("editor", "Editor")}
       {tab("validation", "Validation", errBadge)}
       {tab("exportAll", "All units (preview)")}
+      {tab("edu", "EDU Builder")}
     </div>
   );
 }
@@ -712,14 +1425,19 @@ function isImportedUnit(u) {
   return n.includes("imported");
 }
 
-// Auto-update toast (top-right). Three states surfaced:
-//   - "available"  → "Update v0.X available. Downloading…"
-//   - "downloading" → percent
-//   - "downloaded" → "Restart to install"
-function UpdateToast({ status, onInstall, onDismiss }) {
+// Auto-update toast (top-right). Surfaces every state so manual update checks always give feedback:
+//   - "available"   → "Update v0.X available. Downloading…"
+//   - "downloading" → percent progress
+//   - "downloaded"  → "Update v0.X ready. [Restart and install]"
+//   - "none"        → "You're on the latest version (v0.X)."
+//   - "error"       → "Update check failed: <reason>"
+function UpdateToast({ status, currentVersion, onInstall, onDismiss }) {
+  const isError = status.state === "error";
+  const isInfo = status.state === "none";
+  const accentBorder = isError ? "rgba(232,136,136,0.35)" : isInfo ? "rgba(122,154,170,0.35)" : "rgba(220,166,74,0.35)";
   const wrap = {
     position: "fixed", top: 16, right: 16, zIndex: 1500,
-    background: "rgba(28,30,32,0.96)", border: "1px solid rgba(220,166,74,0.35)", borderRadius: 10,
+    background: "rgba(28,30,32,0.96)", border: `1px solid ${accentBorder}`, borderRadius: 10,
     padding: "12px 16px", fontSize: 13, color: "#eee", minWidth: 280, maxWidth: 380,
     boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
   };
@@ -731,6 +1449,12 @@ function UpdateToast({ status, onInstall, onDismiss }) {
   } else if (status.state === "downloaded") {
     body = <>Update <strong style={{ color: ACCENT }}>v{status.version}</strong> ready.</>;
     action = <button onClick={onInstall} style={{ ...tbtn(ACCENT), color: "#1a1a1a", fontWeight: 700, marginTop: 8 }}>Restart and install</button>;
+  } else if (status.state === "none") {
+    body = <>You're on the latest version{currentVersion ? ` (v${currentVersion})` : ""}.</>;
+  } else if (status.state === "checking") {
+    body = <>Checking for updates…</>;
+  } else if (isError) {
+    body = <>Update check failed: <span style={{ color: "#e88" }}>{status.message || "(unknown)"}</span></>;
   } else {
     return null;
   }
@@ -745,12 +1469,86 @@ function UpdateToast({ status, onInstall, onDismiss }) {
   );
 }
 
+// Bulk find/replace dialog. Operates on every requires-clause of every unit (commonRequires,
+// outsideExtras, aorRequires, legacy requires). Shows a live preview of how many lines will
+// change before the user commits.
+function FindReplaceModal({ units, onApply, onClose }) {
+  const [find, setFind] = useState("");
+  const [replace, setReplace] = useState("");
+  const preview = useMemo(() => {
+    if (!find) return { unitCount: 0, lineCount: 0, samples: [] };
+    let unitCount = 0, lineCount = 0;
+    const samples = [];
+    for (const u of units) {
+      const arrs = [u.commonRequires, u.outsideExtras, u.aorRequires, u.requires];
+      let hit = false;
+      for (const arr of arrs) {
+        if (!Array.isArray(arr)) continue;
+        for (const s of arr) {
+          if (typeof s !== "string") continue;
+          if (s.includes(find)) {
+            hit = true; lineCount++;
+            if (samples.length < 6) samples.push({ unit: u.unit, before: s, after: s.split(find).join(replace) });
+          }
+        }
+      }
+      if (hit) unitCount++;
+    }
+    return { unitCount, lineCount, samples };
+  }, [units, find, replace]);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 4000 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "rgba(28,30,32,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 10, padding: 20, width: 720, maxWidth: "90vw", maxHeight: "85vh", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#dca64a" }}>Bulk find &amp; replace</div>
+        <div style={{ fontSize: 12, color: "#bca" }}>Substring match across every unit's <code>commonRequires</code>, <code>outsideExtras</code>, <code>aorRequires</code>, and legacy <code>requires</code>. Use this to rename hidden_resources, reforms, aliases, etc.</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            type="text" value={find} onChange={(e) => setFind(e.target.value)}
+            placeholder='find — e.g. "hidden_resource iberia"'
+            style={{ flex: 1, background: "#252525", border: "1px solid #333", color: "#ddd", padding: "8px 10px", borderRadius: 6, fontFamily: "Consolas, monospace", fontSize: 12 }}
+          />
+          <input
+            type="text" value={replace} onChange={(e) => setReplace(e.target.value)}
+            placeholder='replace with — e.g. "hidden_resource iberian_peninsula"'
+            style={{ flex: 1, background: "#252525", border: "1px solid #333", color: "#ddd", padding: "8px 10px", borderRadius: 6, fontFamily: "Consolas, monospace", fontSize: 12 }}
+          />
+        </div>
+        <div style={{ fontSize: 12, color: preview.lineCount > 0 ? "#7c9" : "#888" }}>
+          {find ? `Will change ${preview.lineCount} line${preview.lineCount === 1 ? "" : "s"} across ${preview.unitCount} unit${preview.unitCount === 1 ? "" : "s"}.` : "Type a search string to preview."}
+        </div>
+        {preview.samples.length > 0 && (
+          <div style={{ background: "rgba(15,17,18,0.6)", border: "1px solid #2a2a2a", borderRadius: 6, padding: 10, fontFamily: "Consolas, monospace", fontSize: 11.5, maxHeight: 280, overflow: "auto" }}>
+            {preview.samples.map((s, i) => (
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div style={{ color: "#888", fontSize: 10 }}>{s.unit}</div>
+                <div style={{ color: "#e88" }}>− {s.before}</div>
+                <div style={{ color: "#7c9" }}>+ {s.after}</div>
+              </div>
+            ))}
+            {preview.lineCount > preview.samples.length && (
+              <div style={{ color: "#888", fontStyle: "italic" }}>…and {preview.lineCount - preview.samples.length} more</div>
+            )}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: "auto" }}>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", color: "#bbb", border: "1px solid rgba(255,255,255,0.08)", padding: "8px 16px", borderRadius: 6, fontSize: 12 }}>Cancel</button>
+          <button
+            disabled={!find || preview.lineCount === 0}
+            onClick={() => { const n = onApply({ find, replace }); onClose(); }}
+            style={{ background: !find || preview.lineCount === 0 ? "rgba(220,166,74,0.2)" : "#dca64a", color: !find || preview.lineCount === 0 ? "#888" : "#1a1a1a", border: "none", padding: "8px 16px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: !find || preview.lineCount === 0 ? "default" : "pointer" }}
+          >Replace {preview.lineCount} {preview.lineCount === 1 ? "line" : "lines"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DiffModal({ diff, onCancel, onConfirm }) {
   const { added, removed, kept } = diff;
   const Section = ({ title, color, items }) => (
     <details open style={{ marginBottom: 8 }}>
       <summary style={{ cursor: "pointer", color, fontWeight: 600 }}>{title} ({items.length})</summary>
-      <pre style={{ margin: "4px 0 0 0", maxHeight: 200, overflow: "auto", background: "#161616", padding: 6, fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb", border: "1px solid #2a2a2a", whiteSpace: "pre-wrap" }}>
+      <pre style={{ margin: "4px 0 0 0", maxHeight: 200, overflow: "auto", background: "rgba(15,17,18,0.7)", padding: 6, fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb", border: "1px solid #2a2a2a", whiteSpace: "pre-wrap" }}>
 {items.slice(0, 200).map(e => `${e.building}/${e.level}  xp=${e.xp}  "${e.unit}"\n  ${e.requires}`).join("\n")}
 {items.length > 200 ? `\n…and ${items.length - 200} more` : ""}
       </pre>
@@ -763,6 +1561,22 @@ function DiffModal({ diff, onCancel, onConfirm }) {
         <div style={{ marginBottom: 12, color: "#999" }}>
           A timestamped <code>.bak</code> will be created next to the original. Review what will change:
         </div>
+        {diff.integrity && !diff.integrity.ok && (
+          <div style={{ marginBottom: 12, padding: 10, background: "rgba(232,136,136,0.08)", border: "1px solid rgba(232,136,136,0.4)", borderRadius: 6, color: "#ddd", fontSize: 12 }}>
+            <strong style={{ color: "#e88" }}>⚠ Round-trip check failed</strong>
+            <div style={{ marginTop: 4 }}>
+              {diff.integrity.error
+                ? <>Verifier crashed: {diff.integrity.error}</>
+                : <>{diff.integrity.missing.length} of {diff.integrity.expectedCount} expected lines wouldn't land in the file (anchor heuristic drift). Sample:</>}
+            </div>
+            {diff.integrity.missing && diff.integrity.missing.length > 0 && (
+              <pre style={{ margin: "6px 0 0 0", maxHeight: 120, overflow: "auto", background: "rgba(15,17,18,0.6)", padding: 6, fontFamily: "Consolas, monospace", fontSize: 11, color: "#cba", border: "1px solid rgba(232,136,136,0.2)", borderRadius: 3 }}>
+{diff.integrity.missing.slice(0, 8).map(m => `${m.building}/${m.level}  "${m.unit}"`).join("\n")}
+{diff.integrity.missing.length > 8 ? `\n…and ${diff.integrity.missing.length - 8} more` : ""}
+              </pre>
+            )}
+          </div>
+        )}
         <Section title="To remove" color="#e88" items={removed} />
         <Section title="To add" color="#8e8" items={added} />
         <Section title="Unchanged (kept)" color="#888" items={kept} />

@@ -5,15 +5,15 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
   --accent: #dca64a;
   --accent-soft: rgba(220, 166, 74, 0.18);
   --accent-glow: rgba(220, 166, 74, 0.35);
-  --bg: #1a1a1a;
-  --bg-2: #1f1f1f;
-  --bg-3: #252525;
-  --panel: rgba(28, 30, 32, 0.65);
+  --bg: #181a1b;
+  --bg-2: rgba(28, 30, 32, 0.55);
+  --bg-3: rgba(40, 44, 48, 0.7);
+  --panel: rgba(24, 26, 27, 0.55);
   --border: rgba(255, 255, 255, 0.06);
   --border-strong: rgba(255, 255, 255, 0.12);
   --text: #e6e6e6;
   --text-soft: #aaa;
-  --text-dim: #777;
+  --text-dim: #888;
 }
 
 body {
@@ -22,6 +22,13 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
+
+  /* Marble texture (mirrors Provincia). The actual image URL is set from JS in index.js using
+     process.env.PUBLIC_URL — CRA can't resolve a public-path URL referenced in CSS. */
+  background-size: cover;
+  background-position: center center;
+  background-attachment: fixed;
+  background-repeat: no-repeat;
 }
 
 button {
@@ -39,26 +46,51 @@ input, select, textarea, button {
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 2px rgba(220, 166, 74, 0.18);
+  box-shadow: 0 0 0 2px rgba(220, 166, 74, 0.2);
 }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+/* Theme switch — html[data-rt-theme="ink"] desaturates the gold accent toward steel-blue.
+   Applied via the rare body-level color variables we already use; rules are best-effort
+   since most colours are inline styles. Sepia is the default. */
+html[data-rt-theme="ink"] {
+  --accent: #9bc;
+}
+html[data-rt-theme="ink"] body {
+  filter: hue-rotate(-30deg) saturate(0.5);
+}
+
+/* Dark-gray scrollbar — neutral thumb on near-black track, applied app-wide */
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track {
+  background: rgba(20, 22, 23, 0.6);
+  border-radius: 8px;
+}
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(#7a5a1a, #c0823a);
-  border-radius: 5px;
+  background: linear-gradient(#555, #333);
+  border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(#c0823a, var(--accent));
+  background: linear-gradient(#6a6a6a, #444);
   background-clip: content-box;
 }
+* { scrollbar-width: thin; scrollbar-color: #555 #1a1c1d; }
 
-/* Subtle pulse for the active profile chip / selected list item */
+/* Translucent panel — Provincia's hallmark look. Use as className="rt-panel" anywhere. */
+.rt-panel {
+  background: rgba(24, 26, 27, 0.55);
+  color: var(--text);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Active-row glow used in places like the unit list selection */
 @keyframes rt-pulse {
   0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
   50%      { box-shadow: 0 0 0 3px rgba(220, 166, 74, 0.18); }
 }
 .rt-glow { animation: rt-pulse 2s ease-in-out infinite; }
-
