@@ -99,17 +99,14 @@ function computeMatchedKeys(unit, regions, regionOwner) {
     if ((m = String(c).match(/^not\s+hidden_resource\s+(\S+)$/))) negativeHR.push(m[1]);
     else if ((m = String(c).match(/^hidden_resource\s+(\S+)$/))) positiveHR.push(m[1]);
   }
-  const facList = (unit.factions || []).filter(f => f && f !== "all");
-  const exFacList = unit.excludeFactions || [];
+  // The unit.factions list is "which factions are *allowed* to recruit this unit", not a
+  // region-owner filter — Romans can still recruit Hastati in Mediolanum after they take
+  // it, even though Mediolanum starts Gallic. So we only gate by HR / not-HR clauses here.
+  // Faction-vs-current-owner comparisons live in coloring (e.g. tier homeland), not in the
+  // matched set.
   const out = new Set();
   for (const r of regions) {
     if (!r.rgbKey) continue;
-    const owner = (regionOwner && regionOwner[r.region]) || r.stratOwner || r.owner;
-    if (facList.length) {
-      const ownerMatches = facList.some(f => f === owner || (owner && owner === f.split("_")[0]));
-      if (!ownerMatches) continue;
-    }
-    if (exFacList.length && exFacList.includes(owner)) continue;
     if (positiveHR.length && !positiveHR.every(hr => r.traits.includes(hr))) continue;
     if (negativeHR.length && negativeHR.some(hr => r.traits.includes(hr))) continue;
     out.add(r.rgbKey);

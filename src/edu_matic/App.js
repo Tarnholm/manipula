@@ -185,7 +185,7 @@ function ProjectScreen({ project, onImport }) {
           <p>No project loaded. Import a .xlsm to get started:</p>
           <div className="actions"><button className="btn btn-accent" onClick={onImport}>Import .xlsm…</button></div>
           <p className="dim" style={{ marginTop: 24 }}>
-            Tested with EDU-matic_RIS_v2.6-ethnicity_enabled.xlsm.
+            Tested with EDU-matic_RIS_0.7.0 239 factions.xlsm.
           </p>
         </div>
       )}
