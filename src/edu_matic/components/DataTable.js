@@ -92,7 +92,7 @@ export default function DataTable({
   // .dtable-scroll; this overlay drives scrollLeft programmatically.
   const scrollRef = useRef(null);
   const trackRef = useRef(null);
-  const [hbar, setHbar] = useState({ thumbLeft: 0, thumbWidth: 0, scrollable: false });
+  const [hbar, setHbar] = useState({ thumbLeft: 0, thumbWidth: 0, scrollable: false, diag: 0, diagClient: 0 });
   const dragRef = useRef(null);
 
   const refreshHBar = useCallback(() => {
@@ -100,16 +100,18 @@ export default function DataTable({
     const track = trackRef.current;
     if (!sc || !track) return;
     const trackW = track.clientWidth;
-    const ratio = sc.clientWidth / sc.scrollWidth;
-    const scrollable = sc.scrollWidth > sc.clientWidth + 1;
+    const scrollW = sc.scrollWidth;
+    const clientW = sc.clientWidth;
+    const ratio = clientW / scrollW;
+    const scrollable = scrollW > clientW + 1;
     if (!scrollable) {
-      setHbar({ thumbLeft: 0, thumbWidth: trackW, scrollable: false });
+      setHbar({ thumbLeft: 0, thumbWidth: trackW, scrollable: false, diag: scrollW, diagClient: clientW });
       return;
     }
     const thumbWidth = Math.max(48, trackW * ratio);
-    const maxScrollLeft = sc.scrollWidth - sc.clientWidth;
+    const maxScrollLeft = scrollW - clientW;
     const thumbLeft = maxScrollLeft > 0 ? (sc.scrollLeft / maxScrollLeft) * (trackW - thumbWidth) : 0;
-    setHbar({ thumbLeft, thumbWidth, scrollable: true });
+    setHbar({ thumbLeft, thumbWidth, scrollable: true, diag: scrollW, diagClient: clientW });
   }, []);
 
   // Watch scrolls + size changes on .dtable-scroll.
@@ -269,24 +271,30 @@ export default function DataTable({
           </tbody>
         </table>
       </div>
-      {/* Custom horizontal scrollbar — always visible when content overflows.
-        * Native horizontal bar is suppressed via CSS (overflow-x: hidden on
-        * .dtable-scroll). This sibling is rendered AFTER the table area, so
-        * it sits at the bottom of the table and can never be clipped by
-        * height calc bugs. Drag the gold thumb, click the track to page,
-        * arrow keys when the table has focus. */}
+      {/* Custom horizontal scrollbar — ALWAYS rendered, regardless of whether
+        * the browser thinks content overflows. Earlier versions hid the bar
+        * when scrollable=false but that conflated "no overflow" with "user
+        * doesn't need to see it" — the user kept reporting "no scrollbar"
+        * when in fact the bar was just gated off by detection logic. Now it's
+        * always there; if no overflow exists, the thumb fills the track and
+        * dragging is a no-op (which is honest about there being nothing to
+        * scroll). */}
       <div
         className="dtable-hbar"
         ref={trackRef}
         onMouseDown={onTrackMouseDown}
-        title="Drag to scroll horizontally"
-        style={{ display: hbar.scrollable ? "block" : "none" }}
+        title={hbar.scrollable ? "Drag to scroll horizontally" : `No overflow — table is ${hbar.diag} px in a ${hbar.diagClient} px container`}
       >
         <div
           className="dtable-hbar-thumb"
           style={{ left: hbar.thumbLeft, width: hbar.thumbWidth }}
           onMouseDown={onThumbMouseDown}
         />
+      </div>
+      {/* Live diagnostic so we can finally see what's happening when the
+        * scrollbar isn't behaving — shows actual DOM measurements. */}
+      <div className="dtable-diag" title="scroll width / visible width">
+        cols: {columns.length} · width {hbar.diag} / {hbar.diagClient} {hbar.scrollable ? "(scrollable)" : "(fits)"}
       </div>
     </div>
   );
