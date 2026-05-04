@@ -85,10 +85,100 @@ export default function DataTable({
     f(rowId, columnKey, newValue);
   }, []);
 
-  // Shift+wheel → horizontal scroll. Most browsers do this for free on regular
-  // overflow containers, but tables sometimes swallow the wheel events. Wire it
-  // explicitly so the gesture works no matter what.
+  // Custom horizontal scrollbar — rendered as a sibling of .dtable-scroll so
+  // it's always visible regardless of native scrollbar quirks, embed-layout
+  // height bugs, or the global ::-webkit-scrollbar overrides in index.css.
+  // The native horizontal bar is suppressed via overflow-x:hidden on
+  // .dtable-scroll; this overlay drives scrollLeft programmatically.
   const scrollRef = useRef(null);
+  const trackRef = useRef(null);
+  const [hbar, setHbar] = useState({ thumbLeft: 0, thumbWidth: 0, scrollable: false });
+  const dragRef = useRef(null);
+
+  const refreshHBar = useCallback(() => {
+    const sc = scrollRef.current;
+    const track = trackRef.current;
+    if (!sc || !track) return;
+    const trackW = track.clientWidth;
+    const ratio = sc.clientWidth / sc.scrollWidth;
+    const scrollable = sc.scrollWidth > sc.clientWidth + 1;
+    if (!scrollable) {
+      setHbar({ thumbLeft: 0, thumbWidth: trackW, scrollable: false });
+      return;
+    }
+    const thumbWidth = Math.max(48, trackW * ratio);
+    const maxScrollLeft = sc.scrollWidth - sc.clientWidth;
+    const thumbLeft = maxScrollLeft > 0 ? (sc.scrollLeft / maxScrollLeft) * (trackW - thumbWidth) : 0;
+    setHbar({ thumbLeft, thumbWidth, scrollable: true });
+  }, []);
+
+  // Watch scrolls + size changes on .dtable-scroll.
+  useEffect(() => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    refreshHBar();
+    const onScroll = () => refreshHBar();
+    sc.addEventListener("scroll", onScroll, { passive: true });
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(refreshHBar) : null;
+    if (ro) ro.observe(sc);
+    window.addEventListener("resize", refreshHBar);
+    return () => {
+      sc.removeEventListener("scroll", onScroll);
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", refreshHBar);
+    };
+  }, [refreshHBar]);
+  // Refresh thumb sizing when row data / column count changes too.
+  useEffect(() => { refreshHBar(); }, [rows, columns, refreshHBar]);
+
+  // Reset to leftmost on dataset change so the user sees the first column.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  }, [rows]);
+
+  const onThumbMouseDown = (e) => {
+    e.preventDefault();
+    const sc = scrollRef.current;
+    const track = trackRef.current;
+    if (!sc || !track) return;
+    dragRef.current = {
+      startX: e.clientX,
+      startScrollLeft: sc.scrollLeft,
+      trackW: track.clientWidth,
+      thumbW: hbar.thumbWidth,
+      maxScrollLeft: sc.scrollWidth - sc.clientWidth,
+    };
+    const onMove = (ev) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const dx = ev.clientX - d.startX;
+      const trackTravel = d.trackW - d.thumbW;
+      const ratio = trackTravel > 0 ? dx / trackTravel : 0;
+      sc.scrollLeft = Math.max(0, Math.min(d.maxScrollLeft, d.startScrollLeft + ratio * d.maxScrollLeft));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+  // Click on track (not thumb) → page-jump in that direction.
+  const onTrackMouseDown = (e) => {
+    if (e.target !== trackRef.current) return; // ignore thumb clicks
+    const sc = scrollRef.current;
+    const track = trackRef.current;
+    if (!sc || !track) return;
+    const rect = track.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const dir = clickX < hbar.thumbLeft ? -1 : 1;
+    sc.scrollLeft = Math.max(0, Math.min(sc.scrollWidth - sc.clientWidth, sc.scrollLeft + dir * sc.clientWidth * 0.9));
+  };
+
+  // Wheel: shift+wheel scrolls horizontally; plain wheel scrolls vertically
+  // (which the native scrollbar handles). Without an explicit handler some
+  // browsers swallow shift+wheel inside table elements.
   const onWheel = (e) => {
     if (!e.shiftKey) return;
     if (!scrollRef.current) return;
@@ -96,13 +186,16 @@ export default function DataTable({
     scrollRef.current.scrollLeft += e.deltaY || e.deltaX;
   };
 
-  // Reset horizontal scroll to the leftmost column whenever a new dataset
-  // arrives (project import / view switch). Without this, navigating away
-  // and back can leave the table mid-scroll, confusing users who expect to
-  // see the unit-name column on entry.
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-  }, [rows]);
+  // Arrow-key horizontal scroll when the user has focused the table area.
+  // Tabindex on .dtable-scroll lets it receive keyboard focus on click.
+  const onKeyDown = (e) => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    if (e.key === "ArrowLeft")  { sc.scrollLeft -= 80; e.preventDefault(); }
+    else if (e.key === "ArrowRight") { sc.scrollLeft += 80; e.preventDefault(); }
+    else if (e.key === "Home")       { sc.scrollLeft = 0; e.preventDefault(); }
+    else if (e.key === "End")        { sc.scrollLeft = sc.scrollWidth; e.preventDefault(); }
+  };
 
   return (
     <div className="dtable-wrap">
@@ -119,7 +212,14 @@ export default function DataTable({
           </span>
         </div>
       )}
-      <div className="dtable-scroll" style={{ maxHeight }} ref={scrollRef} onWheel={onWheel}>
+      <div
+        className="dtable-scroll"
+        style={maxHeight ? { maxHeight } : undefined}
+        ref={scrollRef}
+        onWheel={onWheel}
+        onKeyDown={onKeyDown}
+        tabIndex={0}
+      >
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
           <thead>
             <tr>
@@ -168,6 +268,25 @@ export default function DataTable({
             )}
           </tbody>
         </table>
+      </div>
+      {/* Custom horizontal scrollbar — always visible when content overflows.
+        * Native horizontal bar is suppressed via CSS (overflow-x: hidden on
+        * .dtable-scroll). This sibling is rendered AFTER the table area, so
+        * it sits at the bottom of the table and can never be clipped by
+        * height calc bugs. Drag the gold thumb, click the track to page,
+        * arrow keys when the table has focus. */}
+      <div
+        className="dtable-hbar"
+        ref={trackRef}
+        onMouseDown={onTrackMouseDown}
+        title="Drag to scroll horizontally"
+        style={{ display: hbar.scrollable ? "block" : "none" }}
+      >
+        <div
+          className="dtable-hbar-thumb"
+          style={{ left: hbar.thumbLeft, width: hbar.thumbWidth }}
+          onMouseDown={onThumbMouseDown}
+        />
       </div>
     </div>
   );
