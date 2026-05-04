@@ -291,13 +291,12 @@ body {
   gap: 12px;
 }
 .dtable-scroll {
-  /* overflow-x: scroll forces the track to always exist regardless of
-   * whether the browser thinks content overflows — we're done debugging
-   * "is the bar there or not" via auto-detection. The Units sheet always
-   * has more columns than fit in any practical panel, so a permanently-
-   * visible horizontal track is the right semantics here. */
-  overflow-x: scroll;
-  overflow-y: auto;
+  /* Back to overflow:auto. With v0.19.7's flex chain bounding the scroll
+   * container's height to the visible panel, the bar appears at the panel
+   * bottom whenever content overflows — and stays absent when content fits,
+   * which avoids the "thumb fills the track because there's nothing to
+   * scroll" non-grabbable state. */
+  overflow: auto;
   flex: 1;
   min-height: 0;
   border: 1px solid var(--border);
@@ -331,6 +330,15 @@ body {
   border-radius: 9px;
   min-width: 60px;
   min-height: 60px;
+  /* Three short bars in the centre of the thumb — universal "drag handle"
+   * affordance. Without this, the thumb just looks like a coloured rectangle
+   * sitting on the track and users miss that it's interactive. */
+  background-image: linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.35)),
+                    linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.35)),
+                    linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.35));
+  background-position: center 4px, center 7px, center 10px;
+  background-size: 16px 1.5px, 16px 1.5px, 16px 1.5px;
+  background-repeat: no-repeat;
 }
 .dtable-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 195, 100, 1);

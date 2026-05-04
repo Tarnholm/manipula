@@ -96,6 +96,14 @@ export default function DataTable({
     scrollRef.current.scrollLeft += e.deltaY || e.deltaX;
   };
 
+  // Reset horizontal scroll to the leftmost column whenever a new dataset
+  // arrives (project import / view switch). Without this, navigating away
+  // and back can leave the table mid-scroll, confusing users who expect to
+  // see the unit-name column on entry.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  }, [rows]);
+
   return (
     <div className="dtable-wrap">
       {searchable && (
