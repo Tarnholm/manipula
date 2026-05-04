@@ -265,12 +265,33 @@ function UnitsScreen({ project }) {
     for (const k of s) if (!ordered.includes(k)) ordered.push(k);
     return ordered;
   }, [units]);
+  // Walk the original units list (including kind:"comment" markers) to interleave
+  // section dividers between faction blocks. The importer preserves these as
+  // {kind:"comment", text:"#MACEDON"} rows; we keep them so the table mirrors
+  // the EDU-matic spreadsheet's faction separators instead of running every
+  // unit together.
+  const tableRows = useMemo(() => {
+    const out = [];
+    for (const u of project.units) {
+      if (u.kind === "comment") {
+        const t = String(u.text || "").trim();
+        if (!t) continue;
+        out.push({ section: t });
+      } else if (u.kind === "unit") {
+        out.push(allKeys.map((k) => u[k]));
+      }
+    }
+    // Trim leading/trailing section rows (no data on either side).
+    while (out.length && out[0] && !Array.isArray(out[0])) out.shift();
+    while (out.length && out[out.length - 1] && !Array.isArray(out[out.length - 1])) out.pop();
+    return out;
+  }, [project.units, allKeys]);
   return (
     <div className="screen">
       <h2>Units <span className="dim">({units.length})</span></h2>
       <DataTable
         columns={allKeys}
-        rows={units.map((u) => allKeys.map((k) => u[k]))}
+        rows={tableRows}
         maxHeight="75vh"
         searchable
       />

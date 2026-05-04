@@ -264,10 +264,10 @@ body {
   position: sticky;
   top: 0;
   background: var(--bg-elev2);
-  color: var(--fg-dim);
-  font-weight: 600;
+  color: var(--accent, #dca64a);
+  font-weight: 700;
   text-align: left;
-  padding: 6px 10px;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border-strong);
   border-right: 1px solid var(--border);
   white-space: nowrap;
@@ -276,8 +276,18 @@ body {
   text-transform: none;
   letter-spacing: 0.02em;
 }
+/* Filter-caret affordance — a subtle ▾ that mirrors the spreadsheet's autofilter
+ * arrows. Decorative for now; clicks fall through to the cell's existing behavior. */
+.dtable th .dtable-caret {
+  display: inline-block;
+  margin-left: 6px;
+  opacity: 0.35;
+  font-size: 9px;
+  vertical-align: middle;
+  user-select: none;
+}
 .dtable td {
-  padding: 5px 10px;
+  padding: 2px 8px;
   border-bottom: 1px solid var(--border);
   border-right: 1px solid var(--border);
   white-space: nowrap;
@@ -285,8 +295,28 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--fg);
+  line-height: 1.35;
 }
 .dtable tr:hover td { background: var(--bg-elev2); }
+
+/* Section-divider row — full-width gold band echoing the spreadsheet's faction
+ * separators (#MACEDON / #EPIRUS / …). Sticky-left so the label stays visible
+ * when the user scrolls horizontally. */
+.dtable tr.dtable-section td {
+  background: rgba(220, 166, 74, 0.14);
+  color: var(--accent, #dca64a);
+  font-weight: 700;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-top: 1px solid rgba(220, 166, 74, 0.35);
+  border-bottom: 1px solid rgba(220, 166, 74, 0.35);
+  position: sticky;
+  left: 0;
+}
+.dtable tr.dtable-section:hover td { background: rgba(220, 166, 74, 0.18); }
 
 /* ── Toast ────────────────────────────────────────────────────── */
 

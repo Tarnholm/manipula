@@ -1,22 +1,35 @@
 // DataTable.js — read-only data grid with optional substring search.
 //
-// Trivial implementation: plain <table> in a scroll container.
-// The user will swap in TanStack Table / AG Grid / their own virtualized
-// grid later — this is just enough to exercise the pipeline.
+// rows can be either:
+//   - a plain Cell[][]                    (data row)
+//   - { section: string }                 (full-width divider, e.g. "#MACEDON")
+// Section rows mirror EDU-matic's faction-block separators. They are excluded
+// from the search filter and skipped from "x of y rows" counts.
 
 import React, { useState, useMemo } from "react";
 
+function isSection(row) { return row && !Array.isArray(row) && typeof row.section === "string"; }
+
 export default function DataTable({ columns = [], rows = [], maxHeight = "60vh", searchable = false }) {
   const [q, setQ] = useState("");
-  const [totalShown, filtered] = useMemo(() => {
+  const [dataCount, totalDataCount, filtered] = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    let filtered = rows;
-    if (needle) {
-      filtered = rows.filter((row) =>
-        row.some((cell) => cell != null && String(cell).toLowerCase().includes(needle))
-      );
+    const totalData = rows.reduce((n, r) => n + (isSection(r) ? 0 : 1), 0);
+    if (!needle) return [totalData, totalData, rows];
+    // Filter data rows by substring; drop sections that end up adjacent to no
+    // data (so empty faction blocks don't hang there).
+    const kept = [];
+    for (const r of rows) {
+      if (isSection(r)) {
+        if (kept.length && isSection(kept[kept.length - 1])) kept[kept.length - 1] = r;
+        else kept.push(r);
+        continue;
+      }
+      if (r.some((cell) => cell != null && String(cell).toLowerCase().includes(needle))) kept.push(r);
     }
-    return [filtered.length, filtered];
+    while (kept.length && isSection(kept[kept.length - 1])) kept.pop();
+    const shown = kept.reduce((n, r) => n + (isSection(r) ? 0 : 1), 0);
+    return [shown, totalData, kept];
   }, [q, rows]);
 
   return (
@@ -30,7 +43,7 @@ export default function DataTable({ columns = [], rows = [], maxHeight = "60vh",
             onChange={(e) => setQ(e.target.value)}
           />
           <span className="dim">
-            {totalShown} of {rows.length} row{rows.length === 1 ? "" : "s"}
+            {dataCount} of {totalDataCount} row{totalDataCount === 1 ? "" : "s"}
           </span>
         </div>
       )}
@@ -39,20 +52,32 @@ export default function DataTable({ columns = [], rows = [], maxHeight = "60vh",
           <thead>
             <tr>
               {columns.map((c) => (
-                <th key={c} title={c}>{c}</th>
+                <th key={c} title={c}>
+                  {c}
+                  <span className="dtable-caret" aria-hidden="true">▾</span>
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {filtered.map((row, i) => (
-              <tr key={i}>
-                {columns.map((c, j) => (
-                  <td key={j} title={row[j] != null ? String(row[j]) : ""}>
-                    {renderCell(row[j])}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {filtered.map((row, i) => {
+              if (isSection(row)) {
+                return (
+                  <tr key={`s${i}`} className="dtable-section">
+                    <td colSpan={columns.length} title={row.section}>{row.section}</td>
+                  </tr>
+                );
+              }
+              return (
+                <tr key={i}>
+                  {columns.map((c, j) => (
+                    <td key={j} title={row[j] != null ? String(row[j]) : ""}>
+                      {renderCell(row[j])}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
             {filtered.length === 0 && (
               <tr><td className="dim" colSpan={columns.length} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
             )}
