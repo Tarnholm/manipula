@@ -299,7 +299,7 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
     inputRef.current.focus();
     if (inputRef.current.select) { try { inputRef.current.select(); } catch {} }
     const r = inputRef.current.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 2, width: Math.max(r.width, 180) });
+    setPos({ left: r.left, top: r.bottom + 2, minWidth: r.width });
   }, []);
 
   // Keep popover anchored if the page scrolls / window resizes while it's open.
@@ -307,7 +307,7 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
     const reposition = () => {
       if (!inputRef.current) return;
       const r = inputRef.current.getBoundingClientRect();
-      setPos({ left: r.left, top: r.bottom + 2, width: Math.max(r.width, 180) });
+      setPos({ left: r.left, top: r.bottom + 2, minWidth: r.width });
     };
     window.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
@@ -377,10 +377,11 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
         <div
           ref={popRef}
           className="dtable-combo-pop"
-          // tabIndex so the popover itself can hold focus when the user
-          // mouses over it without the input losing focus and triggering
-          // blur-commit. We rely on relatedTarget logic in onBlur instead.
-          style={{ left: pos.left, top: pos.top, width: pos.width }}
+          // The popover width is `width: max-content` (in CSS) capped via
+          // max-width, so it grows to fit the longest option text without
+          // ever needing an internal horizontal scrollbar. minWidth keeps
+          // it at least as wide as the input it anchors to.
+          style={{ left: pos.left, top: pos.top, minWidth: pos.minWidth }}
           onMouseDown={(e) => e.preventDefault() /* prevent input blur */}
         >
           {filtered.length === 0 && (

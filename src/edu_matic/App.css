@@ -440,8 +440,15 @@ select.dtable-cell-input {
 .dtable-combo-pop {
   position: fixed;
   z-index: 10000;
+  /* Size to longest option text — no internal horizontal scrollbar required
+   * for "Germanic Mounted Bodyguards" and similar long names. minWidth on
+   * the inline style keeps it at least input-wide; max-width prevents a
+   * runaway popover when an option string is unusually long. */
+  width: max-content;
+  max-width: 520px;
   max-height: 280px;
   overflow-y: auto;
+  overflow-x: hidden;
   background: var(--bg-elev2, #2a2a2a);
   border: 1px solid var(--accent, #dca64a);
   border-radius: 4px;
