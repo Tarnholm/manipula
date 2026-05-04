@@ -113,7 +113,7 @@ export default function App({ externalProject = null, onProjectChange, controlle
         {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} />}
         {view === "modinfo"  && <ModInfoScreen  project={project} />}
         {view === "coredata" && <CoreDataScreen project={project} />}
-        {view === "units"    && <UnitsScreen    project={project} />}
+        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
         {view === "armour"   && <ArmourScreen   project={project} />}
         {view === "merc"     && <MercScreen     project={project} />}
@@ -252,7 +252,7 @@ function CoreDataScreen({ project }) {
   );
 }
 
-function UnitsScreen({ project }) {
+function UnitsScreen({ project, setProject }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
   // Collect all columns that appear in any unit (minus ownership — shown separately).
@@ -265,33 +265,142 @@ function UnitsScreen({ project }) {
     for (const k of s) if (!ordered.includes(k)) ordered.push(k);
     return ordered;
   }, [units]);
+
+  // Build per-column edit metadata. Lookup columns become dropdowns sourced
+  // from the project's coreData tables; the dropdown options are the first
+  // column of each table (the canonical id). Free-text fields fall through
+  // to a plain input. The "Entries" column is enum but its values aren't in
+  // coreData — so we synthesize options from the data itself.
+  const columnMeta = useMemo(() => {
+    const meta = {};
+    const cd = project.coreData || {};
+    const idsOf = (tableName) => {
+      const t = cd[tableName];
+      if (!Array.isArray(t) || t.length === 0) return [];
+      const idKey = Object.keys(t[0])[0];
+      const out = [];
+      const seen = new Set();
+      for (const row of t) {
+        const v = row[idKey];
+        if (v == null || v === "") continue;
+        const s = String(v);
+        if (seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+      }
+      return out;
+    };
+    // header-name → coreData table key
+    const COLUMN_TO_TABLE = {
+      "Recruitment":      "recruitmentClasses",
+      "Quality":          "qualityClasses",
+      "Category":         "categories",
+      "Specialty":        "specialties",
+      "Formation":        "formations",
+      "Dwelling":         "dwellings",
+      "Culture":          "cultures",
+      "Weapon":           "weapons",
+      "Wpn Quality":      "weaponQualities",
+      "Projectile":       "projectiles",
+      "Melee Skeleton":   "meleeSkeletons",
+      "Sec Weapon":       "weapons",
+      "S Wpn Quality":    "weaponQualities",
+      "S Melee Skeleton": "meleeSkeletons",
+      "Mount":            "mounts",
+      "Special":          "specialMounts",
+      "Mount Skeleton":   "mountSkeletons",
+      "Engine":           "engines",
+      "Engine Pri Proj":  "engineProjectiles",
+      "Engine Sec Proj":  "engineProjectiles",
+      "Ship":             "ships",
+    };
+    for (const [col, tbl] of Object.entries(COLUMN_TO_TABLE)) {
+      const opts = idsOf(tbl);
+      if (opts.length) meta[col] = { type: "select", options: opts };
+    }
+    // Armour upgrades — pulled from the user's Armour Definitions sheet, not
+    // coreData. Each row's `name` (first key) is the id referenced here.
+    if (Array.isArray(project.armour) && project.armour.length) {
+      const idKey = Object.keys(project.armour[0])[0];
+      const opts = [...new Set(project.armour.map((r) => r[idKey]).filter(Boolean).map(String))];
+      for (const c of ["Armour Upgr0", "Armour Upgr1", "Armour Upgr2", "Armour Upgr3"]) {
+        if (allKeys.includes(c)) meta[c] = { type: "select", options: opts };
+      }
+    }
+    // Entries — enum derived from the existing data (Factional / AOR / Merc /
+    // Horde combinations). Listing in roughly canonical order.
+    if (allKeys.includes("Entries")) {
+      const seen = new Set();
+      for (const u of units) {
+        const v = u["Entries"];
+        if (v) seen.add(String(v));
+      }
+      const canonical = [
+        "Factional", "AoR", "Merc", "Horde",
+        "Factional + AoR", "Factional + Merc", "Factional + Horde",
+        "Factional + AoR + Merc", "Factional + AoR + Horde",
+        "Factional + Merc + Horde", "Factional + AoR + Merc + Horde",
+        "AoR + Merc",
+      ];
+      const opts = [...new Set([...canonical.filter((c) => seen.has(c)), ...seen])];
+      meta["Entries"] = { type: "select", options: opts };
+    }
+    // Other free-text columns get a plain text editor by default — no entry
+    // in `meta` is needed for that, the table treats unknown columns as text.
+    return meta;
+  }, [project.coreData, project.armour, allKeys, units]);
+
   // Walk the original units list (including kind:"comment" markers) to interleave
-  // section dividers between faction blocks. The importer preserves these as
-  // {kind:"comment", text:"#MACEDON"} rows; we keep them so the table mirrors
-  // the EDU-matic spreadsheet's faction separators instead of running every
-  // unit together.
-  const tableRows = useMemo(() => {
-    const out = [];
-    for (const u of project.units) {
+  // section dividers between faction blocks. We track each row's index in the
+  // source `project.units` array so cell edits map back to the right object
+  // regardless of how DataTable later filters by search.
+  const { rows: tableRows, rowIds } = useMemo(() => {
+    const rows = [];
+    const ids = [];
+    for (let idx = 0; idx < project.units.length; idx++) {
+      const u = project.units[idx];
       if (u.kind === "comment") {
         const t = String(u.text || "").trim();
         if (!t) continue;
-        out.push({ section: t });
+        rows.push({ section: t });
+        ids.push(-1);
       } else if (u.kind === "unit") {
-        out.push(allKeys.map((k) => u[k]));
+        rows.push(allKeys.map((k) => u[k]));
+        ids.push(idx);
       }
     }
-    // Trim leading/trailing section rows (no data on either side).
-    while (out.length && out[0] && !Array.isArray(out[0])) out.shift();
-    while (out.length && out[out.length - 1] && !Array.isArray(out[out.length - 1])) out.pop();
-    return out;
+    while (rows.length && rows[0] && !Array.isArray(rows[0])) { rows.shift(); ids.shift(); }
+    while (rows.length && rows[rows.length - 1] && !Array.isArray(rows[rows.length - 1])) { rows.pop(); ids.pop(); }
+    return { rows, rowIds: ids };
   }, [project.units, allKeys]);
+
+  const onEdit = useCallback((unitIdx, columnKey, newValue) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const cur = project.units[unitIdx];
+    if (!cur || cur.kind !== "unit") return;
+    if (String(cur[columnKey] ?? "") === String(newValue ?? "")) return; // no-op
+    const next = { ...cur };
+    if (newValue === "" || newValue == null) delete next[columnKey];
+    else next[columnKey] = newValue;
+    const nextUnits = project.units.slice();
+    nextUnits[unitIdx] = next;
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+
   return (
     <div className="screen">
       <h2>Units <span className="dim">({units.length})</span></h2>
+      <p className="dim" style={{ marginTop: -6, marginBottom: 8, fontSize: 12 }}>
+        Click any cell to edit. Lookup fields (Category, Quality, Weapon, …) open as dropdowns sourced from this project's Core Data.
+      </p>
       <DataTable
         columns={allKeys}
         rows={tableRows}
+        rowIds={rowIds}
+        columnMeta={columnMeta}
+        onEdit={onEdit}
+        editable
+        pinFirstColumn
         maxHeight="75vh"
         searchable
       />

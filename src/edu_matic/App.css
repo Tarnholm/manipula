@@ -318,6 +318,61 @@ body {
 }
 .dtable tr.dtable-section:hover td { background: rgba(220, 166, 74, 0.18); }
 
+/* Editable cells — subtle hover affordance so users can tell something happens
+ * on click. Solid background on the inputs so they don't blend with the row. */
+.dtable td.dtable-editable { cursor: text; }
+.dtable td.dtable-editable:hover {
+  outline: 1px solid rgba(220, 166, 74, 0.35);
+  outline-offset: -1px;
+  background: rgba(220, 166, 74, 0.06);
+}
+.dtable-cell-input {
+  width: 100%;
+  min-width: 80px;
+  background: var(--bg-elev2);
+  color: var(--fg);
+  border: 1px solid var(--accent, #dca64a);
+  outline: none;
+  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.3;
+  border-radius: 2px;
+  box-sizing: border-box;
+}
+select.dtable-cell-input {
+  /* Native selects ignore most font props on options on some platforms — but
+   * the closed select itself respects these so the value reads consistently
+   * with the other cells. */
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* Pinned first column — sticky-left so the unit name stays visible while the
+ * user scrolls horizontally through the wide UnitDefinitions sheet. The td
+ * needs an opaque background or the scrolled cells show through. The header's
+ * existing sticky-top combines with sticky-left to pin the corner cell. */
+.dtable.dtable-pinfirst th:first-child {
+  position: sticky;
+  left: 0;
+  /* th already has top:0 + z-index:1 from the base rule; bump z so it stays
+   * above body cells that also become sticky-left. */
+  z-index: 3;
+  background: var(--bg-elev2);
+}
+.dtable.dtable-pinfirst tbody tr:not(.dtable-section) td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-elev);
+  /* A right-edge accent ribbon so the eye picks the column boundary cleanly
+   * during horizontal scroll. */
+  border-right: 1px solid var(--border-strong);
+}
+.dtable.dtable-pinfirst tbody tr:not(.dtable-section):hover td:first-child {
+  background: var(--bg-elev2);
+}
+
 /* ── Toast ────────────────────────────────────────────────────── */
 
 .toast {
