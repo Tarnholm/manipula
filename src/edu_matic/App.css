@@ -291,10 +291,13 @@ body {
   gap: 12px;
 }
 .dtable-scroll {
-  /* Native horizontal bar suppressed — DataTable renders a custom
-   * always-visible horizontal scrollbar (.dtable-hbar) as a sibling below
-   * this container. Native vertical bar still in use. */
-  overflow-x: hidden;
+  /* overflow-x: auto (NOT hidden) so JavaScript can drive scrollLeft —
+   * v0.19.11's overflow-x: hidden clamped scrollLeft to 0, which is why
+   * the custom thumb's drag handler appeared to do nothing for several
+   * versions. We hide the *native* horizontal scrollbar visually with the
+   * webkit pseudo below, while leaving scroll functionality intact for
+   * our custom .dtable-hbar to control. */
+  overflow-x: auto;
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -315,11 +318,15 @@ body {
   scrollbar-color: rgba(220, 166, 74, 0.6) rgba(255, 255, 255, 0.06);
 }
 .dtable-scroll::-webkit-scrollbar {
-  /* Bigger than Mac defaults on purpose. Several rounds of "I can't find
-   * the scrollbar" feedback say discoverability matters more than subtlety
-   * here. */
   width: 14px;
   height: 18px;
+}
+/* Hide ONLY the horizontal native scrollbar — the custom .dtable-hbar
+ * sibling below the scroll container handles horizontal scrolling. Native
+ * vertical scrollbar is unaffected. */
+.dtable-scroll::-webkit-scrollbar:horizontal {
+  display: none;
+  height: 0;
 }
 .dtable-scroll::-webkit-scrollbar-track {
   background: rgba(220, 166, 74, 0.12);
@@ -357,12 +364,14 @@ body {
   border-collapse: collapse;
   font-family: var(--mono);
   font-size: 12px;
-  /* width: max-content alone means the table is exactly as wide as its
-   * widest column needs. Dropping the prior `min-width: 100%` so columns
-   * don't auto-inflate to fill the container — empty space on the right
-   * for narrow tables is preferable to widely-spaced columns that don't
-   * reflect actual content widths. */
+  /* width: max-content + min-width: max-content together force the table
+   * to render at its full content width and never shrink to fit the
+   * container. Without min-width, Chrome's table layout was occasionally
+   * compressing the table to the .dtable-scroll's clientWidth when the
+   * container was narrower — masking overflow and making the custom
+   * horizontal scrollbar think there was nothing to scroll. */
   width: max-content;
+  min-width: max-content;
 }
 .dtable th {
   position: sticky;
