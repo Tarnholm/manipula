@@ -291,15 +291,13 @@ body {
   gap: 12px;
 }
 .dtable-scroll {
-  /* Both axes auto so we don't render an empty horizontal track when the
-   * table happens to fit the panel. The scrollbar styling below makes the
-   * thumb obvious enough that auto-mode is no longer "where is the bar?". */
-  overflow: auto;
-  /* Flex grow within .dtable-wrap so this container fills exactly the
-   * available height of the panel. min-height:0 is required so flex children
-   * can shrink below their content height — without it the table inside
-   * dictates the height and the scroll container ends up taller than the
-   * panel, hiding the horizontal scrollbar below the visible area. */
+  /* overflow-x: scroll forces the track to always exist regardless of
+   * whether the browser thinks content overflows — we're done debugging
+   * "is the bar there or not" via auto-detection. The Units sheet always
+   * has more columns than fit in any practical panel, so a permanently-
+   * visible horizontal track is the right semantics here. */
+  overflow-x: scroll;
+  overflow-y: auto;
   flex: 1;
   min-height: 0;
   border: 1px solid var(--border);
@@ -317,23 +315,30 @@ body {
   scrollbar-color: rgba(220, 166, 74, 0.6) rgba(255, 255, 255, 0.06);
 }
 .dtable-scroll::-webkit-scrollbar {
-  /* Hefty enough that "where do I grab?" stops being the question. */
+  /* Bigger than Mac defaults on purpose. Several rounds of "I can't find
+   * the scrollbar" feedback say discoverability matters more than subtlety
+   * here. */
   width: 14px;
-  height: 16px;
+  height: 18px;
 }
 .dtable-scroll::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.06);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(220, 166, 74, 0.12);
+  border-top: 1px solid rgba(220, 166, 74, 0.4);
 }
 .dtable-scroll::-webkit-scrollbar-thumb {
-  background: rgba(220, 166, 74, 0.7);
-  border-radius: 8px;
-  min-width: 48px;
-  min-height: 48px;
+  background: rgba(220, 166, 74, 0.85);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9px;
+  min-width: 60px;
+  min-height: 60px;
 }
-.dtable-scroll::-webkit-scrollbar-thumb:hover { background: rgba(220, 166, 74, 0.95); }
-.dtable-scroll::-webkit-scrollbar-thumb:active { background: rgba(220, 166, 74, 1); }
+.dtable-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 195, 100, 1);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+}
+.dtable-scroll::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 215, 130, 1);
+}
 /* The corner where horizontal + vertical tracks meet. Default is a square
  * Windows chrome chip — kill it so the scrollbars look continuous. */
 .dtable-scroll::-webkit-scrollbar-corner {
