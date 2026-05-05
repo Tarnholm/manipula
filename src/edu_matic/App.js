@@ -686,16 +686,27 @@ function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImport
     } catch (e) { console.warn("[edu] export_units stub threw:", e.message); }
   }, [modDataDir]);
 
+  // New units land at the TOP of project.units (index 0) rather than at
+  // the end. With ~800 existing rows, appending hides the new unit far
+  // below the user's viewport and looks like the action did nothing.
+  // Prepending makes the new row the first thing they see post-add.
   const addBlankUnit = useCallback(() => {
     const blank = { kind: "unit", row: 0, name: "" };
-    setProject({ ...project, units: [...project.units, blank] });
+    setProject({ ...project, units: [blank, ...project.units] });
   }, [project, setProject]);
   const addUnitFromTemplate = useCallback((tplKey) => {
     const tpl = UNIT_TEMPLATES.find(t => t.key === tplKey);
-    if (!tpl) return;
+    if (!tpl) return null;
     const seed = { kind: "unit", row: 0, name: `New ${tpl.label}`, ...tpl.seed };
-    setProject({ ...project, units: [...project.units, seed] });
+    setProject({ ...project, units: [seed, ...project.units] });
+    return seed.name;
   }, [project, setProject]);
+  // Template-picker popover state. Native <select> was controlled to ""
+  // so the user got no visual feedback when picking an item — looked
+  // like the menu did nothing even though the unit was being added.
+  // Button-with-explicit-popover is unambiguous: click → list → click
+  // one → menu closes → new unit appears at the top of the table.
+  const [tplPickerOpen, setTplPickerOpen] = useState(false);
   const duplicateUnit = useCallback((unitIdx) => {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
     const cur = project.units[unitIdx];
@@ -965,16 +976,41 @@ function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImport
           >clear filters</button>
         )}
         <span style={{ flex: 1 }} />
-        <select
-          value=""
-          onChange={(e) => { if (e.target.value) addUnitFromTemplate(e.target.value); e.target.value = ""; }}
-          className="input"
-          style={{ minWidth: 180 }}
-          title="Append a new unit pre-populated from a template"
-        >
-          <option value="">+ New from template…</option>
-          {UNIT_TEMPLATES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-        </select>
+        <div style={{ position: "relative" }}>
+          <button
+            className="btn"
+            onClick={() => setTplPickerOpen(o => !o)}
+            title="Insert a new unit pre-populated from a template"
+          >+ New from template ▾</button>
+          {tplPickerOpen && (
+            <>
+              {/* Click-outside backdrop. Lower z than the menu so menu
+                  clicks fire normally. */}
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 999 }}
+                onClick={() => setTplPickerOpen(false)}
+              />
+              <div
+                style={{
+                  position: "absolute", top: "calc(100% + 4px)", right: 0,
+                  background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6,
+                  padding: 4, minWidth: 200, zIndex: 1000,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                }}
+              >
+                {UNIT_TEMPLATES.map(t => (
+                  <div
+                    key={t.key}
+                    style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#ddd", fontSize: 12 }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    onClick={() => { addUnitFromTemplate(t.key); setTplPickerOpen(false); }}
+                  >{t.label}</div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
       <DataTable
         columns={allKeys}
