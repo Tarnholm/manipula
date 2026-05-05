@@ -175,6 +175,24 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
     return list;
     // eslint-disable-next-line
   }, [units, q, filterMode, filterValue, modIndex]);
+
+  // Group same-name units into one card. Per the user's "these 3 should
+  // all be in 1 card" feedback — five identically-named Lyttian Archers
+  // each as their own row was confusing. Now they collapse into a single
+  // card, and UnitEditor exposes the individual variants via a tab strip.
+  // Group order follows the order each unit *first* appeared in the
+  // sorted `filtered` list, so the existing role/grade/tier sort still
+  // shapes the sidebar.
+  const filteredGroups = useMemo(() => {
+    const map = new Map();   // name → { name, variants: [] }
+    for (const u of filtered) {
+      const key = u.unit || "";
+      const g = map.get(key);
+      if (g) g.variants.push(u);
+      else map.set(key, { name: key, variants: [u] });
+    }
+    return [...map.values()];
+  }, [filtered]);
   // Mirror filtered list to a ref so the keyboard handler can read it without re-binding.
   filteredRef.current = filtered;
 
@@ -277,22 +295,25 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             Authored — {filtered.length}
           </div>
         )}
-        {/* Variant index per unit name — counts each successive entry of
-         *  the same unit so a "Lyttian Archers (2/3)" badge can disambiguate
-         *  five identically-named cards. Computed in render order so it
-         *  matches the visual sequence the user sees. */}
-        {filtered.map((u, idx) => {
+        {filteredGroups.map((group) => {
+          const variants = group.variants;
+          // Pick a "representative" variant for the card preview — the
+          // currently-selected one if any variant in the group is
+          // selected, otherwise the first. Click on the card selects
+          // that representative; the editor on the right exposes the
+          // remaining variants via a tab strip.
+          const selectedVariant = variants.find(v => v.id === selectedId);
+          const u = selectedVariant || variants[0];
+          const isPrimary = !!selectedVariant;
+          const isMulti = variants.some(v => selectedIds.has(v.id));
           const display = modIndex.unitDisplayName ? modIndex.unitDisplayName(u.unit) : null;
-          const isPrimary = u.id === selectedId;
-          const isMulti = selectedIds.has(u.id);
-          // Position-among-same-name for the "(N/M)" badge.
-          const totalSame = variantCounts.get(u.unit) || 1;
-          let variantPos = 0;
-          if (totalSame > 1) {
-            for (let i = 0, n = 0; i <= idx; i++) {
-              if (filtered[i].unit === u.unit) { n++; if (i === idx) variantPos = n; }
-            }
-          }
+          const totalSame = variants.length;
+          // Counts per category for the summary badges below.
+          const aorCount = variants.filter(v => v.aor && v.aor.enabled).length;
+          const factionalCount = variants.filter(v => !(v.aor && v.aor.enabled)).length;
+          const writeCount = variants.filter(v => v.writeBack !== false).length;
+          const refCount = variants.length - writeCount;
+          const enabledAny = variants.some(v => v.enabled !== false);
           // EDU is keyed by the base unit type. AOR recruit names (like "aor dravidian warriors")
           // don't have their own EDU entry — they alias the base unit ("dravidian warriors") —
           // so try both. Same fallback for "merc " prefixed names.
@@ -310,7 +331,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             null;
           return (
             <div
-              key={u.id}
+              key={group.name + "|" + u.id}
               onClick={(ev) => onSelect(u.id, ev)}
               onContextMenu={(ev) => { ev.preventDefault(); setCtxMenu({ x: ev.clientX, y: ev.clientY, unit: u }); }}
               style={{
@@ -318,7 +339,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                 borderBottom: "1px solid rgba(255,255,255,0.04)",
                 cursor: "pointer",
                 background: isPrimary ? "rgba(220,166,74,0.18)" : isMulti ? "rgba(220,166,74,0.08)" : "",
-                borderLeft: u.enabled === false ? "3px solid #555" : isPrimary ? "3px solid #dca64a" : isMulti ? "3px solid rgba(220,166,74,0.5)" : "3px solid transparent",
+                borderLeft: !enabledAny ? "3px solid #555" : isPrimary ? "3px solid #dca64a" : isMulti ? "3px solid rgba(220,166,74,0.5)" : "3px solid transparent",
                 transition: "background 0.12s",
                 display: "flex",
                 gap: 10,
@@ -341,26 +362,22 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                 <div style={{ fontWeight: 600, color: u.enabled === false ? "#888" : "#ddd", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                   <span>{display || u.unit}</span>
                   {display && <span style={{ color: "#666", fontWeight: 400, fontSize: 11 }}>({u.unit})</span>}
-                  {/* Variant index — shows which of N same-named cards
-                   *  this is. Without it, five "Lyttian Archers" cards
-                   *  with identical grade / faction layouts are
-                   *  indistinguishable while clicking through them. */}
+                  {/* Variant count badge — when more than one entry
+                   *  shares this unit name, show "× N" so users know
+                   *  the editor will expose tabs for them. */}
                   {totalSame > 1 && (
-                    <span style={{ background: "rgba(220,166,74,0.18)", color: "#dca64a", fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>
-                      {variantPos}/{totalSame}
+                    <span title={`${totalSame} variants of this unit — open in the editor to switch between them`} style={{ background: "rgba(220,166,74,0.18)", color: "#dca64a", fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>
+                      × {totalSame}
                     </span>
                   )}
-                  {/* writeBack indicator — surfaces what the unit will
-                   *  actually do on Write-to-EDB. Imported units default
-                   *  to ref-only (won't write); user-authored default to
-                   *  writeBack=true. The previous tiny 📖 emoji wasn't
-                   *  obvious enough — users were deleting variants and
-                   *  finding "nothing changed" because none of the
-                   *  remaining units had writeBack on. */}
-                  {u.writeBack === false ? (
-                    <span title="Reference-only — won't write to EDB. Toggle 'Writes to EDB' in the editor on the right to make changes here actually write." style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
+                  {/* writeBack indicator — group-aware. Pure ref-only,
+                   *  pure write, or mixed (some variants are ref-only). */}
+                  {refCount === 0 ? (
+                    <span title="All variants will write back to EDB on next Write-to-EDB" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
+                  ) : writeCount === 0 ? (
+                    <span title="All variants are reference-only — Write-to-EDB will skip them. Toggle 'Writes to EDB' in the editor to enable writes." style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
                   ) : (
-                    <span title="Will write back to EDB on next Write-to-EDB" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
+                    <span title={`${writeCount} of ${totalSame} variants will write to EDB; the others are ref-only.`} style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>{writeCount}/{totalSame} WRITE</span>
                   )}
                   {eduMap && eduMap.has(u.unit) && (() => {
                     const tip = summarizeEdu(eduMap.get(u.unit));
@@ -375,15 +392,18 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                     {u.homelandMicTier && u.homelandMicTier !== (u.canonicalMicTier ?? u.minTier) ? `(home t${u.homelandMicTier})` : ""}
                     {u.aor && u.aor.enabled ? " · +AOR" : ""}
                   </span>
-                  {/* Variant disambiguator — only shown when the same EDU unit id is authored
-                   *  more than once. Without this, the two `roman hastati early` cards (one
-                   *  AOR-only, one Factional-only) look identical in the list. */}
-                  {totalSame > 1 && (
-                    u.aor && u.aor.enabled ? (
-                      <span title="AOR variant — recruits via hidden_resource regions, not the main faction MIC pool" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>AOR</span>
-                    ) : (
-                      <span title="Factional variant — main MIC-chain recruitment for the unit's faction list" style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>FACTIONAL</span>
-                    )
+                  {/* Variant kind badges — single FACTIONAL or AOR if
+                   *  the group is uniform; both side-by-side when the
+                   *  group contains at least one of each. */}
+                  {factionalCount > 0 && (
+                    <span title={`${factionalCount} factional variant${factionalCount === 1 ? "" : "s"} — main MIC-chain recruitment for the unit's faction list`} style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
+                      FACTIONAL{factionalCount > 1 ? ` ×${factionalCount}` : ""}
+                    </span>
+                  )}
+                  {aorCount > 0 && (
+                    <span title={`${aorCount} AOR variant${aorCount === 1 ? "" : "s"} — recruits via hidden_resource regions, not the main faction MIC pool`} style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
+                      AOR{aorCount > 1 ? ` ×${aorCount}` : ""}
+                    </span>
                   )}
                   {/* Faction list as text (first three) — much easier to
                    *  tell which "Lyttian Archers" applies to which factions

@@ -25,6 +25,17 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
     } catch { return { player: 0, aor: 0, ai: 0, total: 0 }; }
   }, [unit]);
 
+  // Variant tabs — when multiple authored entries share the active
+  // unit's name, expose each as a sub-tab so the user can switch
+  // between Factional / Factional+AoR / AOR variants without
+  // hunting them down in the sidebar. The sidebar collapses
+  // same-name cards into one; this is where the user picks which
+  // variant of that one card they actually want to edit.
+  const siblings = useMemo(() => {
+    if (!unit || !Array.isArray(allUnits)) return [];
+    return allUnits.filter(u => u.unit === unit.unit);
+  }, [unit, allUnits]);
+
   if (!unit) {
     return <div style={{ padding: 30, color: "#777", textAlign: "center" }}>Select a unit to edit, or click ＋ New unit.</div>;
   }
@@ -67,6 +78,44 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
 
   return (
     <div style={{ padding: 16 }}>
+      {siblings.length > 1 && (
+        <div style={{ marginBottom: 10, display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", padding: "6px 8px", background: "rgba(20,22,23,0.7)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 6 }}>
+          <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginRight: 6 }}>Variant:</span>
+          {siblings.map((s, i) => {
+            const active = s.id === u.id;
+            const isAor = s.aor && s.aor.enabled;
+            const facList = (s.factions || []).filter(f => f && f !== "all");
+            const facLabel = isAor
+              ? "AOR"
+              : (facList.length === 0 ? "all factions" : (facList.slice(0, 2).join(", ") + (facList.length > 2 ? ` +${facList.length - 2}` : "")));
+            const tabKind = isAor ? "AOR" : `Faction code ${i + 1}`;
+            return (
+              <button
+                key={s.id}
+                onClick={() => { if (!active && onSelectUnit) onSelectUnit(s.id); }}
+                title={`${tabKind} — ${facLabel}\nGrade: ${s.grade || "?"} · t${s.canonicalMicTier ?? s.minTier ?? "?"}\n${s.writeBack === false ? "REF ONLY" : "WRITE"}`}
+                style={{
+                  background: active ? "rgba(220,166,74,0.22)" : "rgba(255,255,255,0.04)",
+                  color: active ? "#dca64a" : "#aaa",
+                  border: active ? "1px solid #dca64a" : "1px solid #333",
+                  padding: "4px 10px",
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontWeight: active ? 700 : 500,
+                  cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                }}
+              >
+                <span>{tabKind}</span>
+                <span style={{ color: "#888", fontWeight: 400, fontSize: 10, fontFamily: "Consolas, monospace" }}>{facLabel}</span>
+                {s.writeBack === false && (
+                  <span style={{ color: "#888", fontSize: 9, fontWeight: 700, padding: "0 3px", border: "1px solid #444", borderRadius: 2 }}>REF</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div style={{ marginBottom: 10, padding: "6px 10px", background: "rgba(220,166,74,0.06)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 6, fontSize: 11.5, color: "#bca", display: "flex", gap: 14, alignItems: "center" }}>
         <span>Will emit <strong style={{ color: emitCounts.total > 0 ? "#dca64a" : "#a77" }}>{emitCounts.total}</strong> EDB lines</span>
         <span style={{ color: "#888" }}>player: {emitCounts.player}</span>
