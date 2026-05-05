@@ -311,6 +311,17 @@ function ModInfoScreen({ project, setProject }) {
             </strong>
           </div>
         )}
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Safety</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#cba" }}>
+            <input
+              type="checkbox"
+              checked={!!mi.blockWriteOnError}
+              onChange={(e) => setProject({ ...project, modInfo: { ...mi, blockWriteOnError: e.target.checked } })}
+            />
+            Block <strong style={{ color: "#dca64a" }}>Write to EDB</strong> when validation has errors
+          </label>
+        </div>
       </div>
       <h3 style={{ marginTop: 24 }}>Globals ({Object.keys(g).length})</h3>
       <DataTable
@@ -674,6 +685,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // means "no filter on this axis." Stored as state local to the screen.
   const [filterFaction, setFilterFaction] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
+  // Last-selected rowIds (= project.units indices) so the preview pane
+  // shows live computed cost / upkeep / armour for the user's selection.
+  const [selectedRowIdxs, setSelectedRowIdxs] = useState([]);
   // Faction order from project.factions — the index in this array IS the
   // faction id used by the underlying VBA / EDU pipeline.
   const factionKeys = useMemo(() => {
@@ -1244,6 +1258,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       <p className="dim" style={{ marginTop: -6, marginBottom: 8, fontSize: 12 }}>
         Click any cell to edit. Lookup fields (Category, Quality, Weapon, …) open as dropdowns. Ctrl/Shift-click rows to multi-select. Right-click for row ops.
       </p>
+      <CostPreviewPane project={project} selectedIdxs={selectedRowIdxs} />
       {/* Filter chips: quick faction / category narrowing. The columns
           picker still narrows columns; these narrow rows. */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
@@ -1334,6 +1349,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
         onPasteRow={onPasteUnit}
+        onSelectionChange={setSelectedRowIdxs}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveUnit(idx, "up") },
           { label: "↓ Move row down", onClick: (idx) => moveUnit(idx, "down") },
@@ -1558,6 +1574,53 @@ const inpStyle = { background: "#252525", border: "1px solid #333", color: "#ddd
 //                              arm:Shield:size | arm:Shield:material
 const ARM_PREFIX = "arm:";
 const ARMOUR_BODY_SLOTS = ["Head1","Head2","Torso1","Torso2","Torso3","UpArm","LowArm","Hand","UpLeg","LowLeg","Foot"];
+
+// Cost preview pane — shows the computed cost / upkeep / armour /
+// defence for the currently-selected unit row(s). Computed on demand
+// via the same compute() function the Preview EDU screen uses, so the
+// numbers are guaranteed to match what'll land in export_descr_unit.txt.
+// Heavy: compute walks the whole project, so we throttle to selection
+// changes (NOT to every keystroke) and only render when something is
+// selected.
+function CostPreviewPane({ project, selectedIdxs }) {
+  const rows = useMemo(() => {
+    if (!selectedIdxs || !selectedIdxs.length) return null;
+    try {
+      const computed = compute(project).filter((r) => r && r.kind === "data");
+      const byRow = new Map();
+      for (const r of computed) byRow.set(r.row, r);
+      return selectedIdxs
+        .map((idx) => {
+          const u = project.units[idx];
+          if (!u || u.kind !== "unit") return null;
+          const c = byRow.get(u.row) || null;
+          return { unit: u, computed: c };
+        })
+        .filter(Boolean);
+    } catch (e) { return null; }
+  }, [project, selectedIdxs]);
+  if (!rows || rows.length === 0) return null;
+  const fmt = (v, dflt = "—") => (v == null || v === "" ? dflt : String(v));
+  return (
+    <div style={{ background: "rgba(220,166,74,0.06)", border: "1px solid rgba(220,166,74,0.25)", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 11.5, fontFamily: "Consolas, monospace", display: "flex", flexWrap: "wrap", gap: 18 }}>
+      <span style={{ color: "#dca64a", fontWeight: 600 }}>Computed preview · {rows.length} selected</span>
+      {rows.slice(0, 6).map((r, i) => (
+        <span key={i} title={`Computed from current project state — matches what compute() will write to EDU.`} style={{ color: "#bbb" }}>
+          <strong style={{ color: "#fff" }}>{r.unit.name || "(unnamed)"}</strong>
+          <span style={{ color: "#888" }}> ·</span>{" "}
+          cost <span style={{ color: "#7c9" }}>{fmt(r.computed && r.computed.price)}</span>
+          <span style={{ color: "#888" }}> ·</span>{" "}
+          upkeep <span style={{ color: "#7c9" }}>{fmt(r.computed && r.computed.upkeep)}</span>
+          <span style={{ color: "#888" }}> ·</span>{" "}
+          armour <span style={{ color: "#dca64a" }}>{fmt(r.computed && r.computed.armour)}</span>
+          /<span style={{ color: "#dca64a" }}>{fmt(r.computed && r.computed.defence)}</span>
+          /<span style={{ color: "#dca64a" }}>{fmt(r.computed && r.computed.shield)}</span>
+        </span>
+      ))}
+      {rows.length > 6 && <span style={{ color: "#888" }}>… +{rows.length - 6} more</span>}
+    </div>
+  );
+}
 
 function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
   // Same Rules-of-Hooks fix as UnitsScreen — shadow `project` with a
@@ -2347,9 +2410,42 @@ function ValidateScreen({ project, onView }) {
   // unit" which fires onView("units"). Useful when a teammate sees a list
   // of 30 errors and wants to fix each in turn.
   const jumpToUnit = (unitName) => { if (onView) onView("units"); };
+  // Per-faction roster sanity. For each faction, count the unit
+  // categories present in its ownership. Flag rosters that are missing
+  // a fundamental class (Infantry / Missile / Cavalry) so the user
+  // catches gaps before shipping a balance pass.
+  const rosterReport = useMemo(() => {
+    const factionKeys = (project.factions || []).map((f) => typeof f === "string" ? f : (f && (f.Faction || f.faction || f.name) || "")).filter(Boolean);
+    const buckets = ["Infantry", "Missile Infantry", "Missile Cavalry", "Cavalry", "Other"];
+    const bucketOf = (cat, cls) => {
+      const c = String(cat || "").toLowerCase();
+      const k = String(cls || "").toLowerCase();
+      if (c.includes("missile") && c.includes("mounted")) return "Missile Cavalry";
+      if (c.includes("missile")) return "Missile Infantry";
+      if (c.includes("mounted") || c.includes("chariot") || c.includes("camel") || c.includes("elephant")) return "Cavalry";
+      if (c.includes("infantry") || k.includes("infantry") || k.includes("spearman") || k.includes("hoplite") || k.includes("legion")) return "Infantry";
+      return "Other";
+    };
+    const out = factionKeys.map((f) => {
+      const counts = Object.fromEntries(buckets.map((b) => [b, 0]));
+      let total = 0;
+      for (const u of project.units) {
+        if (u.kind !== "unit") continue;
+        const own = u.availability && u.availability[f];
+        if (own !== "Y") continue;
+        const b = bucketOf(u["Category"], u["class"]);
+        counts[b] = (counts[b] || 0) + 1;
+        total++;
+      }
+      const missing = ["Infantry", "Missile Infantry", "Cavalry"].filter((b) => (counts[b] || 0) === 0);
+      return { faction: f, total, counts, missing };
+    });
+    return out.filter((r) => r.total > 0);
+  }, [project]);
+  const rosterIssues = rosterReport.filter((r) => r.missing.length > 0);
   return (
     <div className="screen">
-      <h2>Validate <span className="dim">(auto · {errors.length} err · {warnings.length} warn)</span></h2>
+      <h2>Validate <span className="dim">(auto · {errors.length} err · {warnings.length} warn · {rosterIssues.length} roster gap{rosterIssues.length === 1 ? "" : "s"})</span></h2>
       <div className="actions" style={{ marginBottom: 12 }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#aaa" }}>
           <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
@@ -2361,6 +2457,35 @@ function ValidateScreen({ project, onView }) {
         </label>
         {!hasErr && !hasWarn && <span className="ok">✓ No issues found.</span>}
       </div>
+      {rosterReport.length > 0 && (
+        <details style={{ marginBottom: 12, background: "rgba(220,166,74,0.04)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 6, padding: 8 }}>
+          <summary style={{ cursor: "pointer", color: "#dca64a", fontWeight: 600, fontSize: 13 }}>
+            Roster sanity — per-faction category counts {rosterIssues.length > 0 ? `(${rosterIssues.length} gaps)` : "(all factions covered)"}
+          </summary>
+          <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+            {rosterReport.map((r) => (
+              <div key={r.faction} style={{ background: r.missing.length ? "rgba(214,108,108,0.07)" : "rgba(124,201,153,0.04)", border: "1px solid " + (r.missing.length ? "rgba(214,108,108,0.4)" : "rgba(124,201,153,0.25)"), borderRadius: 6, padding: 8, fontSize: 11.5, fontFamily: "Consolas, monospace" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", color: "#ddd", fontWeight: 600 }}>
+                  <span>{r.faction}</span>
+                  <span style={{ color: "#888" }}>{r.total} units</span>
+                </div>
+                <div style={{ marginTop: 4, color: "#aaa" }}>
+                  {Object.entries(r.counts).map(([k, v]) => (
+                    <span key={k} style={{ marginRight: 10, color: v === 0 && (k === "Infantry" || k === "Missile Infantry" || k === "Cavalry") ? "#d66c6c" : "#9b9" }}>
+                      {k}: {v}
+                    </span>
+                  ))}
+                </div>
+                {r.missing.length > 0 && (
+                  <div style={{ color: "#d66c6c", marginTop: 4, fontSize: 11 }}>
+                    Missing: {r.missing.join(", ")}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
       {showErrors && hasErr && (
         <>
           <h3 style={{ marginTop: 16 }}>Errors</h3>

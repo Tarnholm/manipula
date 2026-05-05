@@ -53,6 +53,10 @@ export default function DataTable({
   onEdit = null,
   editable = false,
   pinFirstColumn = false,
+  // Optional: pin N columns from the start. Falls back to pinFirstColumn
+  // for back-compat; both inputs feed the same internal pinned state
+  // which the header menu can extend / shrink.
+  pinColumns = null,
   maxHeight = "60vh",
   searchable = false,
   columnsToggleable = false,
@@ -104,6 +108,10 @@ export default function DataTable({
   // position is "above" | "below" relative to the target. Section /
   // separator rows are not draggable but ARE valid drop targets.
   onMoveRows = null,
+  // Selection-change event. Fires whenever the user adds or removes a
+  // row from the multi-select set (Ctrl/Shift-click). UnitsScreen reads
+  // this to drive its computed-stat preview pane.
+  onSelectionChange = null,
 }) {
   const [q, setQ] = useState(() => {
     if (!searchPersistKey) return "";
@@ -139,6 +147,22 @@ export default function DataTable({
   }, [q, rows]);
   const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isNonData(r) ? 0 : 1), 0), [rows]);
   const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isNonData(e.row) ? 0 : 1), 0), [filteredEntries]);
+  // Cell-level match count for the search query — reports how many
+  // individual cells match across all visible columns. Useful when one
+  // string occurs many times per row (e.g. faction codes), so the user
+  // can tell "12 of 845 rows" from "57 cells matched."
+  const matchedCellCount = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return 0;
+    let n = 0;
+    for (const e of filteredEntries) {
+      if (!Array.isArray(e.row)) continue;
+      for (const cell of e.row) {
+        if (cell != null && String(cell).toLowerCase().includes(needle)) n++;
+      }
+    }
+    return n;
+  }, [filteredEntries, q]);
 
   // Lazy-render limit. Large EDU projects have ~800-1000 rows; rendering
   // every Cell on first paint takes seconds even with React.memo. We cap
@@ -151,9 +175,28 @@ export default function DataTable({
   // Reset on data / search change so jumping to a different filter
   // shows results from the top.
   useEffect(() => { setRenderLimit(ROW_PAGE); }, [rows, q]);
+  // Apply client-side sort when set. Section / separator rows are
+  // dropped while sorted (they only make sense in the original order)
+  // and restored when sort is cleared. The sort uses natural-collator
+  // comparison so "10" sorts after "9" in mixed-text columns.
+  const sortedEntries = useMemo(() => {
+    if (!sortBy) return filteredEntries;
+    const colIdx = columns.indexOf(sortBy.key);
+    if (colIdx < 0) return filteredEntries;
+    const sortable = filteredEntries.filter((e) => Array.isArray(e.row));
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    sortable.sort((a, b) => {
+      const av = a.row[colIdx], bv = b.row[colIdx];
+      const as = av == null ? "" : String(av);
+      const bs = bv == null ? "" : String(bv);
+      const r = collator.compare(as, bs);
+      return sortBy.dir === "asc" ? r : -r;
+    });
+    return sortable;
+  }, [filteredEntries, sortBy, columns]);
   const visibleEntries = useMemo(
-    () => filteredEntries.length > renderLimit ? filteredEntries.slice(0, renderLimit) : filteredEntries,
-    [filteredEntries, renderLimit]
+    () => sortedEntries.length > renderLimit ? sortedEntries.slice(0, renderLimit) : sortedEntries,
+    [sortedEntries, renderLimit]
   );
   const hiddenRowCount = filteredEntries.length - visibleEntries.length;
 
@@ -190,6 +233,31 @@ export default function DataTable({
   // never hidden (it'd defeat the pin) — guarded in the toggle handler below.
   const [hiddenCols, setHiddenCols] = useState(() => new Set());
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
+  // Pinned-column set — keys (column names) that should stay sticky on
+  // the left during horizontal scroll. Seeded from pinFirstColumn /
+  // pinColumns props; the header right-click menu lets the user pin /
+  // unpin further. Render order treats pinned columns as the first
+  // visible columns regardless of the source `columns` order.
+  const [pinned, setPinned] = useState(() => {
+    const seed = new Set();
+    const n = pinColumns != null ? pinColumns : (pinFirstColumn ? 1 : 0);
+    for (let i = 0; i < n && i < columns.length; i++) seed.add(columns[i]);
+    return seed;
+  });
+  // Column widths — { [columnKey]: px }. Filled by drag-to-resize. When
+  // unset, the column uses table-auto sizing (its natural width).
+  const [colWidths, setColWidths] = useState({});
+  // Client-side sort: { key, dir: "asc"|"desc" } | null. Applied on top
+  // of the search-filtered rows but does NOT mutate the source data.
+  const [sortBy, setSortBy] = useState(null);
+  // Header right-click menu — { x, y, columnKey } | null.
+  const [headerMenu, setHeaderMenu] = useState(null);
+  useEffect(() => {
+    if (!headerMenu) return;
+    const onAny = () => setHeaderMenu(null);
+    setTimeout(() => document.addEventListener("click", onAny, { once: true }), 0);
+    return () => document.removeEventListener("click", onAny);
+  }, [headerMenu]);
   const visibleColIndices = useMemo(
     () => columns.map((_, i) => i).filter((i) => !hiddenCols.has(columns[i])),
     [columns, hiddenCols]
@@ -198,6 +266,29 @@ export default function DataTable({
     () => visibleColIndices.map((i) => columns[i]),
     [columns, visibleColIndices]
   );
+  // Reorder so pinned columns come first, in their original relative
+  // order. The unpinned remainder follows in source order.
+  const orderedColumns = useMemo(() => {
+    const pin = visibleColumns.filter((c) => pinned.has(c));
+    const rest = visibleColumns.filter((c) => !pinned.has(c));
+    return [...pin, ...rest];
+  }, [visibleColumns, pinned]);
+  const orderedColIndices = useMemo(() => orderedColumns.map((c) => columns.indexOf(c)), [orderedColumns, columns]);
+  // Per-column cumulative `left` offset for the pinned ones, in pixels.
+  // Uses the user's resized width if present, otherwise a sensible
+  // default (140px) — wide enough for short labels without being
+  // dramatic for long ones.
+  const DEFAULT_COL_PX = 160;
+  const colLeftOffsets = useMemo(() => {
+    const out = {};
+    let acc = 0;
+    for (const c of orderedColumns) {
+      if (!pinned.has(c)) break;
+      out[c] = acc;
+      acc += colWidths[c] || DEFAULT_COL_PX;
+    }
+    return out;
+  }, [orderedColumns, pinned, colWidths]);
   // Update the navigation snapshot for moveCell. Uses filteredEntries
   // so search filtering also limits Tab navigation to visible rows.
   useEffect(() => {
@@ -264,6 +355,17 @@ export default function DataTable({
   // survives table re-renders / search filtering. Click a row to select
   // (replace), shift-click to range-select, ctrl/cmd-click to toggle.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Notify the parent when the selection changes. Ref stored to dedupe
+  // — only fire when the prop actually changes shape.
+  const lastSelectionRef = useRef(null);
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    const arr = [...selectedIds];
+    const sig = arr.join("|");
+    if (lastSelectionRef.current === sig) return;
+    lastSelectionRef.current = sig;
+    onSelectionChange(arr);
+  }, [selectedIds, onSelectionChange]);
   // Drag state for reorder: dragSrcIds is the set of rowIds being moved
   // (singleton for single-row drag, the whole selection for multi-drag);
   // dropTarget is the hovered row's { rowId, position } where position
@@ -370,6 +472,9 @@ export default function DataTable({
               />
               <span className="dim">
                 {dataCount} of {totalDataCount} row{totalDataCount === 1 ? "" : "s"}
+                {q.trim() && matchedCellCount > 0 && (
+                  <span style={{ marginLeft: 8, color: "#dca64a" }}>· {matchedCellCount} cell{matchedCellCount === 1 ? "" : "s"} matched</span>
+                )}
               </span>
             </>
           )}
@@ -508,15 +613,64 @@ export default function DataTable({
         }}
         tabIndex={0}
       >
-        <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
+        <table className="dtable">
           <thead>
             <tr>
-              {visibleColumns.map((c) => {
+              {orderedColumns.map((c) => {
                 const label = (columnLabels && columnLabels[c]) || c;
+                const isPinned = pinned.has(c);
+                const w = colWidths[c];
+                const sortIcon = sortBy && sortBy.key === c ? (sortBy.dir === "asc" ? " ▲" : " ▼") : "";
+                const style = {};
+                if (isPinned) {
+                  style.position = "sticky";
+                  style.left = colLeftOffsets[c] || 0;
+                  style.zIndex = 5;
+                  style.background = "var(--bg-elev2)";
+                }
+                if (w) style.width = w;
                 return (
-                  <th key={c} title={c}>
-                    {label}
+                  <th
+                    key={c}
+                    title={c + (sortBy && sortBy.key === c ? `\n(sorted ${sortBy.dir})` : "")}
+                    style={style}
+                    onContextMenu={(e) => { e.preventDefault(); setHeaderMenu({ x: e.clientX, y: e.clientY, columnKey: c }); }}
+                    onClick={(e) => {
+                      // Plain click on the header cycles sort. Right-click
+                      // brings up the full menu (set above).
+                      if (e.target.closest('.dtable-resize-handle')) return;
+                      setSortBy((cur) => {
+                        if (!cur || cur.key !== c) return { key: c, dir: "asc" };
+                        if (cur.dir === "asc") return { key: c, dir: "desc" };
+                        return null;
+                      });
+                    }}
+                  >
+                    {label}{sortIcon}
                     <span className="dtable-caret" aria-hidden="true">▾</span>
+                    <span
+                      className="dtable-resize-handle"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const startX = e.clientX;
+                        const th = e.currentTarget.parentElement;
+                        const startW = th ? th.getBoundingClientRect().width : (w || DEFAULT_COL_PX);
+                        const onMove = (ev) => {
+                          const next = Math.max(40, Math.round(startW + (ev.clientX - startX)));
+                          setColWidths((cur) => ({ ...cur, [c]: next }));
+                        };
+                        const onUp = () => {
+                          window.removeEventListener("mousemove", onMove);
+                          window.removeEventListener("mouseup", onUp);
+                        };
+                        window.addEventListener("mousemove", onMove);
+                        window.addEventListener("mouseup", onUp);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Drag to resize column; double-click to reset"
+                      onDoubleClick={(e) => { e.stopPropagation(); setColWidths((cur) => { const n = { ...cur }; delete n[c]; return n; }); }}
+                    />
                   </th>
                 );
               })}
@@ -630,9 +784,19 @@ export default function DataTable({
                       setCtxMenu({ x: e.clientX, y: e.clientY, rowOrigIdx: origIdx });
                     } : undefined}
                   >
-                    {visibleColIndices.map((origColIdx, j) => {
+                    {orderedColIndices.map((origColIdx, j) => {
                       const c = columns[origColIdx];
                       const autoEnter = !!(autoEditTarget && autoEditTarget.rowOrigIdx === origIdx && autoEditTarget.columnKey === c);
+                      const isPinned = pinned.has(c);
+                      const cellStyle = {};
+                      if (isPinned) {
+                        cellStyle.position = "sticky";
+                        cellStyle.left = colLeftOffsets[c] || 0;
+                        cellStyle.zIndex = 1;
+                        cellStyle.background = isSelected ? "rgba(220,166,74,0.18)" : "var(--bg-elev)";
+                      }
+                      const w = colWidths[c];
+                      if (w) cellStyle.width = w;
                       return (
                         <Cell
                           key={c}
@@ -646,6 +810,7 @@ export default function DataTable({
                           autoEnter={autoEnter}
                           onAutoEnterConsumed={consumeAutoEdit}
                           onMove={moveCell}
+                          stickyStyle={Object.keys(cellStyle).length ? cellStyle : null}
                         />
                       );
                     })}
@@ -808,6 +973,38 @@ export default function DataTable({
         </div>,
         document.body
       )}
+      {headerMenu && createPortal(
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed", left: headerMenu.x, top: headerMenu.y,
+            zIndex: 11000, background: "rgba(28,30,32,0.98)",
+            border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6,
+            padding: 4, fontSize: 12, color: "#ddd", boxShadow: "0 8px 24px rgba(0,0,0,0.6)", minWidth: 200,
+          }}
+        >
+          <div style={{ padding: "5px 10px", color: "#dca64a", fontWeight: 700, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 4 }}>
+            {(columnLabels && columnLabels[headerMenu.columnKey]) || headerMenu.columnKey}
+          </div>
+          {[
+            { label: "Sort A → Z",         onClick: () => setSortBy({ key: headerMenu.columnKey, dir: "asc" }) },
+            { label: "Sort Z → A",         onClick: () => setSortBy({ key: headerMenu.columnKey, dir: "desc" }) },
+            { label: "Reset sort",         onClick: () => setSortBy(null) },
+            { label: pinned.has(headerMenu.columnKey) ? "Unpin column" : "Pin to left", onClick: () => setPinned((cur) => { const n = new Set(cur); if (n.has(headerMenu.columnKey)) n.delete(headerMenu.columnKey); else n.add(headerMenu.columnKey); return n; }) },
+            (colWidths[headerMenu.columnKey] != null) ? { label: "Reset width", onClick: () => setColWidths((cur) => { const n = { ...cur }; delete n[headerMenu.columnKey]; return n; }) } : null,
+            columnsToggleable ? { label: "Hide column", onClick: () => setHiddenCols((cur) => { const n = new Set(cur); n.add(headerMenu.columnKey); return n; }) } : null,
+          ].filter(Boolean).map((it, i) => (
+            <div
+              key={i}
+              onClick={() => { it.onClick(); setHeaderMenu(null); }}
+              style={{ padding: "5px 10px", cursor: "pointer", borderRadius: 3 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.10)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+            >{it.label}</div>
+          ))}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
@@ -921,7 +1118,7 @@ function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirs
 // Cell — owns its own editing state. Memoized so only the clicked cell (or a
 // cell whose underlying value just changed) re-renders. Without this, a click
 // on one cell would re-render the whole 25k-cell table.
-const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove }) {
+const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove, stickyStyle }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   // Ref alongside state so commit() reads the latest typed/picked value even
@@ -1013,7 +1210,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     <td
       title={flagTitle || text}
       className={editable ? "dtable-editable" : ""}
-      style={{ position: "relative" }}
+      style={{ position: stickyStyle ? "sticky" : "relative", ...(stickyStyle || {}) }}
       onClick={startEdit}
     >
       <span
@@ -1071,7 +1268,8 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       && prev.flag === next.flag
       && prev.autoEnter === next.autoEnter
       && prev.onAutoEnterConsumed === next.onAutoEnterConsumed
-      && prev.onMove === next.onMove;
+      && prev.onMove === next.onMove
+      && prev.stickyStyle === next.stickyStyle;
 });
 
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel, onMove }) {

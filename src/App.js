@@ -1166,6 +1166,17 @@ export default function App() {
   const previewWriteBack = async () => {
     if (!api) return;
     if (!units.length) { alert("No units to write."); return; }
+    // Validate-on-write gate. When the user has flipped
+    // modInfo.blockWriteOnError on, an error count > 0 (from the EDU
+    // validation) blocks Write to EDB until they fix or override.
+    const blockOnErr = !!(eduProject && eduProject.modInfo && eduProject.modInfo.blockWriteOnError);
+    if (blockOnErr && eduValidationErrors && eduValidationErrors.length > 0) {
+      const ok = window.confirm(
+        `Validation has ${eduValidationErrors.length} error${eduValidationErrors.length === 1 ? "" : "s"} and "Block writes on errors" is on.\n\n` +
+        `Continue anyway? (Recommended: Cancel, fix the errors in the Validate tab, then write back.)`
+      );
+      if (!ok) { setActiveTab("edu"); setEduView("validate"); return; }
+    }
     const fresh = await api.readEDB();
     if (!fresh) { alert("Could not read EDB."); return; }
     // Stale-export detection: if we exported EDB before, compare the live

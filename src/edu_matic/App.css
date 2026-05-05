@@ -544,6 +544,22 @@ select.dtable-cell-input {
   font-style: italic;
 }
 
+/* Column resize handle — sits on the right edge of every <th>, becomes
+ * visible on hover. Drag horizontally to set the column's width;
+ * double-click to reset. */
+.dtable th { position: relative; }
+.dtable-resize-handle {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  opacity: 0;
+  background: rgba(220, 166, 74, 0.4);
+  transition: opacity 0.15s;
+}
+.dtable th:hover .dtable-resize-handle { opacity: 1; }
+.dtable-resize-handle:active { background: rgba(220, 166, 74, 0.8); }
+
 /* Pinned first column — sticky-left so the unit name stays visible while the
  * user scrolls horizontally through the wide UnitDefinitions sheet. The td
  * needs an opaque background or the scrolled cells show through. The header's
