@@ -46,7 +46,7 @@ const VIEWS = [
 //   - hideSidebar: hide EDU-matic's own brand + nav (parent has its own)
 //   - jumpToUnit: when the parent jumps from the recruitment editor, scroll the Units screen
 //                 to that unit on mount
-export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null } = {}) {
+export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null, recruitUnits = null, lastImportedSnapshot = null, onJumpToRecruit = null } = {}) {
   const [internalView, setInternalView] = useState("project");
   const view = controlledView || internalView;
   const setView = onControlledView || setInternalView;
@@ -119,7 +119,7 @@ export default function App({ externalProject = null, onProjectChange, controlle
         {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} />}
         {view === "modinfo"  && <ModInfoScreen  project={project} setProject={setProject} />}
         {view === "coredata" && <CoreDataScreen project={project} setProject={setProject} />}
-        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} />}
+        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} recruitUnits={recruitUnits} lastImportedSnapshot={lastImportedSnapshot} onJumpToRecruit={onJumpToRecruit} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
         {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} />}
         {view === "merc"     && <MercScreen     project={project} />}
@@ -399,6 +399,55 @@ function CoreDataScreen({ project, setProject }) {
   );
 }
 
+// Unit templates — sensible-default starting points for new units.
+// Adding a new template here makes it appear in the "+ New from
+// template" picker. Values are deliberately partial: only the columns
+// where a default carries semantic meaning (Category, Quality,
+// Recruitment) are set; everything else stays empty so the user sees
+// the spec rows they need to fill in.
+const UNIT_TEMPLATES = [
+  {
+    key: "light_infantry",
+    label: "Light Infantry",
+    seed: { Category: "Foot", Recruitment: "Standard", Specialty: "Standard", Entries: "Factional", "Wpn Quality": "1. Light", Formation: "Standard" },
+  },
+  {
+    key: "heavy_infantry",
+    label: "Heavy Infantry",
+    seed: { Category: "Foot", Recruitment: "Standard", Specialty: "Very Hardy", Entries: "Factional", "Wpn Quality": "3. Heavy", Formation: "Standard" },
+  },
+  {
+    key: "missile_infantry",
+    label: "Missile Infantry",
+    seed: { Category: "Foot Missile", Recruitment: "Standard", Specialty: "Missiles", Entries: "Factional", "Wpn Quality": "2. Medium", Formation: "Standard" },
+  },
+  {
+    key: "spearmen",
+    label: "Spearmen",
+    seed: { Category: "Foot", Recruitment: "Standard", Specialty: "Standard", Entries: "Factional", Weapon: "Spear (overhand)", "Wpn Quality": "2. Medium" },
+  },
+  {
+    key: "cavalry",
+    label: "Light Cavalry",
+    seed: { Category: "Mounted", Recruitment: "Standard", Specialty: "Standard", Entries: "Factional", "Wpn Quality": "2. Medium" },
+  },
+  {
+    key: "heavy_cavalry",
+    label: "Heavy Cavalry",
+    seed: { Category: "Mounted", Recruitment: "Standard", Specialty: "Very Hardy", Entries: "Factional", "Wpn Quality": "3. Heavy" },
+  },
+  {
+    key: "missile_cavalry",
+    label: "Missile Cavalry",
+    seed: { Category: "Mounted Missile", Recruitment: "Standard", Specialty: "Missiles", Entries: "Factional", "Wpn Quality": "2. Medium" },
+  },
+  {
+    key: "general",
+    label: "General",
+    seed: { Category: "Mounted", Recruitment: "General", Specialty: "Very Hardy", Entries: "Factional", "Wpn Quality": "3. Heavy" },
+  },
+];
+
 // Synthetic column-key prefixes. Real EDU column keys never contain a
 // colon, so these can't collide with genuine fields.
 //   AVAIL_PREFIX → expands the unit's `availability` object
@@ -435,7 +484,7 @@ const UNITS_TAIL = [
   "hair style", "info pic dir", "card pic dir", "comments", "Tier", "Turns",
 ];
 
-function UnitsScreen({ project, setProject, modDataDir }) {
+function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImportedSnapshot, onJumpToRecruit }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
   // Filter chips: faction (from availability) and category. Empty string
@@ -641,6 +690,12 @@ function UnitsScreen({ project, setProject, modDataDir }) {
     const blank = { kind: "unit", row: 0, name: "" };
     setProject({ ...project, units: [...project.units, blank] });
   }, [project, setProject]);
+  const addUnitFromTemplate = useCallback((tplKey) => {
+    const tpl = UNIT_TEMPLATES.find(t => t.key === tplKey);
+    if (!tpl) return;
+    const seed = { kind: "unit", row: 0, name: `New ${tpl.label}`, ...tpl.seed };
+    setProject({ ...project, units: [...project.units, seed] });
+  }, [project, setProject]);
   const duplicateUnit = useCallback((unitIdx) => {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
     const cur = project.units[unitIdx];
@@ -733,18 +788,71 @@ function UnitsScreen({ project, setProject, modDataDir }) {
     return out;
   }, [project]);
 
+  // Recruit-line index — quick lookup from EDU "unit id" / dictionary
+  // tag / name to the recruit-line authoring records that target the
+  // same unit. Drives the "linked recruit-lines" tooltip and the
+  // jump-to-recruit context menu item.
+  const recruitsByKey = useMemo(() => {
+    const out = new Map();
+    if (!Array.isArray(recruitUnits)) return out;
+    for (const r of recruitUnits) {
+      const key = (r.unit || "").trim();
+      if (!key) continue;
+      const arr = out.get(key) || [];
+      arr.push(r);
+      out.set(key, arr);
+    }
+    return out;
+  }, [recruitUnits]);
+
+  // Re-import diff. lastImportedSnapshot is a Map of canonical-unit-key
+  // → JSON-stringified unit, captured at the last xlsm import. Anything
+  // that hashes differently now is "modified since last import" — we
+  // surface that as a third rowFlag tier (info/blue) so the user can
+  // see which units have drifted from the spreadsheet's source of
+  // truth without leaving Manipula.
+  const importDiffByIdx = useMemo(() => {
+    const out = new Map();
+    if (!lastImportedSnapshot) return out;
+    for (let i = 0; i < project.units.length; i++) {
+      const u = project.units[i];
+      if (!u || u.kind !== "unit") continue;
+      const key = String(u["unit id"] || u.dictionary_tag || u.name || "").trim();
+      if (!key) continue;
+      const prev = lastImportedSnapshot[key];
+      if (prev == null) continue;            // new unit since import
+      try {
+        if (JSON.stringify(u) !== prev) out.set(i, "modified since last xlsm import");
+      } catch {}
+    }
+    return out;
+  }, [project.units, lastImportedSnapshot]);
+
   // rowFlags keyed by rowId (= original index in project.units, per
-  // UnitsScreen's rowIds construction).
+  // UnitsScreen's rowIds construction). Severity tiers: error > warn >
+  // info ("modified-since-import" lives at the info tier — it's a state
+  // signal, not a problem, but the user wants to see it inline).
   const rowFlags = useMemo(() => {
     const out = {};
     for (let idx = 0; idx < project.units.length; idx++) {
       const u = project.units[idx];
       if (!u || u.kind !== "unit") continue;
-      const f = validationByName.get(u.name);
-      if (f) out[idx] = f;
+      const f = validationByName.get(u.name) || {};
+      const importNote = importDiffByIdx.get(idx);
+      if (importNote) f.info = importNote;
+      // Recruit-line linkage hint — encoded into the flag tooltip so
+      // hovering the Unit Name cell shows a quick summary.
+      const rec = recruitsByKey.get(u["unit id"]) || recruitsByKey.get(u.name);
+      if (rec && rec.length) {
+        const factions = new Set();
+        for (const r of rec) for (const fac of (r.factions || [])) factions.add(fac);
+        f.recruitNote = `Linked to ${rec.length} recruit-line entr${rec.length === 1 ? "y" : "ies"}` +
+          (factions.size ? ` · factions: ${[...factions].slice(0, 5).join(", ")}${factions.size > 5 ? "…" : ""}` : "");
+      }
+      if (f.error || f.warn || f.info || f.recruitNote) out[idx] = f;
     }
     return out;
-  }, [project.units, validationByName]);
+  }, [project.units, validationByName, importDiffByIdx, recruitsByKey]);
 
   // Filter chips. We narrow the table by patching tableRows + rowIds
   // through filters before passing them to DataTable. Search-bar text
@@ -856,6 +964,17 @@ function UnitsScreen({ project, setProject, modDataDir }) {
             onClick={() => { setFilterFaction(""); setFilterCategory(""); }}
           >clear filters</button>
         )}
+        <span style={{ flex: 1 }} />
+        <select
+          value=""
+          onChange={(e) => { if (e.target.value) addUnitFromTemplate(e.target.value); e.target.value = ""; }}
+          className="input"
+          style={{ minWidth: 180 }}
+          title="Append a new unit pre-populated from a template"
+        >
+          <option value="">+ New from template…</option>
+          {UNIT_TEMPLATES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+        </select>
       </div>
       <DataTable
         columns={allKeys}
@@ -876,10 +995,21 @@ function UnitsScreen({ project, setProject, modDataDir }) {
         onInsertRowBelow={insertBlankUnitBelow}
         onDeleteRow={deleteUnit}
         addRowLabel="+ New unit"
-        rowMenuExtras={modDataDir ? [{
-          label: "Stub in export_units.txt",
-          onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
-        }] : null}
+        rowMenuExtras={[
+          ...(modDataDir ? [{
+            label: "Stub in export_units.txt",
+            onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
+          }] : []),
+          ...(onJumpToRecruit ? [{
+            label: "Jump to recruit-line entry",
+            onClick: (idx) => {
+              const u = project.units[idx];
+              const key = u && (u["unit id"] || u.dictionary_tag || u.name);
+              const rec = key && (recruitsByKey.get(key) || recruitsByKey.get(u.name));
+              if (rec && rec.length && rec[0].id) onJumpToRecruit(rec[0].id);
+            },
+          }] : []),
+        ]}
         bulkActions={[
           {
             label: "Set field on selected…",
@@ -909,6 +1039,34 @@ function UnitsScreen({ project, setProject, modDataDir }) {
                 next.splice(idx + 1, 0, copy);
               }
               setProject({ ...project, units: next });
+            },
+          },
+          {
+            label: "Copy as TSV",
+            title: "Copy the selected units as tab-separated rows (paste into Excel / Google Sheets)",
+            onClick: async (rowIds) => {
+              const sorted = rowIds.slice().sort((a, b) => a - b);
+              const header = allKeys.map(k => columnLabels[k] || k).join("\t");
+              const lines = [header];
+              for (const i of sorted) {
+                const u = project.units[i];
+                if (!u || u.kind !== "unit") continue;
+                lines.push(allKeys.map(k => {
+                  if (k.startsWith(AVAIL_PREFIX)) {
+                    const f = k.slice(AVAIL_PREFIX.length);
+                    return (u.availability && u.availability[f]) || "";
+                  }
+                  if (k.startsWith(OWN_PREFIX)) {
+                    const j = parseInt(k.slice(OWN_PREFIX.length), 10);
+                    return (Array.isArray(u.ownership) && u.ownership[j]) || "";
+                  }
+                  const v = u[k];
+                  return v == null ? "" : String(v).replace(/\t/g, " ").replace(/\r?\n/g, " ");
+                }).join("\t"));
+              }
+              try {
+                await navigator.clipboard.writeText(lines.join("\n"));
+              } catch (e) { console.warn("[edu] clipboard write failed:", e.message); }
             },
           },
           { label: "Delete selected", destructive: true, onClick: bulkDelete },

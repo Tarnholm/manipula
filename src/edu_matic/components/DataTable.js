@@ -619,23 +619,34 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
   };
   const cancel = () => setEditing(false);
   const onDraftChange = (v) => { touchedRef.current = true; draftRef.current = v; setDraft(v); };
-  // Validation flag dot — small coloured circle in the leftmost cell of
-  // any row that has an error or warning, with the message in the
-  // tooltip. The dot is rendered in front of the cell content so it
-  // doesn't shift the column layout.
-  const flagDot = flag ? (
+  // Flag dot — small coloured circle in the leftmost cell of any row
+  // that has an error / warn / info / recruit-line linkage. Severity
+  // tiers stack: error red > warn amber > info blue > linkage gold.
+  // Tooltip combines whichever ones are populated so a single hover
+  // shows everything the user might need (validation msg + recruit
+  // link summary + import diff status).
+  let flagColor = null;
+  let flagTitle = "";
+  if (flag) {
+    if (flag.error)         { flagColor = "#d66c6c"; flagTitle = flag.error; }
+    else if (flag.warn)     { flagColor = "#dca64a"; flagTitle = flag.warn; }
+    else if (flag.info)     { flagColor = "#4f8fd6"; flagTitle = flag.info; }
+    else if (flag.recruitNote) { flagColor = "#7c9"; flagTitle = ""; }
+    if (flag.recruitNote)   flagTitle = (flagTitle ? flagTitle + "\n\n" : "") + flag.recruitNote;
+  }
+  const flagDot = flagColor ? (
     <span
-      title={flag.error || flag.warn || ""}
+      title={flagTitle}
       style={{
         display: "inline-block", width: 7, height: 7, borderRadius: 4,
-        background: flag.error ? "#d66c6c" : "#dca64a",
+        background: flagColor,
         marginRight: 6, verticalAlign: "middle",
       }}
     />
   ) : null;
   return (
     <td
-      title={(flag && (flag.error || flag.warn)) || text}
+      title={flagTitle || text}
       className={editable ? "dtable-editable" : ""}
       onClick={startEdit}
     >

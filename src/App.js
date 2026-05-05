@@ -156,6 +156,7 @@ export default function App() {
         const eduProj = importXlsmBuffer(buf);
         if (cancelled) return;
         eduHistory.reset(eduProj);
+        captureEduSnapshot(eduProj);
         setEduProjectSource(lastPath);
         setStatus(`Auto-loaded ${lastPath.split(/[\\/]/).pop()}`);
       } catch (e) {
@@ -488,6 +489,7 @@ export default function App() {
           const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
           const eduProj = importXlsmBuffer(buf);
           eduHistory.reset(eduProj);
+          captureEduSnapshot(eduProj);
           setEduProjectSource(p);
         }
       }
@@ -619,6 +621,22 @@ export default function App() {
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
+  // Capture an EDU import snapshot — keyed by canonical unit key, value
+  // is the JSON-serialized unit at import time. A small dollop of work
+  // here pays off in the Units screen's "modified since import" inline
+  // diff markers without needing a full diff pass at every render.
+  const captureEduSnapshot = useCallback((eduProj) => {
+    if (!eduProj || !Array.isArray(eduProj.units)) { setEduImportSnapshot(null); return; }
+    const out = {};
+    for (const u of eduProj.units) {
+      if (!u || u.kind !== "unit") continue;
+      const key = String(u["unit id"] || u.dictionary_tag || u.name || "").trim();
+      if (!key) continue;
+      try { out[key] = JSON.stringify(u); } catch {}
+    }
+    setEduImportSnapshot(out);
+  }, []);
+
   // EDU project history — Ctrl+Z / Ctrl+Y on the EDU Builder tab walks
   // back through every project mutation (cell edit, add/duplicate/delete
   // row, etc). useHistory snapshots via JSON.stringify so the past stack
@@ -637,6 +655,12 @@ export default function App() {
   // working from a fresh xlsm import or empty state". Persisted to
   // localStorage so the tool reopens the last project on launch.
   const [projectDir, setProjectDir] = useState(null);
+  // Snapshot of the EDU units at the last xlsm import, keyed by canonical
+  // unit key (unit id || dictionary_tag || name). Used to drive the
+  // "modified since last import" row marker in the Units table — at a
+  // glance the user can see which rows have drifted from the spreadsheet
+  // since the last reimport.
+  const [eduImportSnapshot, setEduImportSnapshot] = useState(null);
   // Bumped on every successful Save Project. Watched by SyncButton so it
   // re-runs git status the moment the user hits save — without this the
   // dot stays stale on green for up to 5s (the polling cadence) after
@@ -722,6 +746,7 @@ export default function App() {
         const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
         const eduProj = importXlsmBuffer(buf);
         eduHistory.reset(eduProj);
+        captureEduSnapshot(eduProj);
         setEduProjectSource(f.name);
         setStatus(`Imported ${f.name} via drag-drop · ${eduProj.units.length} EDU rows`);
         toast(`Imported ${f.name}`, "success");
@@ -1306,6 +1331,16 @@ export default function App() {
                     onControlledView={setEduView}
                     hideSidebar={true}
                     modDataDir={dataDir}
+                    recruitUnits={units}
+                    lastImportedSnapshot={eduImportSnapshot}
+                    onJumpToRecruit={(unitId) => {
+                      // Switch to the recruit-line editor and select the
+                      // matched unit. Lets users hop from an EDU row to the
+                      // recruit-line side via the row context menu.
+                      setSelectedIds(new Set());
+                      setSelectedId(unitId);
+                      setActiveTab("editor");
+                    }}
                   />
                 </div>
               </div>
@@ -1714,6 +1749,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrorCount = 0, webhoo
   const [pos, setPos] = useState(null);
 
   const [diffStat, setDiffStat] = useState("");
+  const [activity, setActivity] = useState([]);
   const refresh = useCallback(async () => {
     if (!projectDir || !api?.gitStatus) { setStatus(null); return; }
     const s = await api.gitStatus(projectDir);
@@ -1726,6 +1762,22 @@ function SyncButton({ projectDir, saveTick = 0, validationErrorCount = 0, webhoo
     } else {
       setDiffStat("");
     }
+    // Recent commits — single git log call, parsed into the structured
+    // activity panel below the action buttons. Only fired when the
+    // dropdown is open, so we don't run a child process every 5s for
+    // a panel the user isn't looking at.
+    if (api.gitLogFile && s && s.isRepo) {
+      try {
+        const r = await api.gitLogFile(projectDir, ".", 8);
+        if (r && r.ok) {
+          const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
+          setActivity(lines.map(l => {
+            const [hash, author, age] = l.split("|");
+            return { hash, author, age };
+          }));
+        }
+      } catch { setActivity([]); }
+    } else { setActivity([]); }
   }, [projectDir, api]);
 
   useEffect(() => {
@@ -2012,6 +2064,19 @@ function SyncButton({ projectDir, saveTick = 0, validationErrorCount = 0, webhoo
                   padding: 8, marginTop: 10, maxHeight: 140, overflow: "auto",
                   fontSize: 10, color: "#ccc", whiteSpace: "pre-wrap", lineHeight: 1.4,
                 }}>{log}</pre>
+              )}
+
+              {activity.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #2a2a2a" }}>
+                  <div style={{ color: "#888", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Recent activity</div>
+                  {activity.map((c, i) => (
+                    <div key={i} style={{ fontSize: 11, color: "#bbb", padding: "2px 0", display: "flex", gap: 8 }}>
+                      <span style={{ color: "#888", fontFamily: "Consolas, monospace" }}>{c.hash}</span>
+                      <span style={{ color: "#dca64a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.author}</span>
+                      <span style={{ color: "#666" }}>{c.age}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </>
           )}
