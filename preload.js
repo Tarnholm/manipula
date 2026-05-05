@@ -44,10 +44,27 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Auto-updater
   updaterCheck: () => ipcRenderer.invoke("updater-check"),
   updaterQuitAndInstall: () => ipcRenderer.invoke("updater-quit-and-install"),
+  updaterQuitAndInstallNow: () => ipcRenderer.invoke("updater-quit-and-install-now"),
   getUpdateStatus: () => ipcRenderer.invoke("get-update-status"),
   onUpdateStatus: (callback) => {
     ipcRenderer.on("update-status", (_event, data) => callback(data));
     return () => ipcRenderer.removeAllListeners("update-status");
+  },
+  // Save-before-exit gate. Renderer subscribes to "save-then-exit"
+  // and "save-then-update", runs the save flow, then calls exitNow /
+  // updaterQuitAndInstallNow. setRendererDirty keeps the main-side
+  // flag in sync so the close handler knows whether to prompt.
+  setRendererDirty: (flag) => ipcRenderer.send("set-renderer-dirty", flag),
+  exitNow: () => ipcRenderer.send("exit-now"),
+  onSaveThenExit: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("save-then-exit", handler);
+    return () => ipcRenderer.removeListener("save-then-exit", handler);
+  },
+  onSaveThenUpdate: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("save-then-update", handler);
+    return () => ipcRenderer.removeListener("save-then-update", handler);
   },
 });
 

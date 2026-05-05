@@ -1028,6 +1028,53 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, []);
 
+  // Keep the main process aware of unsaved-changes state so its
+  // window-close and updater-install handlers can show a Save /
+  // Discard / Cancel dialog instead of letting Electron close
+  // silently. Updates whenever projectDirty changes.
+  useEffect(() => {
+    if (window.electronAPI?.setRendererDirty) window.electronAPI.setRendererDirty(projectDirty);
+    if (window.eduAPI?.setRendererDirty) window.eduAPI.setRendererDirty(projectDirty);
+  }, [projectDirty]);
+
+  // Save-then-exit / save-then-update handlers. The Save button is
+  // already wired to a click handler with the right behaviour, so
+  // for "trigger save flow" we just click it and wait for the dirty
+  // flag to clear before proceeding to exit / install. If the user
+  // cancels the save dialog (e.g. they cancel the folder picker),
+  // they end up back in the app with their data intact.
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    const off1 = window.electronAPI.onSaveThenExit && window.electronAPI.onSaveThenExit(async () => {
+      const btn = document.querySelector("[data-rtshortcut='save-project']");
+      if (!btn) { window.electronAPI.exitNow(); return; }
+      btn.click();
+      // Poll for the dirty flag to clear (save flow is async). Cap
+      // at 30s — beyond that something's gone wrong with the save
+      // dialog and we leave the user in the app.
+      const start = Date.now();
+      const tick = () => {
+        if (!projectDirtyRef.current) { window.electronAPI.exitNow(); return; }
+        if (Date.now() - start > 30000) return;
+        setTimeout(tick, 200);
+      };
+      setTimeout(tick, 200);
+    });
+    const off2 = window.electronAPI.onSaveThenUpdate && window.electronAPI.onSaveThenUpdate(async () => {
+      const btn = document.querySelector("[data-rtshortcut='save-project']");
+      if (!btn) { window.electronAPI.updaterQuitAndInstallNow(); return; }
+      btn.click();
+      const start = Date.now();
+      const tick = () => {
+        if (!projectDirtyRef.current) { window.electronAPI.updaterQuitAndInstallNow(); return; }
+        if (Date.now() - start > 30000) return;
+        setTimeout(tick, 200);
+      };
+      setTimeout(tick, 200);
+    });
+    return () => { off1 && off1(); off2 && off2(); };
+  }, []);
+
   const applyFindReplace = useCallback(({ find, replace }) => {
     if (!find) return 0;
     let n = 0;

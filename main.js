@@ -126,6 +126,36 @@ function applyContentSecurityPolicy() {
   });
 }
 
+// Renderer-reported dirty flag, kept up to date via IPC. Read on
+// window-close and updater-install to gate the action behind a
+// native Save / Discard / Cancel dialog.
+let rendererDirty = false;
+let exitConfirmed = false;
+ipcMain.on("set-renderer-dirty", (_e, flag) => { rendererDirty = !!flag; });
+ipcMain.on("exit-now", () => { exitConfirmed = true; const w = BrowserWindow.getAllWindows()[0]; if (w) w.destroy(); else app.quit(); });
+
+function promptSaveBeforeExit(win, reason = "exit") {
+  // Returns one of "save" | "discard" | "cancel". Save asks the
+  // renderer to run its save flow and waits for the renderer to
+  // signal completion via "exit-now"; if the user picks Discard we
+  // skip the guard on the next close event.
+  const r = dialog.showMessageBoxSync(win, {
+    type: "warning",
+    buttons: ["Save and exit", "Discard changes", "Cancel"],
+    defaultId: 0,
+    cancelId: 2,
+    title: "Unsaved changes",
+    message: reason === "update"
+      ? "Manipula has unsaved changes. Save before installing the update?"
+      : "Manipula has unsaved changes. Save before closing?",
+    detail: "Save bundles your authored EDB recruit-lines and EDU project into the project folder. Discard throws away every unsaved edit since the last save.",
+    noLink: true,
+  });
+  if (r === 0) return "save";
+  if (r === 1) return "discard";
+  return "cancel";
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1600,
@@ -139,6 +169,20 @@ function createWindow() {
       sandbox: false,
       preload: path.join(__dirname, "preload.js"),
     },
+  });
+  // Gate window close behind the unsaved-changes prompt. The renderer
+  // continuously syncs rendererDirty via IPC; once the user clicks
+  // Save and the save flow completes, the renderer fires "exit-now"
+  // which sets exitConfirmed and re-issues close.
+  win.on("close", (e) => {
+    if (exitConfirmed) return;
+    if (!rendererDirty) return;
+    e.preventDefault();
+    const choice = promptSaveBeforeExit(win, "exit");
+    if (choice === "cancel") return;
+    if (choice === "discard") { exitConfirmed = true; win.destroy(); return; }
+    // Save: ask renderer to run its save flow; renderer fires exit-now on success.
+    win.webContents.send("save-then-exit");
   });
   if (useDevServer) {
     process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
@@ -736,9 +780,32 @@ ipcMain.handle("updater-check", async () => {
 });
 
 ipcMain.handle("updater-quit-and-install", () => {
-  // Silent auto-update — skip the NSIS installer wizard (first true) and relaunch the
-  // app afterwards (second true). Same call Provincia uses; the user clicks "install"
-  // in the toast and the app simply restarts on the new version with no extra prompts.
+  const win = BrowserWindow.getAllWindows()[0];
+  // Same Save / Discard / Cancel gate as window-close. If the renderer
+  // has unsaved data, ask first; otherwise install silently (skip the
+  // NSIS wizard, relaunch on the new version) — same flow Provincia
+  // uses.
+  if (rendererDirty && win) {
+    const choice = promptSaveBeforeExit(win, "update");
+    if (choice === "cancel") return false;
+    if (choice === "save") {
+      // Renderer runs the save flow and on success calls back into
+      // "updater-quit-and-install-now"; we exit there once dirty
+      // clears, instead of installing immediately.
+      win.webContents.send("save-then-update");
+      return true;
+    }
+    // discard → fall through to immediate install
+  }
+  autoUpdater.quitAndInstall(true, true);
+  return true;
+});
+
+// Companion to "updater-quit-and-install" — fired by the renderer
+// after its save flow finishes, so the install happens on a clean
+// project.
+ipcMain.handle("updater-quit-and-install-now", () => {
+  exitConfirmed = true;
   autoUpdater.quitAndInstall(true, true);
   return true;
 });
