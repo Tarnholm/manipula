@@ -2413,17 +2413,20 @@ function MercScreen({ project: rawProject, setProject, modDataDir }) {
   );
 }
 
-function ValidateScreen({ project, onView }) {
-  // Auto-run instead of waiting for the user to click a button. Validate /
-  // diagnose are fast enough that re-running on every project change is
-  // fine, and the inline rowFlags + Sync gate were already running them
-  // anyway. Debounce by 400ms so bulk edits don't thrash.
+function ValidateScreen({ project: rawProject, onView }) {
+  // Same Rules-of-Hooks fix as UnitsScreen / ArmourScreen / CoreDataScreen:
+  // shadow `project` with a safe fallback so every hook below runs on
+  // every render, even before the project loads. The real EmptyScreen
+  // render happens at the bottom, AFTER all hooks. Without this the
+  // null→loaded transition desynced React's hook table on xlsm import
+  // and produced the "Cannot access 'ee' before initialization" crash.
+  const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], modInfo: {} };
   const [errors, setErrors] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [showErrors, setShowErrors] = useState(true);
   const [showWarnings, setShowWarnings] = useState(true);
   useEffect(() => {
-    if (!project) { setErrors([]); setWarnings([]); return; }
+    if (!rawProject) { setErrors([]); setWarnings([]); return; }
     let cancelled = false;
     const id = setTimeout(() => {
       if (cancelled) return;
@@ -2433,8 +2436,7 @@ function ValidateScreen({ project, onView }) {
       } catch (e) { console.warn("[validate]", e && e.message); }
     }, 400);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [project]);
-  if (!project) return <EmptyScreen />;
+  }, [rawProject, project]);
   const hasErr = errors.length > 0;
   const hasWarn = warnings.length > 0;
   // Click any row in either table to jump to that unit in the Units screen.
@@ -2476,6 +2478,8 @@ function ValidateScreen({ project, onView }) {
     return out.filter((r) => r.total > 0);
   }, [project]);
   const rosterIssues = rosterReport.filter((r) => r.missing.length > 0);
+  // Now safe to early-return — every hook above has already been called.
+  if (!rawProject) return <EmptyScreen />;
   return (
     <div className="screen">
       <h2>Validate <span className="dim">(auto · {errors.length} err · {warnings.length} warn · {rosterIssues.length} roster gap{rosterIssues.length === 1 ? "" : "s"})</span></h2>
