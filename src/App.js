@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState, useCallback, Component } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef, Component } from "react";
+import { createPortal } from "react-dom";
 
 // Error boundary so a crash in the editor pane (e.g. a Hook order bug) doesn't blank the
 // whole app — it shows a recoverable error message + stack trace instead.
@@ -1614,6 +1615,13 @@ function SyncButton({ projectDir }) {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState("");
+  // Anchor coordinates for the portal-rendered popover. The popover
+  // can't live inside the topbar's DOM tree because the tabs row below
+  // has its own stacking context (backdrop-filter / sticky) that clips
+  // a regular absolute-positioned descendant. Rendering via a portal
+  // into document.body sidesteps every ancestor's stacking and overflow.
+  const btnRef = useRef(null);
+  const [pos, setPos] = useState(null);
 
   const refresh = useCallback(async () => {
     if (!projectDir || !api?.gitStatus) { setStatus(null); return; }
@@ -1628,6 +1636,38 @@ function SyncButton({ projectDir }) {
   }, [api]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Reposition the popover when it opens, and keep it anchored if the
+  // window resizes / scrolls while it's open. Same pattern as the
+  // combobox popover in DataTable.
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => {
+      if (!btnRef.current) return;
+      const r = btnRef.current.getBoundingClientRect();
+      // Anchor to the right edge of the button so the popover never
+      // pokes outside the right side of the window. Width 320 is fixed
+      // below in the popover style.
+      setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+    };
+    reposition();
+    const onDocMouseDown = (e) => {
+      if (btnRef.current && btnRef.current.contains(e.target)) return;
+      // Allow clicks inside the portal-rendered popover. We tag it with
+      // a data attribute since it's not a descendant of btnRef.
+      const pop = document.querySelector("[data-sync-popover]");
+      if (pop && pop.contains(e.target)) return;
+      setOpen(false);
+    };
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("mousedown", onDocMouseDown);
+    };
+  }, [open]);
 
   if (!projectDir || available === false) return null;
 
@@ -1673,8 +1713,9 @@ function SyncButton({ projectDir }) {
   };
 
   return (
-    <div style={{ position: "relative" }}>
+    <>
       <button
+        ref={btnRef}
         onClick={() => setOpen(o => !o)}
         style={{ ...tbtn("#465"), display: "inline-flex", alignItems: "center", gap: 6 }}
         title={indicatorLabel}
@@ -1682,12 +1723,13 @@ function SyncButton({ projectDir }) {
         <span style={{ width: 8, height: 8, borderRadius: 4, background: indicatorColour }} />
         Sync
       </button>
-      {open && (
+      {open && pos && createPortal(
         <div
+          data-sync-popover
           style={{
-            position: "absolute", top: "calc(100% + 6px)", right: 0,
+            position: "fixed", top: pos.top, right: pos.right,
             background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 8,
-            padding: 14, width: 320, zIndex: 1000,
+            padding: 14, width: 320, zIndex: 10000,
             fontFamily: "Consolas, monospace", fontSize: 12, color: "#bbb",
             boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
           }}
@@ -1777,9 +1819,10 @@ function SyncButton({ projectDir }) {
               )}
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 const ACCENT = "#dca64a";
