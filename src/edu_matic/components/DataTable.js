@@ -408,11 +408,12 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     setEditing(true);
   };
   const commit = () => {
-    if (!editing) return;
+    DLOG("cell.commit.entered", { columnKey, rowOrigIdx, editing, touched: touchedRef.current, draft: draftRef.current, text });
+    if (!editing) { DLOG("cell.commit.bail", "editing was false — closure stale"); return; }
     setEditing(false);
-    if (!touchedRef.current) return;
+    if (!touchedRef.current) { DLOG("cell.commit.bail", "touchedRef was false"); return; }
     const final = draftRef.current;
-    DLOG("cell.commit", { columnKey, rowOrigIdx, text, final, willFire: final !== text });
+    DLOG("cell.commit.proceed", { columnKey, rowOrigIdx, text, final, willFire: final !== text });
     if (final !== text) onCommit(rowOrigIdx, columnKey, final);
   };
   const cancel = () => setEditing(false);
