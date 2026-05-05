@@ -627,6 +627,43 @@ export default function App() {
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
+  // Bulk-blame fetch + parse. One git log --name-only call returns every
+  // touched file in the recent 500 commits; we walk it once and remember
+  // the FIRST commit each file appears in (which by git log's reverse-
+  // chronological default is the most recent commit). 800 lookups for
+  // tooltips become O(1) Map.get instead of 800 IPC calls.
+  useEffect(() => {
+    if (!projectDir || !window.eduAPI?.gitLogBulk) { setProjectBlame(new Map()); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await window.eduAPI.gitLogBulk(projectDir);
+        if (cancelled || !r || !r.ok) { setProjectBlame(new Map()); return; }
+        const map = new Map();
+        const commits = (r.stdout || "").split("!!!COMMIT!!!").filter(Boolean);
+        for (const block of commits) {
+          const lines = block.split(/\r?\n/);
+          const meta = lines[0] || "";
+          const [hash, author, age] = meta.split("|");
+          if (!hash) continue;
+          for (let i = 1; i < lines.length; i++) {
+            const path = lines[i].trim();
+            if (!path) continue;
+            const key = path.toLowerCase();
+            // First time we see a file is the most recent commit (git log
+            // is reverse-chrono by default). Skip if already mapped.
+            if (!map.has(key)) map.set(key, { hash, author, age });
+          }
+        }
+        setProjectBlame(map);
+      } catch (e) {
+        console.warn("[blame] bulk fetch failed:", e && e.message);
+        setProjectBlame(new Map());
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectDir, projectSaveTick]);
+
   // Capture an EDU import snapshot — keyed by canonical unit key, value
   // is a djb2 *hash* of the JSON at import time (not the JSON itself).
   // The Units screen compares hashes to flag "modified since import" in
@@ -673,6 +710,13 @@ export default function App() {
   // glance the user can see which rows have drifted from the spreadsheet
   // since the last reimport.
   const [eduImportSnapshot, setEduImportSnapshot] = useState(null);
+  // Bulk per-file git blame for the project dir. Shape:
+  //   Map<relPathLowercase, { hash, author, age }>
+  // Keyed by lowercased relative path so the lookup is case-insensitive
+  // (Windows). Populated once on project-dir set + after every save tick;
+  // empty when the project isn't a git repo or git isn't on PATH. Drives
+  // the per-row "last edited by …" tooltip in the EDU Units table.
+  const [projectBlame, setProjectBlame] = useState(() => new Map());
   // Bumped on every successful Save Project. Watched by SyncButton so it
   // re-runs git status the moment the user hits save — without this the
   // dot stays stale on green for up to 5s (the polling cadence) after
@@ -1380,6 +1424,7 @@ export default function App() {
                     modDataDir={dataDir}
                     recruitUnits={units}
                     lastImportedSnapshot={eduImportSnapshot}
+                    projectBlame={projectBlame}
                     onJumpToRecruit={(unitId) => {
                       // Switch to the recruit-line editor and select the
                       // matched unit. Lets users hop from an EDU row to the

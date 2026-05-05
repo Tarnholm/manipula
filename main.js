@@ -1313,6 +1313,21 @@ ipcMain.handle("git-log-file", async (_e, dir, relPath, n) => {
   const limit = Math.max(1, Math.min(20, parseInt(n, 10) || 5));
   return runGit(dir, ["log", `--format=%h|%an|%ar`, `-n`, String(limit), "--", relPath]);
 });
+// Bulk per-file blame — one git log call, --name-only, with a sentinel
+// separator on each commit. Renderer parses the output into a
+// Map<relPath, mostRecentCommit> in O(commits + files) so a 800-unit
+// table can render "last edited by X (3h ago)" tooltips on every row
+// without making 800 separate IPC calls. Limit to 500 commits — that's
+// plenty of history for a typical mod project and bounds the
+// transferred data to a few hundred KB.
+ipcMain.handle("git-log-bulk", async (_e, dir) => {
+  return runGit(dir, [
+    "log",
+    "--name-only",
+    "--pretty=format:!!!COMMIT!!!%h|%an|%ar",
+    "-n", "500",
+  ]);
+});
 
 // Open a path in the OS default editor / file association. Used by the
 // EDB conflict resolver: when an external change is detected, the user

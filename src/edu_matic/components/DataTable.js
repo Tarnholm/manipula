@@ -632,7 +632,11 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     else if (flag.warn)     { flagColor = "#dca64a"; flagTitle = flag.warn; }
     else if (flag.info)     { flagColor = "#4f8fd6"; flagTitle = flag.info; }
     else if (flag.recruitNote) { flagColor = "#7c9"; flagTitle = ""; }
+    else if (flag.blame)    { flagColor = "#888"; flagTitle = ""; }
     if (flag.recruitNote)   flagTitle = (flagTitle ? flagTitle + "\n\n" : "") + flag.recruitNote;
+    // Blame line goes last in the tooltip so the validation message
+    // (the most actionable info) is visible first.
+    if (flag.blame)         flagTitle = (flagTitle ? flagTitle + "\n\n" : "") + "Last edit: " + flag.blame;
   }
   const flagDot = flagColor ? (
     <span

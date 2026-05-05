@@ -46,7 +46,7 @@ const VIEWS = [
 //   - hideSidebar: hide EDU-matic's own brand + nav (parent has its own)
 //   - jumpToUnit: when the parent jumps from the recruitment editor, scroll the Units screen
 //                 to that unit on mount
-export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null, recruitUnits = null, lastImportedSnapshot = null, onJumpToRecruit = null } = {}) {
+export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null, recruitUnits = null, lastImportedSnapshot = null, onJumpToRecruit = null, projectBlame = null } = {}) {
   const [internalView, setInternalView] = useState("project");
   const view = controlledView || internalView;
   const setView = onControlledView || setInternalView;
@@ -119,9 +119,9 @@ export default function App({ externalProject = null, onProjectChange, controlle
         {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} />}
         {view === "modinfo"  && <ModInfoScreen  project={project} setProject={setProject} />}
         {view === "coredata" && <CoreDataScreen project={project} setProject={setProject} />}
-        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} recruitUnits={recruitUnits} lastImportedSnapshot={lastImportedSnapshot} onJumpToRecruit={onJumpToRecruit} />}
+        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} recruitUnits={recruitUnits} lastImportedSnapshot={lastImportedSnapshot} onJumpToRecruit={onJumpToRecruit} projectBlame={projectBlame} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
-        {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} />}
+        {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} projectBlame={projectBlame} />}
         {view === "merc"     && <MercScreen     project={project} />}
         {view === "validate" && <ValidateScreen project={project} />}
         {view === "preview"  && <PreviewScreen  project={project} />}
@@ -331,6 +331,41 @@ function CoreDataScreen({ project, setProject }) {
     setProject({ ...project, coreData: { ...tables, [active]: next } });
   }, [unlocked, tables, active, project, setProject]);
 
+  // Bulk operations on selected rows of the active core-data table.
+  const bulkSetCoreData = useCallback((rowIdxs, column, value) => {
+    if (!unlocked || !rowIdxs || !rowIdxs.length || !column) return;
+    const t = tables[active] || [];
+    const sel = new Set(rowIdxs);
+    const next = t.map((r, i) => {
+      if (!sel.has(i)) return r;
+      const out = { ...r };
+      if (value === "" || value == null) delete out[column];
+      else out[column] = value;
+      return out;
+    });
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+  }, [unlocked, tables, active, project, setProject]);
+  const bulkDeleteCoreData = useCallback((rowIdxs) => {
+    if (!unlocked || !rowIdxs || !rowIdxs.length) return;
+    if (!window.confirm(`Delete ${rowIdxs.length} selected row${rowIdxs.length === 1 ? "" : "s"} from "${active}"?`)) return;
+    const t = tables[active] || [];
+    const sel = new Set(rowIdxs);
+    const next = t.filter((_, i) => !sel.has(i));
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+  }, [unlocked, tables, active, project, setProject]);
+  const bulkDuplicateCoreData = useCallback((rowIdxs) => {
+    if (!unlocked || !rowIdxs || !rowIdxs.length) return;
+    const t = tables[active] || [];
+    const sel = rowIdxs.slice().sort((a, b) => b - a);
+    let next = t.slice();
+    for (const idx of sel) {
+      const cur = next[idx]; if (!cur) continue;
+      const copy = JSON.parse(JSON.stringify(cur));
+      next.splice(idx + 1, 0, copy);
+    }
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+  }, [unlocked, tables, active, project, setProject]);
+
   return (
     <div className="screen">
       <h2 style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -394,6 +429,20 @@ function CoreDataScreen({ project, setProject }) {
         onDuplicateRow={unlocked ? duplicateRow : null}
         onDeleteRow={unlocked ? deleteRow : null}
         addRowLabel="+ New row"
+        bulkActions={unlocked ? [
+          {
+            label: "Set field on selected…",
+            onClick: (rowIdxs) => {
+              const col = window.prompt("Field name to set on the selected rows:", columns[0] || "");
+              if (!col) return;
+              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
+              if (val === null) return;
+              bulkSetCoreData(rowIdxs, col, val);
+            },
+          },
+          { label: "Duplicate selected", onClick: bulkDuplicateCoreData },
+          { label: "Delete selected", destructive: true, onClick: bulkDeleteCoreData },
+        ] : null}
       />
     </div>
   );
@@ -484,7 +533,26 @@ const UNITS_TAIL = [
   "hair style", "info pic dir", "card pic dir", "comments", "Tier", "Turns",
 ];
 
-function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImportedSnapshot, onJumpToRecruit }) {
+// Mirror of projectStore.js's sanitiseKey — used to derive the on-disk
+// filename (and therefore the git path) for a given unit / armour
+// record so we can look up its blame entry.
+function unitFilePath(u, kind /* "unit" | "armour" */) {
+  const candidates = [u && (u.Type || u.dictKey || u.unit || u.Faction || u.faction || u.name || u.Name || u["Model Set Name"])];
+  let key = "";
+  for (const c of candidates) {
+    if (c != null && String(c).trim() !== "") { key = String(c); break; }
+  }
+  if (!key) return null;
+  const safe = key.toLowerCase()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/[\s.]+$/g, "")
+    .slice(0, 120);
+  if (!safe) return null;
+  if (kind === "armour") return `edu/armour/${safe}.json`;
+  return `edu/units/${safe}.json`;
+}
+
+function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImportedSnapshot, onJumpToRecruit, projectBlame }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
   // Filter chips: faction (from availability) and category. Empty string
@@ -879,10 +947,18 @@ function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImport
         f.recruitNote = `Linked to ${rec.length} recruit-line entr${rec.length === 1 ? "y" : "ies"}` +
           (factions.size ? ` · factions: ${[...factions].slice(0, 5).join(", ")}${factions.size > 5 ? "…" : ""}` : "");
       }
-      if (f.error || f.warn || f.info || f.recruitNote) out[idx] = f;
+      // Per-row git blame — "last edited by X (3h ago)". Looked up via
+      // the bulk-blame Map from App.js; key is the unit's projected
+      // on-disk file path (must match what projectStore.js writes).
+      if (projectBlame && projectBlame.size) {
+        const fp = unitFilePath(u, "unit");
+        const blame = fp ? projectBlame.get(fp.toLowerCase()) : null;
+        if (blame) f.blame = `${blame.author} · ${blame.age}`;
+      }
+      if (f.error || f.warn || f.info || f.recruitNote || f.blame) out[idx] = f;
     }
     return out;
-  }, [project.units, validationByName, importDiffByIdx, recruitsByKey]);
+  }, [project.units, validationByName, importDiffByIdx, recruitsByKey, projectBlame]);
 
   // Filter chips. We narrow the table by patching tableRows + rowIds
   // through filters before passing them to DataTable. Search-bar text
@@ -1272,9 +1348,23 @@ const inpStyle = { background: "#252525", border: "1px solid #333", color: "#ddd
 const ARM_PREFIX = "arm:";
 const ARMOUR_BODY_SLOTS = ["Head1","Head2","Torso1","Torso2","Torso3","UpArm","LowArm","Hand","UpLeg","LowLeg","Foot"];
 
-function ArmourScreen({ project, setProject }) {
+function ArmourScreen({ project, setProject, projectBlame }) {
   if (!project) return <EmptyScreen />;
   const rows = project.armour || [];
+
+  // Per-row git blame, keyed by index in project.armour. Same
+  // mechanism as UnitsScreen — file path mirrors what projectStore.js
+  // writes for armour records.
+  const rowFlags = useMemo(() => {
+    if (!projectBlame || !projectBlame.size) return null;
+    const out = {};
+    for (let i = 0; i < rows.length; i++) {
+      const fp = unitFilePath(rows[i], "armour");
+      const blame = fp ? projectBlame.get(fp.toLowerCase()) : null;
+      if (blame) out[i] = { blame: `${blame.author} · ${blame.age}` };
+    }
+    return out;
+  }, [rows, projectBlame]);
 
   // Column order: Model Set Name (pinned), then for each body slot a Type
   // and Material column, then Shield Size + Shield Material at the end.
@@ -1421,6 +1511,60 @@ function ArmourScreen({ project, setProject }) {
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
 
+  // Bulk operations — same pattern as Units. Operate on indices into
+  // project.armour. "Set field…" prompts for an Armour-shaped column
+  // key (top-level string field) and applies it across all selected
+  // rows; for body-slot Type/Material edits the user picks one row's
+  // dropdown and uses the new "Apply <slot> <field> = <value> to
+  // selected" path below.
+  const bulkSetArmour = useCallback((rowIdxs, column, value) => {
+    if (!rowIdxs || !rowIdxs.length || !column) return;
+    const sel = new Set(rowIdxs);
+    const next = rows.slice();
+    for (let i = 0; i < next.length; i++) {
+      if (!sel.has(i)) continue;
+      const cur = next[i]; if (!cur) continue;
+      // Synthetic arm:<slot>:<field> column key — same shape as the
+      // edit path so the prompt accepts the column header user sees.
+      if (column.startsWith(ARM_PREFIX)) {
+        const rest = column.slice(ARM_PREFIX.length);
+        const sep = rest.indexOf(":");
+        const slot = rest.slice(0, sep);
+        const field = rest.slice(sep + 1);
+        const slotObj = cur[slot] || { instances: 1 };
+        const nextSlot = { ...slotObj };
+        if (value === "" || value == null) nextSlot[field] = null;
+        else nextSlot[field] = value;
+        next[i] = { ...cur, [slot]: nextSlot };
+      } else {
+        // Top-level field (e.g. "Model Set Name").
+        const updated = { ...cur };
+        if (value === "" || value == null) delete updated[column];
+        else updated[column] = value;
+        next[i] = updated;
+      }
+    }
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+  const bulkDeleteArmour = useCallback((rowIdxs) => {
+    if (!rowIdxs || !rowIdxs.length) return;
+    if (!window.confirm(`Delete ${rowIdxs.length} selected armour record${rowIdxs.length === 1 ? "" : "s"}?`)) return;
+    const sel = new Set(rowIdxs);
+    setProject({ ...project, armour: rows.filter((_, i) => !sel.has(i)) });
+  }, [rows, project, setProject]);
+  const bulkDuplicateArmour = useCallback((rowIdxs) => {
+    if (!rowIdxs || !rowIdxs.length) return;
+    const sel = rowIdxs.slice().sort((a, b) => b - a);
+    let next = rows.slice();
+    for (const idx of sel) {
+      const cur = next[idx]; if (!cur) continue;
+      const copy = JSON.parse(JSON.stringify(cur));
+      if (copy["Model Set Name"]) copy["Model Set Name"] = copy["Model Set Name"] + " (copy)";
+      next.splice(idx + 1, 0, copy);
+    }
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+
   return (
     <div className="screen">
       <h2>Armour Models <span className="dim">({rows.length})</span></h2>
@@ -1440,6 +1584,21 @@ function ArmourScreen({ project, setProject }) {
         onInsertRowBelow={insertBlankArmourBelow}
         onDeleteRow={deleteArmour}
         addRowLabel="+ New armour set"
+        rowFlags={rowFlags}
+        bulkActions={[
+          {
+            label: "Set field on selected…",
+            onClick: (rowIdxs) => {
+              const col = window.prompt("Field/column name (use 'arm:<slot>:type' or 'arm:<slot>:material' for body-slot fields):", "Model Set Name");
+              if (!col) return;
+              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
+              if (val === null) return;
+              bulkSetArmour(rowIdxs, col, val);
+            },
+          },
+          { label: "Duplicate selected", onClick: bulkDuplicateArmour },
+          { label: "Delete selected", destructive: true, onClick: bulkDeleteArmour },
+        ]}
       />
     </div>
   );

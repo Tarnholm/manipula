@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   gitFetch: (dir) => ipcRenderer.invoke("git-fetch", dir),
   gitDiffStat: (dir) => ipcRenderer.invoke("git-diff-stat", dir),
   gitLogFile: (dir, relPath, n) => ipcRenderer.invoke("git-log-file", dir, relPath, n),
+  gitLogBulk: (dir) => ipcRenderer.invoke("git-log-bulk", dir),
   appendExportUnitsStub: (modDataDir, unitKey, displayName) => ipcRenderer.invoke("append-export-units-stub", modDataDir, unitKey, displayName),
   openPath: (p) => ipcRenderer.invoke("open-path", p),
   gitCommitAll: (dir, message) => ipcRenderer.invoke("git-commit-all", dir, message),
