@@ -1473,6 +1473,7 @@ export default function App() {
                     recruitUnits={units}
                     lastImportedSnapshot={eduImportSnapshot}
                     projectBlame={projectBlame}
+                    projectDir={projectDir}
                     onJumpToRecruit={(unitId) => {
                       // Switch to the recruit-line editor and select the
                       // matched unit. Lets users hop from an EDU row to the

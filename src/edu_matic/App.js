@@ -46,7 +46,7 @@ const VIEWS = [
 //   - hideSidebar: hide EDU-matic's own brand + nav (parent has its own)
 //   - jumpToUnit: when the parent jumps from the recruitment editor, scroll the Units screen
 //                 to that unit on mount
-export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null, recruitUnits = null, lastImportedSnapshot = null, onJumpToRecruit = null, projectBlame = null } = {}) {
+export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null, recruitUnits = null, lastImportedSnapshot = null, onJumpToRecruit = null, projectBlame = null, projectDir = null } = {}) {
   const [internalView, setInternalView] = useState("project");
   const view = controlledView || internalView;
   const setView = onControlledView || setInternalView;
@@ -116,14 +116,14 @@ export default function App({ externalProject = null, onProjectChange, controlle
         />
       )}
       <main className="app-main">
-        {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} />}
+        {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} projectDir={projectDir} />}
         {view === "modinfo"  && <ModInfoScreen  project={project} setProject={setProject} />}
         {view === "coredata" && <CoreDataScreen project={project} setProject={setProject} />}
         {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} recruitUnits={recruitUnits} lastImportedSnapshot={lastImportedSnapshot} onJumpToRecruit={onJumpToRecruit} projectBlame={projectBlame} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
         {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} projectBlame={projectBlame} />}
         {view === "merc"     && <MercScreen     project={project} />}
-        {view === "validate" && <ValidateScreen project={project} />}
+        {view === "validate" && <ValidateScreen project={project} onView={setView} />}
         {view === "preview"  && <PreviewScreen  project={project} />}
         {view === "export"   && <ExportScreen   project={project} onExport={exportEdu} />}
       </main>
@@ -170,7 +170,7 @@ function Sidebar({ view, onView, project, appVersion, onImport }) {
 
 // ─── Screens ─────────────────────────────────────────────────────────
 
-function ProjectScreen({ project, onImport }) {
+function ProjectScreen({ project, onImport, projectDir }) {
   return (
     <div className="screen">
       <h2>Project</h2>
@@ -184,6 +184,12 @@ function ProjectScreen({ project, onImport }) {
           <div className="field"><span>Armour models</span><strong>{project.armour.length}</strong></div>
           <div className="field"><span>Mercenary rows</span><strong>{project.merc.length}</strong></div>
           <div className="field"><span>Core-data tables</span><strong>{Object.keys(project.coreData).length}</strong></div>
+          {projectDir && (
+            <div className="field" style={{ alignItems: "center" }}>
+              <span>Project folder</span>
+              <strong style={{ fontFamily: "Consolas, monospace", fontSize: 11, wordBreak: "break-all" }}>{projectDir}</strong>
+            </div>
+          )}
           <div className="actions"><button className="btn" onClick={onImport}>Re-import .xlsm…</button></div>
         </div>
       ) : (
@@ -203,32 +209,69 @@ function ProjectScreen({ project, onImport }) {
 }
 
 function ModInfoScreen({ project, setProject }) {
+  const [hookStatus, setHookStatus] = useState(null);
+  const [hookBusy, setHookBusy] = useState(false);
   if (!project) return <EmptyScreen />;
   const mi = project.modInfo;
   const g = project.globals;
-  // Webhook URL — POSTed to as a Discord-style {content: "..."} payload on
-  // every successful Commit + Push. Edited inline; saved with the project.
-  const setWebhook = (url) => {
-    setProject({ ...project, modInfo: { ...mi, webhookUrl: url || "" } });
+  // All meta fields are inline-editable now. Each setter does a structural
+  // replace ({...mi, [key]: value}) so React picks up the change and
+  // useHistory captures it for undo.
+  const setMI = (key) => (e) => {
+    setProject({ ...project, modInfo: { ...mi, [key]: e.target.value } });
+  };
+  const testWebhook = async () => {
+    if (!mi.webhookUrl) { setHookStatus({ ok: false, msg: "No URL set" }); return; }
+    setHookBusy(true); setHookStatus(null);
+    try {
+      const r = await fetch(mi.webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `Manipula webhook test — ${mi.name || "(unnamed mod)"}` }),
+      });
+      setHookStatus({ ok: r.ok, msg: `${r.status} ${r.statusText || ""}`.trim() });
+    } catch (e) {
+      setHookStatus({ ok: false, msg: e.message || "fetch failed" });
+    } finally { setHookBusy(false); }
   };
   return (
     <div className="screen">
       <h2>Mod Info</h2>
       <div className="card">
-        <div className="field"><span>Name</span><strong>{mi.name}</strong></div>
-        <div className="field"><span>Platform</span><strong>{mi.platform}</strong></div>
-        <div className="field"><span>Era</span><strong>{mi.era || "—"}</strong></div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Name</span>
+          <input className="input" value={mi.name || ""} onChange={setMI("name")} style={{ flex: 1, minWidth: 240 }} />
+        </div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Platform</span>
+          <input className="input" value={mi.platform || ""} onChange={setMI("platform")} placeholder="e.g. RTW Vanilla / RTW Alex / RTR" style={{ flex: 1, minWidth: 240 }} />
+        </div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Era</span>
+          <input className="input" value={mi.era || ""} onChange={setMI("era")} placeholder="e.g. Imperial / Classical" style={{ flex: 1, minWidth: 240 }} />
+        </div>
         <div className="field" style={{ alignItems: "center" }}>
           <span>Webhook URL</span>
           <input
             className="input"
             placeholder="https://discord.com/api/webhooks/…"
             value={mi.webhookUrl || ""}
-            onChange={(e) => setWebhook(e.target.value)}
+            onChange={setMI("webhookUrl")}
             style={{ flex: 1, minWidth: 280 }}
             title="Posted to as {content: 'Manipula push — <message>'} on every successful push. Discord webhooks work directly; for Slack/Teams adapt the payload server-side."
           />
+          <button className="btn" disabled={hookBusy || !mi.webhookUrl} onClick={testWebhook} style={{ marginLeft: 6 }}>
+            {hookBusy ? "Testing…" : "Test"}
+          </button>
         </div>
+        {hookStatus && (
+          <div className="field" style={{ alignItems: "center" }}>
+            <span></span>
+            <strong style={{ color: hookStatus.ok ? "var(--ok)" : "var(--err)" }}>
+              {hookStatus.ok ? "✓ webhook delivered" : "✗ "}{hookStatus.msg}
+            </strong>
+          </div>
+        )}
       </div>
       <h3 style={{ marginTop: 24 }}>Globals ({Object.keys(g).length})</h3>
       <DataTable
@@ -1149,6 +1192,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         onInsertRowBelow={insertBlankUnitBelow}
         onDeleteRow={deleteUnit}
         addRowLabel="+ New unit"
+        rowToJSON={(idx) => project.units[idx] || null}
         rowMenuExtras={[
           ...(modDataDir ? [{
             label: "Stub in export_units.txt",
@@ -1620,6 +1664,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         onDeleteRow={deleteArmour}
         addRowLabel="+ New armour set"
         rowFlags={rowFlags}
+        rowToJSON={(idx) => rows[idx] || null}
         bulkActions={[
           {
             label: "Set field on selected…",
@@ -1821,6 +1866,7 @@ function MercScreen({ project: rawProject, setProject }) {
         onInsertRowBelow={insertBlankMercBelow}
         onDeleteRow={deleteMerc}
         addRowLabel="+ New merc unit"
+        rowToJSON={(idx) => rows[idx] || null}
         bulkActions={[
           {
             label: "Set field on selected…",
@@ -1840,51 +1886,66 @@ function MercScreen({ project: rawProject, setProject }) {
   );
 }
 
-function ValidateScreen({ project }) {
-  const [errors, setErrors] = useState(null);
-  const [warnings, setWarnings] = useState(null);
-  const [running, setRunning] = useState(false);
-  if (!project) return <EmptyScreen />;
-  const run = () => {
-    setRunning(true);
-    setTimeout(() => {
+function ValidateScreen({ project, onView }) {
+  // Auto-run instead of waiting for the user to click a button. Validate /
+  // diagnose are fast enough that re-running on every project change is
+  // fine, and the inline rowFlags + Sync gate were already running them
+  // anyway. Debounce by 400ms so bulk edits don't thrash.
+  const [errors, setErrors] = useState([]);
+  const [warnings, setWarnings] = useState([]);
+  const [showErrors, setShowErrors] = useState(true);
+  const [showWarnings, setShowWarnings] = useState(true);
+  useEffect(() => {
+    if (!project) { setErrors([]); setWarnings([]); return; }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      if (cancelled) return;
       try {
         setErrors(validate(project));
         setWarnings(diagnose(project));
-      } finally { setRunning(false); }
-    }, 10);
-  };
-  const hasErr = errors && errors.length > 0;
-  const hasWarn = warnings && warnings.length > 0;
+      } catch (e) { console.warn("[validate]", e && e.message); }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [project]);
+  if (!project) return <EmptyScreen />;
+  const hasErr = errors.length > 0;
+  const hasWarn = warnings.length > 0;
+  // Click any row in either table to jump to that unit in the Units screen.
+  // The DataTable doesn't expose a per-row click, so we wire it through a
+  // synthetic onContextMenu-style flow: rowMenuExtras provides "Jump to
+  // unit" which fires onView("units"). Useful when a teammate sees a list
+  // of 30 errors and wants to fix each in turn.
+  const jumpToUnit = (unitName) => { if (onView) onView("units"); };
   return (
     <div className="screen">
-      <h2>Validate</h2>
-      <div className="actions">
-        <button className="btn btn-accent" onClick={run} disabled={running}>
-          {running ? "Running…" : "Run validate"}
-        </button>
-        {errors && (
-          <span className={`dim ${hasErr ? "err" : "ok"}`}>
-            {hasErr
-              ? `${errors.length} error${errors.length === 1 ? "" : "s"}`
-              : "✓ No errors"}
-            {warnings && warnings.length > 0 &&
-              ` · ${warnings.length} warning${warnings.length === 1 ? "" : "s"}`}
-          </span>
-        )}
+      <h2>Validate <span className="dim">(auto · {errors.length} err · {warnings.length} warn)</span></h2>
+      <div className="actions" style={{ marginBottom: 12 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#aaa" }}>
+          <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
+          show errors
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#aaa" }}>
+          <input type="checkbox" checked={showWarnings} onChange={(e) => setShowWarnings(e.target.checked)} />
+          show warnings
+        </label>
+        {!hasErr && !hasWarn && <span className="ok">✓ No issues found.</span>}
       </div>
-      {hasErr && (
+      {showErrors && hasErr && (
         <>
-          <h3 style={{ marginTop: 24 }}>Errors</h3>
+          <h3 style={{ marginTop: 16 }}>Errors</h3>
           <DataTable
             columns={["Unit", "Row", "Category", "Message"]}
             rows={errors.map((e) => [e.unit, e.row ?? "—", e.category || "", e.message])}
+            rowIds={errors.map((e) => e.unit)}
             maxHeight="35vh"
             searchable
+            rowMenuExtras={[
+              { label: "Jump to unit (Units screen)", onClick: (unitName) => jumpToUnit(unitName) },
+            ]}
           />
         </>
       )}
-      {hasWarn && (
+      {showWarnings && hasWarn && (
         <>
           <h3 style={{ marginTop: 24 }}>Warnings — data drift</h3>
           <p className="dim" style={{ marginTop: 0, marginBottom: 8 }}>
@@ -1893,8 +1954,12 @@ function ValidateScreen({ project }) {
           <DataTable
             columns={["Unit", "Row", "Category", "Message"]}
             rows={warnings.map((w) => [w.unit, w.row ?? "—", w.category || "", w.message])}
+            rowIds={warnings.map((w) => w.unit)}
             maxHeight="35vh"
             searchable
+            rowMenuExtras={[
+              { label: "Jump to unit (Units screen)", onClick: (unitName) => jumpToUnit(unitName) },
+            ]}
           />
         </>
       )}
@@ -1903,35 +1968,56 @@ function ValidateScreen({ project }) {
 }
 
 function PreviewScreen({ project }) {
+  // Auto-compute on project change. Manual button was redundant — Sync /
+  // Validate already triggered compute under the hood. Debounced 600ms
+  // so bulk edits don't thrash; for a real project compute() is in the
+  // 100-500ms range.
   const [rows, setRows] = useState(null);
-  const [running, setRunning] = useState(false);
+  const [eduText, setEduText] = useState("");
+  const [tab, setTab] = useState("data");        // "data" | "text"
+  useEffect(() => {
+    if (!project) { setRows(null); setEduText(""); return; }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        const r = compute(project);
+        setRows(r);
+        try { setEduText(formatEdu(r, project)); } catch (e) { setEduText("// formatEdu failed: " + e.message); }
+      } catch (e) {
+        console.warn("[preview compute]", e && e.message);
+        setRows(null); setEduText("// compute failed: " + e.message);
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [project]);
   if (!project) return <EmptyScreen />;
-  const run = () => {
-    setRunning(true);
-    setTimeout(() => {
-      try { setRows(compute(project)); } finally { setRunning(false); }
-    }, 10);
-  };
   const dataRows = rows?.filter((r) => r.kind === "data") || [];
   const cols = dataRows[0]
     ? Object.keys(dataRows[0]).filter((k) => k !== "kind" && k !== "row" && k !== "name" && k !== "ownership")
     : [];
   return (
     <div className="screen">
-      <h2>Preview Computed DATA</h2>
-      <div className="actions">
-        <button className="btn btn-accent" onClick={run} disabled={running}>
-          {running ? "Computing…" : "Compute"}
-        </button>
-        {rows && <span className="dim">{dataRows.length} unit rows · {cols.length} computed cols</span>}
+      <h2>Preview EDU <span className="dim">(auto · {dataRows.length} unit rows · {eduText ? Math.round(eduText.length / 1024) + "kb" : ""} text)</span></h2>
+      <div className="actions" style={{ marginBottom: 8 }}>
+        <button className={"btn" + (tab === "data" ? " btn-accent" : "")} onClick={() => setTab("data")}>Computed DATA</button>
+        <button className={"btn" + (tab === "text" ? " btn-accent" : "")} onClick={() => setTab("text")}>Formatted EDU text</button>
+        <button className="btn" onClick={async () => {
+          try { await navigator.clipboard.writeText(eduText); } catch {}
+        }} title="Copy the entire formatted EDU text to clipboard" disabled={!eduText}>Copy text</button>
       </div>
-      {rows && (
+      {tab === "data" && rows && (
         <DataTable
           columns={["Unit", ...cols]}
           rows={dataRows.map((r) => [r.name, ...cols.map((c) => r[c])])}
           maxHeight="70vh"
           searchable
         />
+      )}
+      {tab === "text" && (
+        <pre style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 6, padding: 12, maxHeight: "70vh", overflow: "auto", fontFamily: "Consolas, monospace", fontSize: 11, color: "#ddd", whiteSpace: "pre", margin: 0 }}>
+          {eduText || "// computing…"}
+        </pre>
       )}
     </div>
   );
@@ -1941,6 +2027,7 @@ function ExportScreen({ project, onExport }) {
   const [baseName, setBaseName] = useState("export_descr_unit");
   const [running, setRunning] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [lastExport, setLastExport] = useState(() => localStorage.getItem("rt:eduLastExport") || null);
   if (!project) return <EmptyScreen />;
 
   const doExport = async () => {
@@ -1948,7 +2035,11 @@ function ExportScreen({ project, onExport }) {
     try {
       const rows = compute(project);
       const text = formatEdu(rows, project);
-      await onExport(text, baseName);
+      const path = await onExport(text, baseName);
+      if (path) {
+        setLastExport(path);
+        try { localStorage.setItem("rt:eduLastExport", path); } catch {}
+      }
     } finally { setRunning(false); }
   };
 
@@ -1981,6 +2072,18 @@ function ExportScreen({ project, onExport }) {
           </button>
           <button className="btn" onClick={doPreview} disabled={running}>Preview EDU text</button>
         </div>
+        {lastExport && (
+          <div className="field" style={{ marginTop: 12, alignItems: "center" }}>
+            <span>Last export</span>
+            <strong style={{ fontFamily: "Consolas, monospace", fontSize: 11, wordBreak: "break-all", color: "#aaa" }}>{lastExport}</strong>
+            <button
+              className="btn"
+              style={{ marginLeft: 6 }}
+              onClick={() => { if (window.eduAPI?.openPath) window.eduAPI.openPath(lastExport); }}
+              title="Open the file in your default editor"
+            >Open</button>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>

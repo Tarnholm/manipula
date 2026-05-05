@@ -67,6 +67,11 @@ export default function DataTable({
   onDeleteRow = null,        // context menu — delete this row
   addRowLabel = "+ Add row",
   rowMenuExtras = null,      // optional [{ label, onClick(rowId), destructive? }, ...]
+  // Optional resolver for "what JSON should the Copy-row context menu
+  // emit?" When provided, the menu gains a "Copy row as JSON" entry
+  // that reads the actual source record for that rowId and writes its
+  // pretty-printed JSON to the system clipboard.
+  rowToJSON = null,          // (rowId) => any | null
   // Per-row flag indicators for inline validation. Map keyed by ROWID
   // (not row index): { [rowId]: { error?: string, warn?: string } }.
   // First column gets a small dot showing the highest severity; the
@@ -211,6 +216,9 @@ export default function DataTable({
   // Rendered via portal so it can spill outside the table's scroll container.
   const [ctxMenu, setCtxMenu] = useState(null);
   // null | { x, y, rowOrigIdx }
+  // Whether the user is scrolled far enough down for the "back to top" FAB
+  // to be useful. Threshold: 800px past the top of the scroll container.
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   useEffect(() => {
     if (!ctxMenu) return;
@@ -347,10 +355,16 @@ export default function DataTable({
       )}
       <div
         className="dtable-scroll"
-        style={maxHeight ? { maxHeight } : undefined}
+        style={maxHeight ? { maxHeight, position: "relative" } : { position: "relative" }}
         ref={scrollRef}
         onWheel={onWheel}
         onKeyDown={onKeyDown}
+        onScroll={(e) => {
+          // Cheap throttling — only update state when crossing the
+          // threshold so we don't re-render the table on every wheel tick.
+          const past = e.currentTarget.scrollTop > 800;
+          if (past !== showScrollTop) setShowScrollTop(past);
+        }}
         tabIndex={0}
       >
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
@@ -389,10 +403,17 @@ export default function DataTable({
                 // — if a row has both an error and a warn we render the
                 // error dot; tooltip carries the message regardless.
                 const flag = rowFlags && rowFlags[rowId];
+                // Row tint: errors get a faint red wash, warns a faint
+                // amber. Selection takes priority — a 30-row bulk-select
+                // shouldn't lose its highlight to inline validation.
+                let bgStyle;
+                if (isSelected) bgStyle = { background: "rgba(220,166,74,0.18)" };
+                else if (flag && flag.error) bgStyle = { background: "rgba(214,108,108,0.07)" };
+                else if (flag && flag.warn) bgStyle = { background: "rgba(220,166,74,0.06)" };
                 return (
                   <tr
                     key={`r${origIdx}`}
-                    style={isSelected ? { background: "rgba(220,166,74,0.18)" } : undefined}
+                    style={bgStyle}
                     onClick={(e) => {
                       // Selection only fires on modifier-click — plain click
                       // continues to enter cell-edit mode. Without this gate,
@@ -492,6 +513,21 @@ export default function DataTable({
             </tbody>
           )}
         </table>
+        {showScrollTop && (
+          <button
+            type="button"
+            onClick={() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }}
+            title="Scroll to top"
+            style={{
+              position: "sticky", bottom: 14, marginLeft: "auto", marginRight: 14,
+              float: "right", clear: "both",
+              width: 36, height: 36, borderRadius: 18,
+              background: "rgba(28,30,32,0.95)", color: "#dca64a",
+              border: "1px solid #3a3a3a", cursor: "pointer", fontSize: 16,
+              boxShadow: "0 4px 14px rgba(0,0,0,0.5)", zIndex: 50,
+            }}
+          >↑</button>
+        )}
       </div>
       {ctxMenu && createPortal(
         <div
@@ -521,6 +557,20 @@ export default function DataTable({
               onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
               onClick={() => { onInsertRowBelow(rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx); setCtxMenu(null); }}
             >Insert blank row below</div>
+          )}
+          {rowToJSON && (
+            <div
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#ddd" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={async () => {
+                const rowId = rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx;
+                const obj = rowToJSON(rowId);
+                if (obj == null) return;
+                try { await navigator.clipboard.writeText(JSON.stringify(obj, null, 2)); } catch {}
+                setCtxMenu(null);
+              }}
+            >Copy row as JSON</div>
           )}
           {rowMenuExtras && rowMenuExtras.map((item, i) => (
             <div
@@ -556,6 +606,10 @@ function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirs
   const btnRef = useRef(null);
   const popRef = useRef(null);
   const [pos, setPos] = useState(null);
+  // Search-within-columns. Tables with 50+ columns ("Engine Pri Proj"
+  // among Units' lot) made finding a specific column a scroll job;
+  // typing to filter narrows the list in place.
+  const [pickerQ, setPickerQ] = useState("");
 
   useLayoutEffect(() => {
     if (!open || !btnRef.current) return;
@@ -611,11 +665,21 @@ function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirs
             <span className="dim" style={{ margin: "0 6px" }}>·</span>
             <button type="button" className="link-btn" onClick={onHideAll}>hide all</button>
           </div>
+          <input
+            type="text"
+            value={pickerQ}
+            onChange={(e) => setPickerQ(e.target.value)}
+            placeholder="search columns…"
+            autoFocus
+            style={{ background: "#0e0e0e", color: "#ddd", border: "1px solid #3a3a3a", borderRadius: 4, padding: "4px 8px", margin: "4px 8px 0", fontFamily: "Consolas, monospace", fontSize: 11, outline: "none" }}
+          />
           <div className="dtable-cols-list">
             {columns.map((c, i) => {
               const isPinned = pinFirstColumn && i === 0;
               const checked = !hiddenCols.has(c);
               const label = (columnLabels && columnLabels[c]) || c;
+              const q = pickerQ.trim().toLowerCase();
+              if (q && !label.toLowerCase().includes(q) && !c.toLowerCase().includes(q)) return null;
               return (
                 <label
                   key={c}
