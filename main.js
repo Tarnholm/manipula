@@ -3,6 +3,7 @@ const { app, BrowserWindow, dialog, ipcMain, session, protocol } = require("elec
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 const { readEdumatic } = require("./xlsmReader");
 const { autoUpdater } = require("electron-updater");
 
@@ -1088,6 +1089,99 @@ ipcMain.handle("edm-log-message", async (_e, level, text) => {
 ipcMain.handle("edm-get-log-path", () => path.join(app.getPath("userData"), "edu-matic.log"));
 ipcMain.handle("edm-reveal-log-file", () => false);
 ipcMain.handle("edm-get-user-data-path", () => app.getPath("userData"));
+
+// ── Git wrappers ────────────────────────────────────────────────────
+//
+// Shell out to whatever `git` is on PATH. These are intentionally
+// minimal — Manipula is not trying to be a git client, it's giving
+// non-git teammates a one-click path through the common cases (pull
+// before editing, commit + push when done). For anything more
+// complicated (resolving a real merge, reviewing diffs, branch ops),
+// users open their normal git tool and Manipula stays out of the way.
+//
+// All handlers take the project dir as the working directory rather
+// than relying on the renderer's CWD. Output is captured and returned
+// verbatim so the renderer can show what git said in a toast or
+// status panel — no parsing on the renderer side beyond exit code.
+
+function runGit(cwd, args) {
+  return new Promise((resolve) => {
+    if (!cwd || !fs.existsSync(cwd)) {
+      resolve({ ok: false, code: -1, stdout: "", stderr: "project dir missing" });
+      return;
+    }
+    let stdout = "", stderr = "";
+    let proc;
+    try {
+      proc = spawn("git", args, { cwd, env: process.env, windowsHide: true });
+    } catch (e) {
+      resolve({ ok: false, code: -1, stdout: "", stderr: "spawn failed: " + e.message });
+      return;
+    }
+    proc.stdout.on("data", (b) => { stdout += b.toString(); });
+    proc.stderr.on("data", (b) => { stderr += b.toString(); });
+    proc.on("error", (err) => {
+      resolve({ ok: false, code: -1, stdout, stderr: stderr || err.message });
+    });
+    proc.on("close", (code) => {
+      resolve({ ok: code === 0, code, stdout, stderr });
+    });
+  });
+}
+
+// Probe: is git on PATH at all? Cached after the first call so the
+// renderer's status bar isn't spawning a process per render.
+let gitAvailable = null;
+ipcMain.handle("git-available", async () => {
+  if (gitAvailable !== null) return gitAvailable;
+  const r = await runGit(process.cwd(), ["--version"]);
+  gitAvailable = r.ok;
+  return gitAvailable;
+});
+
+// Status: returns enough for the UI to decide what to offer. Counts
+// dirty files, ahead/behind vs upstream, current branch.
+ipcMain.handle("git-status", async (_e, dir) => {
+  if (!dir) return { ok: false, stderr: "no project dir" };
+  const isRepo = await runGit(dir, ["rev-parse", "--is-inside-work-tree"]);
+  if (!isRepo.ok) return { ok: true, isRepo: false };
+  const branch = await runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const porcelain = await runGit(dir, ["status", "--porcelain"]);
+  // ahead/behind requires upstream to exist. If not, those are null.
+  const upstream = await runGit(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  let ahead = null, behind = null;
+  if (upstream.ok) {
+    const counts = await runGit(dir, ["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
+    if (counts.ok) {
+      const m = counts.stdout.trim().split(/\s+/).map(n => parseInt(n, 10));
+      if (m.length === 2 && m.every(Number.isFinite)) { ahead = m[0]; behind = m[1]; }
+    }
+  }
+  const dirtyLines = porcelain.stdout.split("\n").filter(l => l.trim() !== "");
+  return {
+    ok: true,
+    isRepo: true,
+    branch: branch.stdout.trim(),
+    upstream: upstream.ok ? upstream.stdout.trim() : null,
+    dirtyCount: dirtyLines.length,
+    ahead, behind,
+  };
+});
+
+ipcMain.handle("git-pull", async (_e, dir) => runGit(dir, ["pull", "--ff-only"]));
+ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
+ipcMain.handle("git-commit-all", async (_e, dir, message) => {
+  const add = await runGit(dir, ["add", "."]);
+  if (!add.ok) return add;
+  // Empty commit (nothing to add) returns non-zero from git commit. Treat
+  // "nothing to commit" as success-ish so the UI doesn't show a scary
+  // error when the user clicks commit on a clean tree.
+  const commit = await runGit(dir, ["commit", "-m", message || "Manipula update"]);
+  if (!commit.ok && /nothing to commit/i.test(commit.stdout + commit.stderr)) {
+    return { ok: true, code: 0, stdout: "nothing to commit", stderr: "" };
+  }
+  return commit;
+});
 
 // Unified bundle export: write both EDB (recruitment) and EDU (units) into the same
 // chosen folder atomically (well, sequentially — but inside one user dialog). Returns

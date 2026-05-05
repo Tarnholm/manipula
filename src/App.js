@@ -90,12 +90,17 @@ export default function App() {
         try {
           const { isProjectDir, loadProject } = await import("./projectStore");
           if (await isProjectDir(lastProject)) {
-            const { project } = await loadProject(lastProject);
+            const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(lastProject);
             if (cancelled) return;
-            setEduProject(project);
+            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) setEduProject(loadedEdu);
+            if (loadedUnits && loadedUnits.length) {
+              history.reset(loadedUnits.map(migrateV1));
+              if (api && api.writeUnits) api.writeUnits({ units: loadedUnits });
+            }
             setEduProjectSource(lastProject);
             setProjectDir(lastProject);
-            setStatus(`Loaded project — ${(project.units || []).length} units`);
+            setProjectExports(loadedExports || {});
+            setStatus(`Loaded project — ${(loadedUnits || []).length} recruit-lines · ${(loadedEdu?.units || []).length} EDU units`);
             return;
           }
         } catch (e) {
@@ -584,6 +589,11 @@ export default function App() {
   // working from a fresh xlsm import or empty state". Persisted to
   // localStorage so the tool reopens the last project on launch.
   const [projectDir, setProjectDir] = useState(null);
+  // Export hashes per file kind ("edb" / "edu") captured at last write-out.
+  // Used to detect "the game file changed under us since we last exported"
+  // and warn before clobbering external edits — the missing piece between
+  // round-trip and clean-break for hand-authored EDB tweaks.
+  const [projectExports, setProjectExports] = useState({});
   // EDU dirty state — flips on whenever the eduProject is mutated post-import (bulk
   // edit, stub creation, etc.). Cleared when the user exports or re-imports.
   const [eduDirty, setEduDirty] = useState(false);
@@ -770,6 +780,15 @@ export default function App() {
     if (r.edbPath) parts.push("EDB → " + r.edbPath);
     if (r.eduPath) parts.push("EDU → " + r.eduPath);
     setStatus("Exported · " + parts.join(" · "));
+    // Record export hashes so subsequent writes can warn on external edits.
+    try {
+      const { hashOfText } = await import("./projectStore");
+      setProjectExports(e => ({
+        ...e,
+        ...(edbText ? { edb: { hashAtExport: hashOfText(edbText), path: r.edbPath, exportedAt: new Date().toISOString() } } : {}),
+        ...(eduText ? { edu: { hashAtExport: hashOfText(eduText), path: r.eduPath, exportedAt: new Date().toISOString() } } : {}),
+      }));
+    } catch {}
     setEduDirty(false);
   };
 
@@ -778,10 +797,24 @@ export default function App() {
     if (!units.length) { alert("No units to write."); return; }
     const fresh = await api.readEDB();
     if (!fresh) { alert("Could not read EDB."); return; }
+    // Stale-export detection: if we exported EDB before, compare the live
+    // file's hash against the hash we recorded at export time. A mismatch
+    // means the EDB was edited externally (teammate ran the game,
+    // hand-authored a section, or pulled a newer commit) — we want the
+    // user to confirm before overwriting that work.
+    if (projectExports?.edb?.hashAtExport) {
+      const { hashOfText } = await import("./projectStore");
+      const liveHash = hashOfText(fresh);
+      if (liveHash !== projectExports.edb.hashAtExport) {
+        const ok = window.confirm(
+          "External changes detected: export_descr_buildings.txt has been modified " +
+          "since Manipula last wrote it. Continuing will overwrite those changes " +
+          "(a .bak is created either way).\n\nWrite back anyway?"
+        );
+        if (!ok) return;
+      }
+    }
     const d = diffEDB(fresh, units);
-    // Round-trip integrity check: dry-run the apply so we can warn in the diff modal if
-    // any expected line wouldn't actually appear in the resulting file (anchor heuristics
-    // sometimes drift on unusual EDB shapes). The check is cheap; surface it pre-confirm.
     let integrity = null;
     try {
       const proposed = applyUnitsToEDB(fresh, units);
@@ -794,7 +827,15 @@ export default function App() {
     if (!diff) return;
     const out = applyUnitsToEDB(diff.fresh, units);
     const r = await api.writeEDB(out);
-    if (r.ok) setStatus(`Wrote EDB. Backup: ${r.backup}`);
+    if (r.ok) {
+      setStatus(`Wrote EDB. Backup: ${r.backup}`);
+      // Record the hash of what we just wrote so the next write-back can
+      // detect external edits.
+      try {
+        const { hashOfText } = await import("./projectStore");
+        setProjectExports(e => ({ ...e, edb: { hashAtExport: hashOfText(out), exportedAt: new Date().toISOString() } }));
+      } catch {}
+    }
     else setStatus("Write failed: " + r.reason);
     setDiff(null);
   };
@@ -897,15 +938,18 @@ export default function App() {
         eduProject={eduProject}
         eduProjectSource={eduProjectSource}
         eduDirty={eduDirty}
+        projectDir={projectDir}
         unitsCount={units.length}
         units={units}
         theme={theme}
         onThemeToggle={() => setTheme(t => t === "sepia" ? "ink" : "sepia")}
         onSaveProject={async () => {
-          if (!eduProject) { toast("Nothing to save — import an xlsm or open a project first.", "error"); return; }
-          // Reuse the active project dir if there is one. Otherwise prompt
-          // for a folder. The picked dir is remembered so subsequent saves
-          // don't keep asking.
+          // Save bundles the EDU project AND the EDB recruit-line authoring
+          // units into the same project dir. Either side may be empty (a
+          // fresh project might just be authored recruit-lines, or just an
+          // xlsm-imported EDU side); we still write the sentinel so the
+          // dir is recognisable next time.
+          if (!eduProject && !units.length) { toast("Nothing to save — import an xlsm or set up some units first.", "error"); return; }
           let dir = projectDir;
           if (!dir) {
             if (!window.eduAPI?.chooseSaveDir) return;
@@ -916,7 +960,7 @@ export default function App() {
           }
           try {
             const { saveProject } = await import("./projectStore");
-            await saveProject(dir, eduProject);
+            await saveProject(dir, { eduProject, units, exports: projectExports });
             setEduDirty(false);
             toast(`Saved project → ${dir}`, "success");
           } catch (e) { toast("Save failed: " + e.message, "error"); }
@@ -932,13 +976,18 @@ export default function App() {
               return;
             }
             if (eduDirty && !window.confirm("You have unsaved changes. Open another project anyway?")) return;
-            const { project } = await loadProject(dir);
-            setEduProject(project);
+            const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(dir);
+            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) setEduProject(loadedEdu);
+            if (loadedUnits && loadedUnits.length) {
+              history.reset(loadedUnits.map(migrateV1));
+              if (api) await api.writeUnits({ units: loadedUnits });
+            }
             setEduProjectSource(dir);
             setProjectDir(dir);
+            setProjectExports(loadedExports || {});
             setEduDirty(false);
             localStorage.setItem("rt:projectDir", dir);
-            toast(`Loaded project — ${(project.units || []).length} units`, "success");
+            toast(`Loaded project — ${(loadedUnits || []).length} recruit-lines · ${(loadedEdu?.units || []).length} EDU units`, "success");
           } catch (e) { toast("Open failed: " + e.message, "error"); }
         }}
         onJumpToUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); setActiveTab("editor"); }}
@@ -1142,7 +1191,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1174,8 +1223,10 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onReload} disabled={loading} style={tbtn("#446")}>{loading ? "Loading…" : "Reload"}</button>
       <button onClick={onImport} style={tbtn("#665")}>Import from EDB</button>
       <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
-      <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — bundles units + EDU + map view into one .manipula file">Save project</button>
-      <button onClick={onOpenProject} style={tbtn("#465")} title="Open a saved Manipula project bundle">Open project</button>
+      <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)">Save project</button>
+      <button onClick={onOpenProject} style={tbtn("#465")} title="Open a Manipula project folder">Open project</button>
+      <SyncButton projectDir={projectDir} />
+
       <button onClick={onFindReplace} title="Bulk find/replace across all units' requires" style={tbtn("#564")}>Find/Replace…</button>
       <button
         onClick={onResetImportsToReferenceOnly}
@@ -1477,6 +1528,131 @@ function Tabs({ activeTab, onChange, validationSummary }) {
 
 function tbtn(color) {
   return { background: color, color: "#fff", border: "none", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 500 };
+}
+
+// SyncButton — small "Sync" entry in the topbar that wraps git pull /
+// commit / push for the active project dir. Designed for the team
+// member who doesn't want to learn git: one click pulls the latest,
+// one click commits everything dirty + pushes. Hidden when there's no
+// project dir, no git on PATH, or the dir isn't a git repo — Manipula
+// stays out of the way unless it can actually help. Real merges,
+// branch ops, history review etc. are out of scope; users open their
+// usual git tool for those.
+function SyncButton({ projectDir }) {
+  const api = window.eduAPI;
+  const [open, setOpen] = useState(false);
+  const [available, setAvailable] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState("");
+
+  const refresh = useCallback(async () => {
+    if (!projectDir || !api?.gitStatus) { setStatus(null); return; }
+    setStatus(await api.gitStatus(projectDir));
+  }, [projectDir, api]);
+
+  useEffect(() => {
+    if (!api?.gitAvailable) { setAvailable(false); return; }
+    let cancelled = false;
+    api.gitAvailable().then(v => { if (!cancelled) setAvailable(v); });
+    return () => { cancelled = true; };
+  }, [api]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (!projectDir || available === false) return null;
+
+  const dirty = status && status.isRepo && status.dirtyCount > 0;
+  const ahead = status && status.ahead;
+  const behind = status && status.behind;
+  const indicator = !status?.isRepo ? "no-git"
+    : dirty ? "dirty"
+    : (ahead && ahead > 0) ? "ahead"
+    : (behind && behind > 0) ? "behind"
+    : "clean";
+  const indicatorColour = {
+    "no-git": "#666",
+    dirty:   "#d66c6c",
+    ahead:   "#dca64a",
+    behind:  "#4f8fd6",
+    clean:   "#7c9",
+  }[indicator];
+  const indicatorLabel = {
+    "no-git": "Sync · not a git repo",
+    dirty:   `Sync · ${status.dirtyCount} dirty`,
+    ahead:   `Sync · ${ahead} to push`,
+    behind:  `Sync · ${behind} to pull`,
+    clean:   "Sync · up to date",
+  }[indicator];
+
+  const run = async (label, fn) => {
+    setBusy(true);
+    setLog(label + "…");
+    try {
+      const r = await fn();
+      const out = (r.stdout || "") + (r.stderr ? "\n" + r.stderr : "");
+      setLog(`${label} ${r.ok ? "✓" : "✗"}\n${out.trim() || "(no output)"}`);
+      await refresh();
+    } catch (e) {
+      setLog(`${label} ✗\n${e.message}`);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ ...tbtn("#465"), display: "inline-flex", alignItems: "center", gap: 6 }}
+        title={indicatorLabel}
+      >
+        <span style={{ width: 8, height: 8, borderRadius: 4, background: indicatorColour }} />
+        Sync
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", right: 0,
+            background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6,
+            padding: 12, minWidth: 320, zIndex: 1000, fontFamily: "Consolas, monospace",
+            fontSize: 11, color: "#bbb",
+          }}
+        >
+          {!status?.isRepo ? (
+            <div>
+              <div style={{ color: "#dca64a", fontWeight: 600, marginBottom: 4 }}>Project dir is not a git repo</div>
+              <div style={{ marginBottom: 6 }}>Initialise it with your usual git tool, or run <code>git init</code> in {projectDir}.</div>
+              <button onClick={refresh} style={tbtn("#3a4a5a")} disabled={busy}>Re-check</button>
+            </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 6, color: "#dca64a" }}>{status.branch}{status.upstream ? ` → ${status.upstream}` : " · no upstream"}</div>
+              <div style={{ marginBottom: 8 }}>
+                {status.dirtyCount} uncommitted file{status.dirtyCount === 1 ? "" : "s"}
+                {status.ahead != null ? ` · ${status.ahead} ahead, ${status.behind} behind` : ""}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                <button disabled={busy || behind === 0} onClick={() => run("Pull", () => api.gitPull(projectDir))} style={tbtn("#4f8fd6")} title="git pull --ff-only">Pull{behind ? ` (${behind})` : ""}</button>
+                <button disabled={busy || !dirty} onClick={async () => {
+                  const msg = window.prompt("Commit message:", "Manipula update");
+                  if (!msg) return;
+                  await run("Commit + push", async () => {
+                    const c = await api.gitCommitAll(projectDir, msg);
+                    if (!c.ok) return c;
+                    return await api.gitPush(projectDir);
+                  });
+                }} style={tbtn("#7c9")} title="git add . && git commit -m && git push">Commit + Push</button>
+                <button disabled={busy || (ahead === 0)} onClick={() => run("Push", () => api.gitPush(projectDir))} style={tbtn("#465")}>Push{ahead ? ` (${ahead})` : ""}</button>
+                <button disabled={busy} onClick={refresh} style={tbtn("#3a4a5a")}>Refresh</button>
+              </div>
+              {log && (
+                <pre style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, padding: 6, maxHeight: 160, overflow: "auto", fontSize: 10, color: "#ccc", whiteSpace: "pre-wrap", margin: 0 }}>{log}</pre>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 const ACCENT = "#dca64a";
 

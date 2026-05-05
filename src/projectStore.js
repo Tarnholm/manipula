@@ -90,17 +90,30 @@ function ensureApi() {
 }
 
 // ── save ────────────────────────────────────────────────────────────
+//
+// `bundle` is the unified Manipula project: the EDU compute-inputs side
+// (under bundle.eduProject) plus the EDB recruit-line authoring side
+// (under bundle.units). Loading returns the same shape so callers can
+// hand it off to the existing in-app state setters without translation.
+//
+// Optional `bundle.exports` carries the last-exported EDB/EDU hashes
+// (see hashOfExport in this module) so subsequent exports can detect
+// external edits to the game files and warn before clobbering them.
 
-async function saveProject(dir, project) {
+async function saveProject(dir, bundle) {
   const api = ensureApi();
-  if (!project || typeof project !== "object") throw new Error("saveProject: project must be an object");
+  if (!bundle || typeof bundle !== "object") throw new Error("saveProject: bundle must be an object");
+  const project = bundle.eduProject || {};
 
   // 1) Sentinel + meta. Always written first so a partial save still
-  //    leaves a recognisable project dir behind.
+  //    leaves a recognisable project dir behind. The exports block tracks
+  //    the hash of the EDB / EDU files at the time of last write-out so
+  //    the next export can warn before overwriting external edits.
   await api.writeProjectFile(dir, SENTINEL, stable({
     schemaVersion: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
     name: (project.modInfo && project.modInfo.name) || "",
+    exports: bundle.exports || {},
   }));
 
   // 2) Singleton EDU files.
@@ -120,7 +133,13 @@ async function saveProject(dir, project) {
   // 6) armour — one file per record.
   await writeArray(api, dir, "edu/armour", project.armour || [], "armour");
 
-  // 7) outputRows is a transient cache (byte-exact reproduction of the VBA
+  // 7) recruits — one file per EDB recruit-line authoring entry. This is
+  //    the data that previously lived in <userData>/profiles/<profile>.json
+  //    and was therefore unshareable; with it under the project dir,
+  //    teammates can pull the same authoring state via git.
+  await writeArray(api, dir, "recruits", bundle.units || [], "recruit");
+
+  // 8) outputRows is a transient cache (byte-exact reproduction of the VBA
   //    Output sheet) — store it separately so it can be skipped from git
   //    by users who don't want generated content tracked.
   if (project.outputRows) {
@@ -206,7 +225,10 @@ async function loadProject(dir) {
   const outputRaw = await api.readProjectFile(dir, "edu/outputRows.json");
   project.outputRows = outputRaw ? JSON.parse(outputRaw) : null;
 
-  return { meta, project };
+  // Recruit-line authoring units (EDB side).
+  const units = await readArray(api, dir, "recruits");
+
+  return { meta, eduProject: project, units, exports: meta.exports || {} };
 }
 
 async function readKeyed(api, dir, subdir) {
@@ -247,6 +269,25 @@ async function readArray(api, dir, subdir) {
   return out;
 }
 
+// ── export hashing ──────────────────────────────────────────────────
+//
+// Used by the EDB / EDU write-back paths to detect "the file changed
+// under us since we last exported" — the moral equivalent of a stale
+// optimistic-lock. djb2-style 53-bit hash is enough for change
+// detection; we don't need cryptographic strength here. Using a small
+// hand-rolled hash keeps this module browser-only with no Node crypto
+// dependency.
+
+function hashOfText(text) {
+  if (typeof text !== "string") text = String(text ?? "");
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  }
+  // Convert to unsigned 32-bit hex for stable on-disk representation.
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
 // ── recognition ─────────────────────────────────────────────────────
 
 // Cheap check: is the picked dir a Manipula project? Used by the open
@@ -259,4 +300,4 @@ async function isProjectDir(dir) {
   } catch { return false; }
 }
 
-export { saveProject, loadProject, isProjectDir, SCHEMA_VERSION };
+export { saveProject, loadProject, isProjectDir, hashOfText, SCHEMA_VERSION };
