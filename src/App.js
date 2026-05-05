@@ -703,12 +703,19 @@ export default function App() {
     undo: () => (activeTab === "edu" ? eduHistory.undo() : history.undo()),
     redo: () => (activeTab === "edu" ? eduHistory.redo() : history.redo()),
   });
+
+  // (loadProjectFromDir moved further down — its deps reference eduDirty
+  // and the project-state setters that are declared later in the function.
+  // Defined after every binding it reads so deps-array eval is safe.)
   const [eduView, setEduView] = useState("project"); // sub-view inside EDU Builder tab
   const [eduProjectSource, setEduProjectSource] = useState(null); // path of the xlsm last imported, for the topbar pill
   // Active Manipula project directory — null means "no project open yet,
   // working from a fresh xlsm import or empty state". Persisted to
   // localStorage so the tool reopens the last project on launch.
   const [projectDir, setProjectDir] = useState(null);
+  // Clone-from-GitHub modal state. null when closed; { url, parent, leaf,
+  // busy?, log? } when open. Lets teammates onboard without a terminal.
+  const [cloneModal, setCloneModal] = useState(null);
   // Snapshot of the EDU units at the last xlsm import, keyed by canonical
   // unit key (unit id || dictionary_tag || name). Used to drive the
   // "modified since last import" row marker in the Units table — at a
@@ -804,6 +811,41 @@ export default function App() {
     setToasts(t => [...t, { id, text, kind }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms);
   }, []);
+
+  // Shared "open this directory as a project" path — used by the Open
+  // Project picker AND by the Clone-from-GitHub flow once the clone
+  // finishes. Validates the sentinel, loads, sets all the surrounding
+  // state (eduHistory, units history, projectDir, projectExports,
+  // eduProjectSource), persists to localStorage, surfaces a toast.
+  // Lives here so it's positioned AFTER all state-setter declarations
+  // it reads (eduDirty et al) — moving it earlier hits the same
+  // useEffect-deps TDZ trap that produced the v0.25.5 marble window.
+  const loadProjectFromDir = useCallback(async (dir) => {
+    if (!dir) return false;
+    try {
+      const { isProjectDir, loadProject } = await import("./projectStore");
+      if (!(await isProjectDir(dir))) {
+        toast("Not a Manipula project folder (no manipula.project.json)", "error");
+        return false;
+      }
+      if (eduDirty && !window.confirm("You have unsaved changes. Open another project anyway?")) return false;
+      const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(dir);
+      if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) eduHistory.reset(loadedEdu);
+      if (loadedUnits && loadedUnits.length) {
+        history.reset(loadedUnits.map(migrateV1));
+        if (api) await api.writeUnits({ units: loadedUnits });
+      }
+      setEduProjectSource(dir);
+      setProjectDir(dir);
+      setProjectExports(loadedExports || {});
+      setEduDirty(false);
+      localStorage.setItem("rt:projectDir", dir);
+      toast(`Loaded project — ${(loadedUnits || []).length} recruit-lines · ${(loadedEdu?.units || []).length} EDU units`, "success");
+      return true;
+    } catch (e) { toast("Open failed: " + e.message, "error"); return false; }
+    // eslint-disable-next-line
+  }, [api, eduDirty, toast]);
+
   // Splash overlay — shown for SPLASH_MIN_MS (or until loadMod completes, whichever is later).
   // Mirrors Provincia's pattern: the user sees a polished cover instead of a blank, half-rendered
   // window while the parsers chew through ~10MB of mod text.
@@ -1253,27 +1295,9 @@ export default function App() {
           if (!window.eduAPI?.openProject) return;
           const dir = await window.eduAPI.openProject();
           if (!dir) return;
-          try {
-            const { isProjectDir, loadProject } = await import("./projectStore");
-            if (!(await isProjectDir(dir))) {
-              toast("Not a Manipula project folder (no manipula.project.json)", "error");
-              return;
-            }
-            if (eduDirty && !window.confirm("You have unsaved changes. Open another project anyway?")) return;
-            const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(dir);
-            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) eduHistory.reset(loadedEdu);
-            if (loadedUnits && loadedUnits.length) {
-              history.reset(loadedUnits.map(migrateV1));
-              if (api) await api.writeUnits({ units: loadedUnits });
-            }
-            setEduProjectSource(dir);
-            setProjectDir(dir);
-            setProjectExports(loadedExports || {});
-            setEduDirty(false);
-            localStorage.setItem("rt:projectDir", dir);
-            toast(`Loaded project — ${(loadedUnits || []).length} recruit-lines · ${(loadedEdu?.units || []).length} EDU units`, "success");
-          } catch (e) { toast("Open failed: " + e.message, "error"); }
+          await loadProjectFromDir(dir);
         }}
+        onCloneProject={() => setCloneModal({ url: "", parent: "", leaf: "ris-manipula" })}
         onJumpToUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); setActiveTab("editor"); }}
         onJumpToEdu={() => { setEduView("units"); setActiveTab("edu"); }}
         onFindReplace={() => setFindReplaceOpen(true)}
@@ -1344,6 +1368,14 @@ export default function App() {
             setEdbConflict(null);
             setDiff(buildWriteBackDiff(fresh));
           }}
+        />
+      )}
+      {cloneModal && (
+        <CloneRepoModal
+          state={cloneModal}
+          setState={setCloneModal}
+          onLoaded={loadProjectFromDir}
+          onClose={() => setCloneModal(null)}
         />
       )}
       {showBackups && (
@@ -1518,7 +1550,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1552,6 +1584,9 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
       <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)">Save project</button>
       <button onClick={onOpenProject} style={tbtn("#465")} title="Open a Manipula project folder">Open project</button>
+      {onCloneProject && (
+        <button onClick={onCloneProject} style={tbtn("#465")} title="Clone a Manipula project from a GitHub URL into a local folder">Clone from GitHub…</button>
+      )}
       <SyncButton
         projectDir={projectDir}
         saveTick={projectSaveTick}
@@ -2398,6 +2433,108 @@ function FindReplaceModal({ units, onApply, onClose }) {
             onClick={() => { const n = onApply({ find, replace }); onClose(); }}
             style={{ background: !find || preview.lineCount === 0 ? "rgba(220,166,74,0.2)" : "#dca64a", color: !find || preview.lineCount === 0 ? "#888" : "#1a1a1a", border: "none", padding: "8px 16px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: !find || preview.lineCount === 0 ? "default" : "pointer" }}
           >Replace {preview.lineCount} {preview.lineCount === 1 ? "line" : "lines"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Clone-from-GitHub modal — onboarding helper for teammates who don't
+// want to use a terminal. They paste a repo URL, pick a parent folder,
+// confirm the leaf name, and the app shells out to `git clone`. On
+// success we automatically load the cloned dir as the active project.
+// Auth is handled by whatever Git Credential Manager / GitHub Desktop
+// they have set up — same as any other git clone from their machine.
+function CloneRepoModal({ state, setState, onLoaded, onClose }) {
+  const { url, parent, leaf, busy, log } = state;
+  // Auto-fill the leaf folder name from the URL path's last segment so
+  // the user doesn't have to think about naming. Strips ".git" suffix.
+  const inferLeaf = (u) => {
+    if (!u) return "";
+    const m = u.match(/\/([^/?#]+?)(?:\.git)?(?:[?#].*)?$/);
+    return m ? m[1] : "";
+  };
+  const setUrl = (u) => {
+    const cur = state.leaf;
+    setState({ ...state, url: u, leaf: cur && cur !== inferLeaf(state.url) ? cur : inferLeaf(u) });
+  };
+  const pickParent = async () => {
+    if (!window.eduAPI?.chooseCloneParent) return;
+    const p = await window.eduAPI.chooseCloneParent();
+    if (p) setState({ ...state, parent: p });
+  };
+  const dest = parent && leaf ? `${parent.replace(/[\\/]+$/, "")}\\${leaf}` : "";
+  const startClone = async () => {
+    if (!window.eduAPI?.gitClone || !url || !parent || !leaf) return;
+    setState({ ...state, busy: true, log: `Cloning ${url}…` });
+    const r = await window.eduAPI.gitClone(url, dest);
+    const out = (r.stdout || "") + (r.stderr ? "\n" + r.stderr : "");
+    if (!r.ok) {
+      setState({ ...state, busy: false, log: `Clone failed:\n${out.trim() || (r.stderr || "?")}` });
+      return;
+    }
+    setState({ ...state, busy: false, log: `Cloned to ${dest}\n${out.trim()}\n\nOpening project…` });
+    const ok = await onLoaded(dest);
+    if (ok) onClose();
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 6000, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "rgba(28,30,32,0.98)", border: "1px solid rgba(220,166,74,0.35)", borderRadius: 10, padding: 24, maxWidth: 560, width: "90%", color: "#ddd", boxShadow: "0 12px 40px rgba(0,0,0,0.6)" }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#dca64a", marginBottom: 4 }}>Clone Manipula project from GitHub</div>
+        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 18, lineHeight: 1.5 }}>
+          Paste a repo URL, pick where on disk to put it, and click Clone. Auth uses whatever Git client (GitHub Desktop, Credential Manager, gh CLI) is already set up on this machine.
+        </div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Repo URL</span>
+          <input
+            className="input"
+            placeholder="https://github.com/Tarnholm/ris-manipula.git"
+            value={url}
+            autoFocus
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={busy}
+            style={{ flex: 1, minWidth: 280 }}
+          />
+        </div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Parent folder</span>
+          <input
+            className="input"
+            placeholder="C:\dev"
+            value={parent}
+            onChange={(e) => setState({ ...state, parent: e.target.value })}
+            disabled={busy}
+            style={{ flex: 1, minWidth: 200 }}
+          />
+          <button className="btn" onClick={pickParent} disabled={busy} style={{ marginLeft: 6 }}>Browse…</button>
+        </div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Folder name</span>
+          <input
+            className="input"
+            placeholder="ris-manipula"
+            value={leaf}
+            onChange={(e) => setState({ ...state, leaf: e.target.value })}
+            disabled={busy}
+            style={{ flex: 1, minWidth: 200 }}
+          />
+        </div>
+        {dest && (
+          <div className="field" style={{ alignItems: "center" }}>
+            <span>Destination</span>
+            <strong style={{ color: "#aaa", fontFamily: "Consolas, monospace", fontSize: 11, wordBreak: "break-all" }}>{dest}</strong>
+          </div>
+        )}
+        {log && (
+          <pre style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, padding: 8, marginTop: 12, maxHeight: 160, overflow: "auto", fontSize: 11, color: "#ccc", whiteSpace: "pre-wrap", lineHeight: 1.4 }}>{log}</pre>
+        )}
+        <div style={{ marginTop: 20, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button
+            className="btn btn-accent"
+            onClick={startClone}
+            disabled={busy || !url || !parent || !leaf}
+          >{busy ? "Cloning…" : "Clone & open"}</button>
         </div>
       </div>
     </div>

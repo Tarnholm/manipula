@@ -1068,6 +1068,15 @@ ipcMain.handle("edm-choose-save-dir", async () => {
   if (r.canceled || !r.filePaths[0]) return null;
   return r.filePaths[0];
 });
+// Pick the PARENT folder for a clone — git will create the leaf inside it.
+ipcMain.handle("edm-choose-clone-parent", async () => {
+  const r = await dialog.showOpenDialog({
+    title: "Choose where to clone the repo (parent folder)",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return r.filePaths[0];
+});
 ipcMain.handle("edm-read-project-file", async (_e, dir, name) => {
   try { return fs.readFileSync(path.join(dir, name), "utf8"); } catch { return null; }
 });
@@ -1324,6 +1333,24 @@ ipcMain.handle("git-status", async (_e, dir) => {
 
 ipcMain.handle("git-pull", async (_e, dir) => runGit(dir, ["pull", "--ff-only"]));
 ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
+// Clone a repo into a destination folder. The destination's PARENT must
+// exist; git will create the leaf folder. Used by the in-app "Clone
+// from GitHub" flow so teammates don't need a terminal — they paste a
+// repo URL, pick a parent folder, and the app does the rest.
+ipcMain.handle("git-clone", async (_e, url, dest) => {
+  if (!url || !dest) return { ok: false, code: -1, stdout: "", stderr: "missing args" };
+  try {
+    const parent = path.dirname(dest);
+    if (!fs.existsSync(parent)) return { ok: false, code: -1, stdout: "", stderr: "parent folder doesn't exist: " + parent };
+    if (fs.existsSync(dest)) return { ok: false, code: -1, stdout: "", stderr: "destination already exists: " + dest };
+  } catch (e) {
+    return { ok: false, code: -1, stdout: "", stderr: e.message };
+  }
+  // Run git clone with the parent as cwd. git creates the leaf folder.
+  const parent = path.dirname(dest);
+  const leaf = path.basename(dest);
+  return runGit(parent, ["clone", url, leaf]);
+});
 // git-fetch — used as part of the pre-save "is anyone ahead of me on the
 // remote?" check. We need to fetch first because git-status's behind/ahead
 // counts compare HEAD to the LOCAL view of the remote, which is only as
