@@ -566,6 +566,94 @@ function CoreDataScreen({ project, setProject }) {
 // where a default carries semantic meaning (Category, Quality,
 // Recruitment) are set; everything else stays empty so the user sees
 // the spec rows they need to fill in.
+// Starter armour configurations. Slot keys mirror the source-data
+// shape (Head1 / Torso1 / Shield) — picking a template fills those
+// in but leaves Type / Material as the most common values found in
+// existing rows. The user can refine each cell in the table after.
+const ARMOUR_TEMPLATES = [
+  {
+    key: "unarmoured",
+    label: "Unarmoured",
+    seed: {
+      Head1: { type: "", material: "", instances: 1 },
+      Torso1: { type: "", material: "", instances: 1 },
+      Shield: { size: "", material: "", instances: 0 },
+    },
+  },
+  {
+    key: "light_skirmisher",
+    label: "Light skirmisher (cap + light cloth)",
+    seed: {
+      Head1: { type: "Cap", material: "Bronze", instances: 1 },
+      Torso1: { type: "Long shirt + no sleeves", material: "Light cloth", instances: 1 },
+      Shield: { size: "", material: "", instances: 0 },
+    },
+  },
+  {
+    key: "medium_swordsman",
+    label: "Medium swordsman (open helmet + iron chain)",
+    seed: {
+      Head1: { type: "Open helmet", material: "Bronze", instances: 1 },
+      Torso1: { type: "Shirt + 1/4 sleeves", material: "Iron chain", instances: 1 },
+      Shield: { size: "3. medium", material: "Wood", instances: 1 },
+    },
+  },
+  {
+    key: "heavy_legionary",
+    label: "Heavy legionary (full helmet + breastplate)",
+    seed: {
+      Head1: { type: "Open helmet + eye/chkgd", material: "Iron", instances: 1 },
+      Torso1: { type: "Breastplate (full)", material: "Bronze", instances: 1 },
+      Shield: { size: "4. large", material: "Wood", instances: 1 },
+    },
+  },
+  {
+    key: "phalanx",
+    label: "Phalanx hoplite (open helmet + cuirass)",
+    seed: {
+      Head1: { type: "Open helmet + eye/chkgd", material: "Bronze", instances: 1 },
+      Torso1: { type: "Cuirass", material: "Bronze", instances: 1 },
+      Shield: { size: "5. extra large", material: "Wood + Bronze", instances: 1 },
+    },
+  },
+  {
+    key: "cataphract",
+    label: "Cataphract (full coverage)",
+    seed: {
+      Head1: { type: "Open helmet + eye/chkgd", material: "Iron", instances: 1 },
+      Torso1: { type: "Cuirass + flaps", material: "Iron chain", instances: 1 },
+      Shield: { size: "", material: "", instances: 0 },
+    },
+  },
+];
+
+// Starter mercenary unit rows. Each fills the columns the merc table
+// edits — refUnitId / unitId stay blank for the user to pick from
+// their EDU project. Multipliers and pool-size defaults mirror what
+// EDUMatic ships with.
+const MERC_TEMPLATES = [
+  {
+    key: "skirmisher",
+    label: "Light skirmisher",
+    seed: { kind: "unit", unitId: "", refUnitId: "", exp: 0, replenishMin: 0.05, replenishMax: 0.15, maxInPool: 2, initial: 1 },
+  },
+  {
+    key: "infantry",
+    label: "Standard infantry",
+    seed: { kind: "unit", unitId: "", refUnitId: "", exp: 0, replenishMin: 0.05, replenishMax: 0.10, maxInPool: 2, initial: 1 },
+  },
+  {
+    key: "elite_infantry",
+    label: "Elite infantry",
+    seed: { kind: "unit", unitId: "", refUnitId: "", exp: 0, replenishMin: 0.03, replenishMax: 0.07, maxInPool: 1, initial: 0 },
+  },
+  {
+    key: "cavalry",
+    label: "Cavalry",
+    seed: { kind: "unit", unitId: "", refUnitId: "", exp: 0, replenishMin: 0.04, replenishMax: 0.08, maxInPool: 1, initial: 0 },
+  },
+];
+
 const UNIT_TEMPLATES = [
   {
     key: "light_infantry",
@@ -1646,6 +1734,7 @@ function CostPreviewPane({ project, selectedIdxs }) {
 }
 
 function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
+  const [tplPickerOpen, setTplPickerOpen] = useState(false);
   // Same Rules-of-Hooks fix as UnitsScreen — shadow `project` with a
   // safe fallback so all hooks below run on every render regardless of
   // whether the prop is loaded yet. Real EmptyScreen render at the
@@ -1868,6 +1957,15 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     nextRows[idx] = next;
     setProject({ ...project, armour: nextRows });
   }, [rows, project, setProject]);
+  const addArmourFromTemplate = useCallback((tplKey) => {
+    const tpl = ARMOUR_TEMPLATES.find(t => t.key === tplKey);
+    if (!tpl) return;
+    // New armour rows go at the TOP of the project so the user sees
+    // them on add (mirrors the Units flow). The "Model Set Name" stays
+    // blank — the user fills it in to attach the row to a unit.
+    const seed = { row: 0, "Model Set Name": "", ...JSON.parse(JSON.stringify(tpl.seed)) };
+    setProject({ ...project, armour: [seed, ...rows] });
+  }, [rows, project, setProject]);
   const moveArmour = useCallback((idx, dir) => {
     if (typeof idx !== "number" || idx < 0) return;
     const target = dir === "up" ? idx - 1 : idx + 1;
@@ -1958,6 +2056,37 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
   return (
     <div className="screen">
       <h2>Armour Models <span className="dim">({rows.length})</span></h2>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <span style={{ flex: 1 }} />
+        <button
+          className="btn"
+          onClick={() => insertArmourSectionHeader(null, "above")}
+          title="Insert a section header line at the top of the table (e.g. LATE REPUBLICAN ROMANS). For mid-list placement, right-click any row → Insert section header above/below."
+        >+ Section header</button>
+        <div style={{ position: "relative" }}>
+          <button
+            className="btn"
+            onClick={() => setTplPickerOpen(o => !o)}
+            title="Insert a new armour set pre-populated from a template"
+          >+ New from template ▾</button>
+          {tplPickerOpen && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={() => setTplPickerOpen(false)} />
+              <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6, padding: 4, minWidth: 280, zIndex: 1000, boxShadow: "0 8px 24px rgba(0,0,0,0.6)" }}>
+                {ARMOUR_TEMPLATES.map(t => (
+                  <div
+                    key={t.key}
+                    style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#ddd", fontSize: 12 }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    onClick={() => { addArmourFromTemplate(t.key); setTplPickerOpen(false); }}
+                  >{t.label}</div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
       <DataTable
         columns={cols}
         rows={tableRows}
@@ -2002,6 +2131,7 @@ const MERC_COLS = ["unitId", "exp", "cost", "replenishMin", "replenishMax", "max
 
 function MercScreen({ project: rawProject, setProject, modDataDir }) {
   const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], merc: [], modInfo: {} };
+  const [mercTplPickerOpen, setMercTplPickerOpen] = useState(false);
   const rows = useMemo(() => project.merc || [], [project.merc]);
   const [filterPool, setFilterPool] = useState("");
 
@@ -2102,6 +2232,32 @@ function MercScreen({ project: rawProject, setProject, modDataDir }) {
     }
     if (lastPoolEnd >= 0) arr.splice(lastPoolEnd, 0, blank);
     else arr.unshift(blank);
+    setProject({ ...project, merc: arr });
+  }, [rows, project, setProject]);
+  const addMercFromTemplate = useCallback((tplKey) => {
+    const tpl = MERC_TEMPLATES.find(t => t.key === tplKey);
+    if (!tpl) return;
+    const seed = { row: 0, ...JSON.parse(JSON.stringify(tpl.seed)) };
+    const arr = rows.slice();
+    let lastPoolEnd = -1;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i] && arr[i].kind === "unit") { lastPoolEnd = i + 1; break; }
+    }
+    if (lastPoolEnd >= 0) arr.splice(lastPoolEnd, 0, seed);
+    else arr.unshift(seed);
+    setProject({ ...project, merc: arr });
+  }, [rows, project, setProject]);
+  // "Section headers" in descr_mercenaries are pools — name + regions
+  // pair sit above each block of unit rows. Prompt for both, append to
+  // the end of the merc array (with a leading blank for separation).
+  const insertMercPool = useCallback(() => {
+    const name = (window.prompt("New pool name (e.g. eastern_mercs):", "") || "").trim();
+    if (!name) return;
+    const regions = (window.prompt(`Space-separated regions for pool "${name}" (leave blank to fill in later):`, "") || "").trim();
+    const arr = rows.slice();
+    if (arr.length && arr[arr.length - 1] && arr[arr.length - 1].kind !== "blank") arr.push({ kind: "blank" });
+    arr.push({ kind: "pool", name });
+    arr.push({ kind: "regions", list: regions });
     setProject({ ...project, merc: arr });
   }, [rows, project, setProject]);
   const duplicateMerc = useCallback((idx) => {
@@ -2326,6 +2482,35 @@ function MercScreen({ project: rawProject, setProject, modDataDir }) {
             } catch (e) { (window.toast || alert)("Write failed: " + e.message, "error"); }
           }}
         >Write to descr_mercenaries.txt…</button>
+        <span style={{ flex: 1 }} />
+        <button
+          className="btn"
+          onClick={insertMercPool}
+          title="Add a new mercenary pool — prompts for the pool name and regions list, appends a new pool block at the end of the merc array."
+        >+ Pool / section header</button>
+        <div style={{ position: "relative" }}>
+          <button
+            className="btn"
+            onClick={() => setMercTplPickerOpen(o => !o)}
+            title="Insert a new merc unit row pre-populated from a template"
+          >+ New from template ▾</button>
+          {mercTplPickerOpen && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={() => setMercTplPickerOpen(false)} />
+              <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6, padding: 4, minWidth: 220, zIndex: 1000, boxShadow: "0 8px 24px rgba(0,0,0,0.6)" }}>
+                {MERC_TEMPLATES.map(t => (
+                  <div
+                    key={t.key}
+                    style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#ddd", fontSize: 12 }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    onClick={() => { addMercFromTemplate(t.key); setMercTplPickerOpen(false); }}
+                  >{t.label}</div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         {mercDiff && mercDiff.error && <span style={{ color: "#d66c6c", fontSize: 11 }}>{mercDiff.error}</span>}
         {mercDiff && mercDiff.ok && (
           <span style={{ fontSize: 11, color: (mercDiff.pools.length + mercDiff.regions.length + mercDiff.units.length) === 0 ? "#7c9" : "#dca64a" }}>
