@@ -1,6 +1,28 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef, Component } from "react";
 import { createPortal } from "react-dom";
 
+// Global error trap. The AppErrorBoundary only catches errors thrown
+// during render; this picks up everything else (uncaught exceptions
+// in event handlers, unhandled promise rejections from async useEffects,
+// resource-load failures) and pipes them to the persistent log so we
+// can diagnose white-marble crashes that happen before the boundary
+// gets a chance to mount.
+if (typeof window !== "undefined" && !window.__manipulaErrorTrap) {
+  window.__manipulaErrorTrap = true;
+  const log = (kind, msg) => {
+    try {
+      if (window.eduAPI?.logMessage) window.eduAPI.logMessage("error", `[${kind}] ${msg}`);
+    } catch {}
+  };
+  window.addEventListener("error", (e) => {
+    log("window.error", (e.error && e.error.stack) || e.message || String(e));
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason;
+    log("unhandledrejection", (r && r.stack) || (r && r.message) || String(r));
+  });
+}
+
 // Error boundary so a crash in the editor pane (e.g. a Hook order bug) doesn't blank the
 // whole app — it shows a recoverable error message + stack trace instead.
 class EditorErrorBoundary extends Component {
@@ -31,7 +53,20 @@ class EditorErrorBoundary extends Component {
 class AppErrorBoundary extends Component {
   constructor(p) { super(p); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) { console.error("[app]", error, info); }
+  componentDidCatch(error, info) {
+    console.error("[app]", error, info);
+    // Tee the failure into the persistent edu-matic.log so the user can
+    // send the stack from a fresh boot even when DevTools won't open.
+    try {
+      if (window.eduAPI?.logMessage) {
+        const stack = (error && error.stack) || String(error);
+        window.eduAPI.logMessage("error",
+          "AppErrorBoundary: " + stack +
+          (info && info.componentStack ? "\nComponent stack:" + info.componentStack : "")
+        );
+      }
+    } catch {}
+  }
   render() {
     if (!this.state.error) return this.props.children;
     const msg = String(this.state.error.message || this.state.error);
