@@ -894,6 +894,29 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     [next[unitIdx], next[target]] = [next[target], next[unitIdx]];
     setProject({ ...project, units: next });
   }, [project, setProject]);
+  // Drag-and-drop multi-row reorder. srcIds + targetId are indices into
+  // project.units (DataTable passes raw rowIds back unchanged). Position
+  // is "above" or "below" relative to the target. Preserves the relative
+  // order of dragged rows; section/comment markers stay where they are.
+  const onMoveRowsUnits = useCallback((srcIds, targetId, position) => {
+    if (!Array.isArray(srcIds) || srcIds.length === 0) return;
+    const arr = project.units;
+    const srcSet = new Set(srcIds);
+    if (srcSet.has(targetId)) return;
+    // Preserve original relative order of moved rows.
+    const moved = srcIds.slice().sort((a, b) => a - b).map((i) => arr[i]).filter(Boolean);
+    const filtered = [];
+    let targetPos = -1;
+    for (let i = 0; i < arr.length; i++) {
+      if (srcSet.has(i)) continue;
+      if (i === targetId) targetPos = filtered.length;
+      filtered.push(arr[i]);
+    }
+    if (targetPos < 0) return;
+    const insertAt = position === "above" ? targetPos : targetPos + 1;
+    filtered.splice(insertAt, 0, ...moved);
+    setProject({ ...project, units: filtered });
+  }, [project, setProject]);
   const deleteUnit = useCallback((unitIdx) => {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
     const nextUnits = project.units.slice();
@@ -1235,6 +1258,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         onDuplicateRow={duplicateUnit}
         onInsertRowBelow={insertBlankUnitBelow}
         onDeleteRow={deleteUnit}
+        onMoveRows={onMoveRowsUnits}
         addRowLabel="+ New unit"
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
@@ -1655,6 +1679,23 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     [next[idx], next[target]] = [next[target], next[idx]];
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
+  const onMoveRowsArmour = useCallback((srcIds, targetId, position) => {
+    if (!Array.isArray(srcIds) || srcIds.length === 0) return;
+    const srcSet = new Set(srcIds);
+    if (srcSet.has(targetId)) return;
+    const moved = srcIds.slice().sort((a, b) => a - b).map((i) => rows[i]).filter(Boolean);
+    const filtered = [];
+    let targetPos = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (srcSet.has(i)) continue;
+      if (i === targetId) targetPos = filtered.length;
+      filtered.push(rows[i]);
+    }
+    if (targetPos < 0) return;
+    const insertAt = position === "above" ? targetPos : targetPos + 1;
+    filtered.splice(insertAt, 0, ...moved);
+    setProject({ ...project, armour: filtered });
+  }, [rows, project, setProject]);
   const deleteArmour = useCallback((idx) => {
     if (typeof idx !== "number" || idx < 0) return;
     const next = rows.slice(); next.splice(idx, 1);
@@ -1735,6 +1776,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         onDuplicateRow={duplicateArmour}
         onInsertRowBelow={insertBlankArmourBelow}
         onDeleteRow={deleteArmour}
+        onMoveRows={onMoveRowsArmour}
         addRowLabel="+ New armour set"
         searchPersistKey="edu-armour"
         rowFlags={rowFlags}

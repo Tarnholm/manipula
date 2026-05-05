@@ -93,6 +93,13 @@ export default function DataTable({
   // with the matching rowIds and the chosen replacement.
   findReplace = false,
   onReplaceAll = null,        // (rowIds[], find, replace) => void
+  // Drag-and-drop reorder. When provided, every data row is draggable;
+  // dragging a selected row moves the entire current selection (so the
+  // user can grab a whole "Polybian Romans" group and drop it under
+  // "Late Republicans"). Args: (srcRowIds[], targetRowId, position) where
+  // position is "above" | "below" relative to the target. Section /
+  // separator rows are not draggable but ARE valid drop targets.
+  onMoveRows = null,
 }) {
   const [q, setQ] = useState(() => {
     if (!searchPersistKey) return "";
@@ -225,6 +232,12 @@ export default function DataTable({
   // survives table re-renders / search filtering. Click a row to select
   // (replace), shift-click to range-select, ctrl/cmd-click to toggle.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Drag state for reorder: dragSrcIds is the set of rowIds being moved
+  // (singleton for single-row drag, the whole selection for multi-drag);
+  // dropTarget is the hovered row's { rowId, position } where position
+  // is "above" | "below". Cleared on dragend.
+  const [dragSrcIds, setDragSrcIds] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
   const lastClickedRowIdRef = useRef(null);
 
   // Find/Replace state. Replace is only revealed when findReplace prop is on.
@@ -486,10 +499,52 @@ export default function DataTable({
                 if (isSelected) bgStyle = { background: "rgba(220,166,74,0.18)" };
                 else if (flag && flag.error) bgStyle = { background: "rgba(214,108,108,0.07)" };
                 else if (flag && flag.warn) bgStyle = { background: "rgba(220,166,74,0.06)" };
+                // Drop indicator above/below this row when it's the
+                // hovered drop target during a drag operation.
+                const showDropAbove = dropTarget && dropTarget.rowId === rowId && dropTarget.position === "above";
+                const showDropBelow = dropTarget && dropTarget.rowId === rowId && dropTarget.position === "below";
+                const isBeingDragged = dragSrcIds && dragSrcIds.has(rowId);
+                if (showDropAbove || showDropBelow) {
+                  bgStyle = { ...(bgStyle || {}), boxShadow: showDropAbove ? "inset 0 2px 0 #dca64a" : "inset 0 -2px 0 #dca64a" };
+                }
+                if (isBeingDragged) {
+                  bgStyle = { ...(bgStyle || {}), opacity: 0.4 };
+                }
                 return (
                   <tr
                     key={`r${origIdx}`}
                     style={bgStyle}
+                    draggable={!!onMoveRows}
+                    onDragStart={onMoveRows ? (e) => {
+                      // If the dragged row is part of the current
+                      // selection, move the whole selection. Otherwise
+                      // move just this row.
+                      const ids = (selectedIds.has(rowId) && selectedIds.size > 1)
+                        ? new Set(selectedIds)
+                        : new Set([rowId]);
+                      setDragSrcIds(ids);
+                      e.dataTransfer.effectAllowed = "move";
+                      try { e.dataTransfer.setData("text/plain", String(rowId)); } catch {}
+                    } : undefined}
+                    onDragOver={onMoveRows ? (e) => {
+                      if (!dragSrcIds) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      const r = e.currentTarget.getBoundingClientRect();
+                      const position = (e.clientY - r.top) < r.height / 2 ? "above" : "below";
+                      setDropTarget((cur) => (cur && cur.rowId === rowId && cur.position === position) ? cur : { rowId, position });
+                    } : undefined}
+                    onDrop={onMoveRows ? (e) => {
+                      e.preventDefault();
+                      const src = dragSrcIds;
+                      const tgt = dropTarget;
+                      setDragSrcIds(null); setDropTarget(null);
+                      if (!src || src.size === 0) return;
+                      // Don't drop onto self.
+                      if (src.has(rowId) && src.size === 1) return;
+                      onMoveRows([...src], rowId, tgt ? tgt.position : "below");
+                    } : undefined}
+                    onDragEnd={onMoveRows ? () => { setDragSrcIds(null); setDropTarget(null); } : undefined}
                     onClick={(e) => {
                       // Selection only fires on modifier-click — plain click
                       // continues to enter cell-edit mode. Without this gate,
