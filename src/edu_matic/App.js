@@ -409,6 +409,21 @@ function CoreDataScreen({ project, setProject }) {
     setProject({ ...project, coreData: { ...tables, [active]: next } });
   }, [unlocked, tables, active, project, setProject]);
 
+  // Add a brand-new core data table. Used when a teammate needs a
+  // category set the xlsm didn't ship with — e.g. a new specialMounts
+  // row. Tables are arrays of objects keyed by column name; we seed
+  // the new one as an empty array so the user can add rows.
+  const addNewTable = useCallback(() => {
+    if (!unlocked) { window.alert("Unlock core-data editing first."); return; }
+    const name = window.prompt("New table name (lowercase camelCase, e.g. 'specialFormations'):", "");
+    if (!name) return;
+    const safe = name.trim();
+    if (!safe) return;
+    if (tables[safe]) { window.alert(`Table "${safe}" already exists.`); return; }
+    setProject({ ...project, coreData: { ...tables, [safe]: [] } });
+    setActive(safe);
+  }, [unlocked, tables, project, setProject]);
+
   // Now that all hooks have been called we can early-return safely.
   if (!project) return <EmptyScreen />;
   if (!active) return <div className="screen"><h2>Core Data</h2><p>No tables.</p></div>;
@@ -463,11 +478,20 @@ function CoreDataScreen({ project, setProject }) {
             <span className="tab-count"> ({tables[n].length})</span>
           </button>
         ))}
+        {unlocked && (
+          <button
+            className="tab"
+            onClick={addNewTable}
+            style={{ color: "#7c9", borderStyle: "dashed" }}
+            title="Add a new core-data table"
+          >+ table</button>
+        )}
       </div>
       <DataTable
         columns={columns}
         rows={rows.map((r) => columns.map((c) => r[c]))}
         rowIds={rows.map((_, i) => i)}
+        searchPersistKey={`edu-coredata-${active}`}
         onEdit={onEdit}
         editable={unlocked}
         maxHeight="65vh"
@@ -477,16 +501,7 @@ function CoreDataScreen({ project, setProject }) {
         onDeleteRow={unlocked ? deleteRow : null}
         addRowLabel="+ New row"
         bulkActions={unlocked ? [
-          {
-            label: "Set field on selected…",
-            onClick: (rowIdxs) => {
-              const col = window.prompt("Field name to set on the selected rows:", columns[0] || "");
-              if (!col) return;
-              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
-              if (val === null) return;
-              bulkSetCoreData(rowIdxs, col, val);
-            },
-          },
+          { label: "Set field on selected…", setField: { onApply: bulkSetCoreData } },
           { label: "Duplicate selected", onClick: bulkDuplicateCoreData },
           { label: "Delete selected", destructive: true, onClick: bulkDeleteCoreData },
         ] : null}
@@ -1192,6 +1207,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         onInsertRowBelow={insertBlankUnitBelow}
         onDeleteRow={deleteUnit}
         addRowLabel="+ New unit"
+        searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
         rowMenuExtras={[
           ...(modDataDir ? [{
@@ -1211,15 +1227,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         bulkActions={[
           {
             label: "Set field on selected…",
-            onClick: (rowIds) => {
-              const col = window.prompt("Field name to set on the selected units:", bulkColumn || "Category");
-              if (!col) return;
-              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
-              if (val === null) return;
-              setBulkColumn(col);
-              setBulkValue(val);
-              applyBulk(rowIds, col, val);
-            },
+            setField: { onApply: (rowIds, col, val) => { setBulkColumn(col); setBulkValue(val); applyBulk(rowIds, col, val); } },
           },
           {
             label: "Duplicate selected",
@@ -1663,19 +1671,11 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         onInsertRowBelow={insertBlankArmourBelow}
         onDeleteRow={deleteArmour}
         addRowLabel="+ New armour set"
+        searchPersistKey="edu-armour"
         rowFlags={rowFlags}
         rowToJSON={(idx) => rows[idx] || null}
         bulkActions={[
-          {
-            label: "Set field on selected…",
-            onClick: (rowIdxs) => {
-              const col = window.prompt("Field/column name (use 'arm:<slot>:type' or 'arm:<slot>:material' for body-slot fields):", "Model Set Name");
-              if (!col) return;
-              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
-              if (val === null) return;
-              bulkSetArmour(rowIdxs, col, val);
-            },
-          },
+          { label: "Set field on selected…", setField: { onApply: bulkSetArmour } },
           { label: "Duplicate selected", onClick: bulkDuplicateArmour },
           { label: "Delete selected", destructive: true, onClick: bulkDeleteArmour },
         ]}
@@ -1693,6 +1693,7 @@ const MERC_COLS = ["unitId", "exp", "cost", "replenishMin", "replenishMax", "max
 function MercScreen({ project: rawProject, setProject }) {
   const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], merc: [], modInfo: {} };
   const rows = useMemo(() => project.merc || [], [project.merc]);
+  const [filterPool, setFilterPool] = useState("");
 
   // Dropdown options for unitId / refUnitId — pulled from the EDU project's
   // own units. This is what stops typos: pick from the existing list rather
@@ -1732,12 +1733,15 @@ function MercScreen({ project: rawProject, setProject }) {
   // merc belongs to without scrolling up).
   const { rows: tableRows, rowIds } = useMemo(() => {
     const out = []; const ids = [];
+    let activePool = null;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       if (!r) continue;
-      if (r.kind === "blank") continue;       // collapse blank separators; section breaks do this visually
-      if (r.kind === "regions") continue;     // absorbed into the preceding pool's section label
+      if (r.kind === "blank") continue;
+      if (r.kind === "regions") continue;
       if (r.kind === "pool") {
+        activePool = r.name || "";
+        if (filterPool && activePool !== filterPool) continue;
         const next = rows[i + 1];
         const regions = (next && next.kind === "regions") ? next.list : "";
         const label = regions ? `${r.name || "(unnamed pool)"} — ${regions}` : (r.name || "(unnamed pool)");
@@ -1746,12 +1750,13 @@ function MercScreen({ project: rawProject, setProject }) {
         continue;
       }
       if (r.kind === "unit") {
+        if (filterPool && activePool !== filterPool) continue;
         out.push(MERC_COLS.map((c) => r[c]));
         ids.push(i);
       }
     }
     return { rows: out, rowIds: ids };
-  }, [rows]);
+  }, [rows, filterPool]);
 
   const onEdit = useCallback((rowIdx, columnKey, newValue) => {
     if (typeof rowIdx !== "number" || rowIdx < 0) return;
@@ -1845,11 +1850,120 @@ function MercScreen({ project: rawProject, setProject }) {
     setProject({ ...project, merc: next });
   }, [rows, project, setProject]);
 
+  // Pool management. Mercs are organized into pools (each pool has a
+  // name + regions list) with units underneath. We expose rename / edit
+  // regions / add new pool / delete pool here, since those are sectioned
+  // structures the DataTable doesn't surface.
+  const pools = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r && r.kind === "pool") {
+        const next = rows[i + 1];
+        const regions = next && next.kind === "regions" ? next.list : "";
+        out.push({ idx: i, name: r.name || "", regions, regionsIdx: next && next.kind === "regions" ? i + 1 : -1 });
+      }
+    }
+    return out;
+  }, [rows]);
+
+  const renamePool = useCallback((poolIdx, newName) => {
+    const next = rows.slice();
+    next[poolIdx] = { ...next[poolIdx], name: newName };
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+
+  const setPoolRegions = useCallback((poolIdx, regionsIdx, list) => {
+    const next = rows.slice();
+    if (regionsIdx >= 0) {
+      next[regionsIdx] = { ...next[regionsIdx], list };
+    } else {
+      // No regions row yet — insert one immediately after the pool row.
+      next.splice(poolIdx + 1, 0, { row: 0, kind: "regions", list });
+    }
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+
+  const addNewPool = useCallback(() => {
+    const name = window.prompt("Pool name (e.g. 'italy', 'gaul'):", "");
+    if (!name) return;
+    const regions = window.prompt(`Regions for "${name}" (space-separated):`, "");
+    if (regions == null) return;
+    // Append at the end of the merc array. New pool starts with a blank
+    // separator before it for visual hygiene if there's content.
+    const next = rows.slice();
+    if (next.length) next.push({ row: 0, kind: "blank" });
+    next.push({ row: 0, kind: "pool", name });
+    next.push({ row: 0, kind: "regions", list: regions });
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+
+  const deletePool = useCallback((poolIdx) => {
+    const pool = rows[poolIdx];
+    if (!pool || pool.kind !== "pool") return;
+    if (!window.confirm(`Delete pool "${pool.name}" and all its units?`)) return;
+    // Find the end of this pool (next pool / end of array).
+    let end = rows.length;
+    for (let i = poolIdx + 1; i < rows.length; i++) {
+      if (rows[i] && rows[i].kind === "pool") { end = i; break; }
+    }
+    // Strip a trailing blank if the slice ended on one (avoid double-blanks).
+    if (end < rows.length && rows[end - 1] && rows[end - 1].kind === "blank") end -= 1;
+    // Strip a leading blank above the pool (so we don't leave one floating).
+    let start = poolIdx;
+    if (start > 0 && rows[start - 1] && rows[start - 1].kind === "blank") start -= 1;
+    const next = rows.slice(0, start).concat(rows.slice(end));
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+
   if (!rawProject) return <EmptyScreen />;
 
   return (
     <div className="screen">
-      <h2>Mercenaries <span className="dim">({rows.filter(r => r && r.kind === "unit").length} units across {rows.filter(r => r && r.kind === "pool").length} pools)</span></h2>
+      <h2>Mercenaries <span className="dim">({rows.filter(r => r && r.kind === "unit").length} units across {pools.length} pools)</span></h2>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#999" }}>Filter pool:</span>
+        <select
+          value={filterPool}
+          onChange={(e) => setFilterPool(e.target.value)}
+          className="input"
+          style={{ minWidth: 140 }}
+        >
+          <option value="">— any pool —</option>
+          {pools.map(p => <option key={p.idx} value={p.name}>{p.name || "(unnamed)"}</option>)}
+        </select>
+        {filterPool && (
+          <button className="btn" onClick={() => setFilterPool("")}>clear</button>
+        )}
+      </div>
+      <details className="card" style={{ marginBottom: 12 }}>
+        <summary style={{ cursor: "pointer", color: "#dca64a", fontWeight: 600 }}>
+          Manage pools ({pools.length})
+        </summary>
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {pools.map((p, i) => (
+            <div key={p.idx} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: 6, background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 4 }}>
+              <span style={{ color: "#888", fontSize: 11, minWidth: 24, textAlign: "right" }}>{i + 1}.</span>
+              <input
+                className="input"
+                value={p.name}
+                onChange={(e) => renamePool(p.idx, e.target.value)}
+                placeholder="pool name"
+                style={{ minWidth: 140 }}
+              />
+              <input
+                className="input"
+                value={p.regions}
+                onChange={(e) => setPoolRegions(p.idx, p.regionsIdx, e.target.value)}
+                placeholder="space-separated regions list"
+                style={{ flex: 1, minWidth: 240, fontFamily: "Consolas, monospace", fontSize: 11 }}
+              />
+              <button className="btn" style={{ borderColor: "#d66c6c", color: "#d66c6c" }} onClick={() => deletePool(p.idx)}>Delete</button>
+            </div>
+          ))}
+          <button className="btn btn-accent" onClick={addNewPool} style={{ alignSelf: "flex-start", marginTop: 6 }}>+ New pool</button>
+        </div>
+      </details>
       <DataTable
         columns={MERC_COLS}
         rows={tableRows}
@@ -1866,18 +1980,10 @@ function MercScreen({ project: rawProject, setProject }) {
         onInsertRowBelow={insertBlankMercBelow}
         onDeleteRow={deleteMerc}
         addRowLabel="+ New merc unit"
+        searchPersistKey="edu-merc"
         rowToJSON={(idx) => rows[idx] || null}
         bulkActions={[
-          {
-            label: "Set field on selected…",
-            onClick: (rowIdxs) => {
-              const col = window.prompt("Field name to set on the selected mercs:", "exp");
-              if (!col) return;
-              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
-              if (val === null) return;
-              bulkSetMerc(rowIdxs, col, val);
-            },
-          },
+          { label: "Set field on selected…", setField: { onApply: bulkSetMerc } },
           { label: "Duplicate selected", onClick: bulkDuplicateMerc },
           { label: "Delete selected", destructive: true, onClick: bulkDeleteMerc },
         ]}

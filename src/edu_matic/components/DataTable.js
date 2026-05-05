@@ -79,8 +79,14 @@ export default function DataTable({
   rowFlags = null,
   // Bulk operations on multi-selected rows. When the user has anything
   // selected, a strip appears in the toolbar with action buttons here.
-  // Each item: { label, onClick(rowIds[]) }.
+  // Each item: { label, onClick(rowIds[]), destructive? }.
+  // Special form for set-field: { label, setField: { onApply(rowIds, col, val) } }
+  // — DataTable opens a styled popover with a column dropdown + value
+  // input rather than firing window.prompt twice.
   bulkActions = null,
+  // Persistence key for the search box so switching tabs doesn't lose
+  // the user's query. Reads/writes localStorage when set.
+  searchPersistKey = null,
   // Find/Replace box in the toolbar — opt-in via this prop. The
   // simpler `searchable` highlights only; find/replace adds a Replace
   // input + a "Replace all visible" button that calls onReplaceAll
@@ -88,7 +94,19 @@ export default function DataTable({
   findReplace = false,
   onReplaceAll = null,        // (rowIds[], find, replace) => void
 }) {
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => {
+    if (!searchPersistKey) return "";
+    try { return localStorage.getItem("rt:search:" + searchPersistKey) || ""; } catch { return ""; }
+  });
+  // Persist on change so switching tabs doesn't lose the query.
+  useEffect(() => {
+    if (!searchPersistKey) return;
+    try {
+      if (q) localStorage.setItem("rt:search:" + searchPersistKey, q);
+      else localStorage.removeItem("rt:search:" + searchPersistKey);
+    } catch {}
+  }, [q, searchPersistKey]);
+  const [bulkSetState, setBulkSetState] = useState(null);  // null | { onApply, column, value }
   const filteredEntries = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const all = rows.map((r, i) => ({ row: r, origIdx: i }));
@@ -332,7 +350,14 @@ export default function DataTable({
               key={`bulk-${i}`}
               type="button"
               className="btn"
-              onClick={() => a.onClick(selectionArr)}
+              onClick={() => {
+                if (a.setField) {
+                  // Open the structured popover instead of window.prompt.
+                  setBulkSetState({ onApply: a.setField.onApply, column: visibleColumns[0] || (columns[0] || ""), value: "" });
+                } else {
+                  a.onClick(selectionArr);
+                }
+              }}
               title={a.title || a.label}
               style={a.destructive ? { borderColor: "#d66c6c", color: "#d66c6c" } : undefined}
             >{a.label}</button>
@@ -351,6 +376,47 @@ export default function DataTable({
               onHideAll={hideAllCols}
             />
           )}
+        </div>
+      )}
+      {bulkSetState && (
+        <div style={{ background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6, padding: 10, marginBottom: 8, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <span style={{ color: "#dca64a", fontSize: 12, fontWeight: 600 }}>
+            Set field on {selectionArr.length} selected:
+          </span>
+          <select
+            value={bulkSetState.column}
+            onChange={(e) => setBulkSetState({ ...bulkSetState, column: e.target.value })}
+            className="input"
+            style={{ minWidth: 200 }}
+          >
+            {columns.map((c) => (
+              <option key={c} value={c}>{(columnLabels && columnLabels[c]) || c}</option>
+            ))}
+          </select>
+          <span style={{ color: "#888", fontSize: 11 }}>=</span>
+          <input
+            className="input"
+            placeholder="(blank to clear)"
+            value={bulkSetState.value}
+            onChange={(e) => setBulkSetState({ ...bulkSetState, value: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setBulkSetState(null);
+              else if (e.key === "Enter") {
+                bulkSetState.onApply(selectionArr, bulkSetState.column, bulkSetState.value);
+                setBulkSetState(null);
+              }
+            }}
+            autoFocus
+            style={{ flex: 1, minWidth: 180 }}
+          />
+          <button
+            className="btn btn-accent"
+            onClick={() => {
+              bulkSetState.onApply(selectionArr, bulkSetState.column, bulkSetState.value);
+              setBulkSetState(null);
+            }}
+          >Apply</button>
+          <button className="btn" onClick={() => setBulkSetState(null)}>Cancel</button>
         </div>
       )}
       <div
