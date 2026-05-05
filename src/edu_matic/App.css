@@ -238,33 +238,51 @@ body {
 
 /* ── Tabs (Core Data) ─────────────────────────────────────────── */
 
+/* Core Data sub-tabs — solid backgrounds + brighter borders so the
+ * pills don't disappear into the leather/marble app background. The
+ * earlier styling used `background: none` which let the textured
+ * theme bleed through and made it hard to find the active set at a
+ * glance. */
 .tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  padding: 8px;
+  background: rgba(20, 22, 23, 0.72);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
 }
 .tab {
-  background: none;
-  color: var(--fg-dim);
-  border: 1px solid var(--border);
+  background: var(--bg-elev2);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
-  padding: 5px 12px;
+  padding: 6px 14px;
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.tab:hover { background: var(--bg-elev2); color: var(--fg); }
-.tab.active {
-  background: var(--accent-dim);
-  color: var(--accent);
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
   border-color: var(--accent);
 }
+.tab.active {
+  background: var(--accent);
+  color: #1a1a1a;
+  border-color: var(--accent);
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(220, 166, 74, 0.18);
+}
+.tab.active .tab-count {
+  color: rgba(26, 26, 26, 0.7);
+}
 .tab-count {
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   font-size: 11px;
+  margin-left: 2px;
 }
 
 /* ── Data table ───────────────────────────────────────────────── */

@@ -1639,18 +1639,202 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
   );
 }
 
-function MercScreen({ project }) {
-  if (!project) return <EmptyScreen />;
-  const rows = project.merc;
-  const cols = rows[0] ? Object.keys(rows[0]).filter((k) => k !== "row") : [];
+// Numeric merc-unit fields that should round-trip as numbers, not strings.
+// (Edits go through plain text inputs; we coerce on commit so saved JSON
+// keeps the same shape the xlsm importer originally produced.)
+const MERC_NUMERIC_FIELDS = new Set(["exp", "cost", "maxInPool", "initial", "replenishMin", "replenishMax"]);
+const MERC_COLS = ["unitId", "exp", "cost", "replenishMin", "replenishMax", "maxInPool", "initial", "refUnitId"];
+
+function MercScreen({ project: rawProject, setProject }) {
+  const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], merc: [], modInfo: {} };
+  const rows = useMemo(() => project.merc || [], [project.merc]);
+
+  // Dropdown options for unitId / refUnitId — pulled from the EDU project's
+  // own units. This is what stops typos: pick from the existing list rather
+  // than spell-by-hand.
+  const columnMeta = useMemo(() => {
+    const meta = {};
+    if (Array.isArray(project.units)) {
+      const seen = new Set();
+      const opts = [];
+      for (const u of project.units) {
+        if (u && u.kind === "unit" && u["unit id"] && !seen.has(u["unit id"])) {
+          seen.add(u["unit id"]);
+          opts.push(u["unit id"]);
+        }
+      }
+      if (opts.length) {
+        meta.unitId = { type: "select", options: opts };
+        meta.refUnitId = { type: "select", options: opts };
+      }
+    }
+    return meta;
+  }, [project.units]);
+
+  const columnLabels = useMemo(() => ({
+    unitId: "Unit",
+    exp: "XP",
+    cost: "Cost",
+    replenishMin: "Replenish min",
+    replenishMax: "Replenish max",
+    maxInPool: "Max in pool",
+    initial: "Initial",
+    refUnitId: "Ref unit",
+  }), []);
+
+  // Build table rows with pool-section headers (label combines pool name
+  // with its regions list so the user can see at a glance which pool a
+  // merc belongs to without scrolling up).
+  const { rows: tableRows, rowIds } = useMemo(() => {
+    const out = []; const ids = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r) continue;
+      if (r.kind === "blank") continue;       // collapse blank separators; section breaks do this visually
+      if (r.kind === "regions") continue;     // absorbed into the preceding pool's section label
+      if (r.kind === "pool") {
+        const next = rows[i + 1];
+        const regions = (next && next.kind === "regions") ? next.list : "";
+        const label = regions ? `${r.name || "(unnamed pool)"} — ${regions}` : (r.name || "(unnamed pool)");
+        out.push({ section: label });
+        ids.push(-1);
+        continue;
+      }
+      if (r.kind === "unit") {
+        out.push(MERC_COLS.map((c) => r[c]));
+        ids.push(i);
+      }
+    }
+    return { rows: out, rowIds: ids };
+  }, [rows]);
+
+  const onEdit = useCallback((rowIdx, columnKey, newValue) => {
+    if (typeof rowIdx !== "number" || rowIdx < 0) return;
+    const cur = rows[rowIdx];
+    if (!cur || cur.kind !== "unit") return;
+    if (String(cur[columnKey] ?? "") === String(newValue ?? "")) return;
+    const next = { ...cur };
+    if (newValue === "" || newValue == null) {
+      delete next[columnKey];
+    } else if (MERC_NUMERIC_FIELDS.has(columnKey)) {
+      const n = Number(newValue);
+      next[columnKey] = isNaN(n) ? newValue : n;
+    } else {
+      next[columnKey] = newValue;
+    }
+    const nextRows = rows.slice(); nextRows[rowIdx] = next;
+    setProject({ ...project, merc: nextRows });
+  }, [rows, project, setProject]);
+
+  // Row ops — restricted to merc UNIT rows. Section headers (pool /
+  // regions) are not editable through the table; managing pools is a
+  // separate panel that doesn't exist yet (deferred — most edit traffic
+  // is on unit stats anyway).
+  const addBlankMerc = useCallback(() => {
+    const blank = { row: 0, kind: "unit", unitId: "" };
+    // Append to the end of the LAST pool — find the last pool section
+    // and insert just before any trailing blank rows. If no pool
+    // exists, just prepend.
+    const arr = rows.slice();
+    let lastPoolEnd = -1;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i] && arr[i].kind === "unit") { lastPoolEnd = i + 1; break; }
+    }
+    if (lastPoolEnd >= 0) arr.splice(lastPoolEnd, 0, blank);
+    else arr.unshift(blank);
+    setProject({ ...project, merc: arr });
+  }, [rows, project, setProject]);
+  const duplicateMerc = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const cur = rows[idx]; if (!cur || cur.kind !== "unit") return;
+    const copy = JSON.parse(JSON.stringify(cur));
+    const next = rows.slice(); next.splice(idx + 1, 0, copy);
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+  const insertBlankMercBelow = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const blank = { row: 0, kind: "unit", unitId: "" };
+    const next = rows.slice(); next.splice(idx + 1, 0, blank);
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+  const deleteMerc = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const next = rows.slice(); next.splice(idx, 1);
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+
+  // Bulk operations. Identical pattern to Units / Armour.
+  const bulkSetMerc = useCallback((rowIdxs, column, value) => {
+    if (!rowIdxs || !rowIdxs.length || !column) return;
+    const sel = new Set(rowIdxs);
+    const next = rows.slice();
+    for (let i = 0; i < next.length; i++) {
+      if (!sel.has(i)) continue;
+      const cur = next[i];
+      if (!cur || cur.kind !== "unit") continue;
+      const updated = { ...cur };
+      if (value === "" || value == null) delete updated[column];
+      else if (MERC_NUMERIC_FIELDS.has(column)) {
+        const n = Number(value);
+        updated[column] = isNaN(n) ? value : n;
+      } else updated[column] = value;
+      next[i] = updated;
+    }
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+  const bulkDeleteMerc = useCallback((rowIdxs) => {
+    if (!rowIdxs || !rowIdxs.length) return;
+    if (!window.confirm(`Delete ${rowIdxs.length} selected merc${rowIdxs.length === 1 ? "" : "s"}?`)) return;
+    const sel = new Set(rowIdxs);
+    setProject({ ...project, merc: rows.filter((_, i) => !sel.has(i)) });
+  }, [rows, project, setProject]);
+  const bulkDuplicateMerc = useCallback((rowIdxs) => {
+    if (!rowIdxs || !rowIdxs.length) return;
+    const sel = rowIdxs.slice().sort((a, b) => b - a);
+    let next = rows.slice();
+    for (const idx of sel) {
+      const cur = next[idx]; if (!cur || cur.kind !== "unit") continue;
+      const copy = JSON.parse(JSON.stringify(cur));
+      next.splice(idx + 1, 0, copy);
+    }
+    setProject({ ...project, merc: next });
+  }, [rows, project, setProject]);
+
+  if (!rawProject) return <EmptyScreen />;
+
   return (
     <div className="screen">
-      <h2>Mercenaries <span className="dim">({rows.length})</span></h2>
+      <h2>Mercenaries <span className="dim">({rows.filter(r => r && r.kind === "unit").length} units across {rows.filter(r => r && r.kind === "pool").length} pools)</span></h2>
       <DataTable
-        columns={cols}
-        rows={rows.map((r) => cols.map((c) => r[c]))}
-        maxHeight="75vh"
+        columns={MERC_COLS}
+        rows={tableRows}
+        rowIds={rowIds}
+        columnMeta={columnMeta}
+        columnLabels={columnLabels}
+        onEdit={onEdit}
+        editable
+        pinFirstColumn
         searchable
+        columnsToggleable
+        onAddRow={addBlankMerc}
+        onDuplicateRow={duplicateMerc}
+        onInsertRowBelow={insertBlankMercBelow}
+        onDeleteRow={deleteMerc}
+        addRowLabel="+ New merc unit"
+        bulkActions={[
+          {
+            label: "Set field on selected…",
+            onClick: (rowIdxs) => {
+              const col = window.prompt("Field name to set on the selected mercs:", "exp");
+              if (!col) return;
+              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
+              if (val === null) return;
+              bulkSetMerc(rowIdxs, col, val);
+            },
+          },
+          { label: "Duplicate selected", onClick: bulkDuplicateMerc },
+          { label: "Delete selected", destructive: true, onClick: bulkDeleteMerc },
+        ]}
       />
     </div>
   );
