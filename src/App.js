@@ -1163,22 +1163,28 @@ export default function App() {
         />
       )}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <div style={{ width: sidebarWidth, minWidth: 220, height: "100%", position: "relative" }}>
-          <UnitList
-            units={units}
-            selectedId={selectedId}
-            selectedIds={selectedIds}
-            onSelect={onUnitClick}
-            onAdd={onAdd}
-            onDelete={onDelete}
-            onDuplicate={onDuplicate}
-            onCreateFromEDU={onCreateFromEDU}
-            modIndex={modIndex}
-            filter={listFilter}
-            onFilterChange={setListFilter}
-            eduProject={eduProject}
-          />
-        </div>
+        {/* Hide the recruit-line UnitList sidebar on the EDU Builder tab —
+            EDU work happens in wide tables (Units has 52+ columns) and the
+            recruit-line list is irrelevant there. The sidebar reappears
+            on every other tab. */}
+        {activeTab !== "edu" && (
+          <>
+            <div style={{ width: sidebarWidth, minWidth: 220, height: "100%", position: "relative" }}>
+              <UnitList
+                units={units}
+                selectedId={selectedId}
+                selectedIds={selectedIds}
+                onSelect={onUnitClick}
+                onAdd={onAdd}
+                onDelete={onDelete}
+                onDuplicate={onDuplicate}
+                onCreateFromEDU={onCreateFromEDU}
+                modIndex={modIndex}
+                filter={listFilter}
+                onFilterChange={setListFilter}
+                eduProject={eduProject}
+              />
+            </div>
         <div
           onMouseDown={(e) => {
             sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
@@ -1199,6 +1205,8 @@ export default function App() {
           title="Drag to resize"
           style={{ width: 4, cursor: "col-resize", background: "rgba(220,166,74,0.10)", flexShrink: 0 }}
         />
+          </>
+        )}
         <div style={{ flex: 1, height: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <Tabs activeTab={activeTab} onChange={setActiveTab} validationSummary={validationSummary} />
           <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>

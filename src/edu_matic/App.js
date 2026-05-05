@@ -19,6 +19,12 @@ import { formatEdu } from "./format";
 import { formatMerc } from "./merc";
 import DataTable from "./components/DataTable";
 
+// Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
+// way humans expect instead of the lexicographic "Faction1, Faction10,
+// Faction178, Faction179, Faction18, Faction180, ..." that String.compare
+// produces. Reused across the Mod Info and Core Data screens.
+const NATURAL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 const VIEWS = [
   { key: "project",  label: "Project",        hint: "Load / save"          },
   { key: "modinfo",  label: "Mod Info",       hint: "Name, platform, era"  },
@@ -211,7 +217,7 @@ function ModInfoScreen({ project }) {
       <h3 style={{ marginTop: 24 }}>Globals ({Object.keys(g).length})</h3>
       <DataTable
         columns={["Name", "Value"]}
-        rows={Object.entries(g).sort(([a],[b]) => a.localeCompare(b)).map(([k, v]) => [k, v])}
+        rows={Object.entries(g).sort(([a],[b]) => NATURAL_COLLATOR.compare(a, b)).map(([k, v]) => [k, v])}
         maxHeight="60vh"
         searchable
       />
@@ -252,19 +258,38 @@ function CoreDataScreen({ project }) {
   );
 }
 
+// Synthetic column-key prefix for per-faction availability columns. Real
+// EDU column keys never contain a colon, so this can't collide with a
+// genuine field. UnitsScreen expands the unit's `availability` object
+// (e.g. {sparta:"Y", romans_julii:"Y", ...}) into one column per faction
+// in the canonical order from project.factions, so reading whether a
+// unit is recruitable for faction X is a glance instead of parsing a
+// 50-key JSON blob.
+const AVAIL_PREFIX = "avail:";
+
 function UnitsScreen({ project, setProject }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
+  // Faction order from project.factions — the index in this array IS the
+  // faction id used by the underlying VBA / EDU pipeline, so iterating in
+  // order matches the spreadsheet column layout.
+  const factionKeys = useMemo(() => {
+    const arr = Array.isArray(project.factions) ? project.factions : [];
+    return arr.map(f => typeof f === "string" ? f : (f && (f.Faction || f.faction || f.name || f.Name) || "")).filter(Boolean);
+  }, [project.factions]);
   // Collect all columns that appear in any unit (minus ownership — shown separately).
+  // The raw `availability` field is replaced with one column per faction.
   const allKeys = useMemo(() => {
     const s = new Set();
-    for (const u of units) for (const k of Object.keys(u)) if (k !== "ownership" && k !== "kind" && k !== "row") s.add(k);
-    // Put a few important keys first.
+    for (const u of units) for (const k of Object.keys(u)) if (k !== "ownership" && k !== "kind" && k !== "row" && k !== "availability") s.add(k);
     const priority = ["name", "Category", "Recruitment", "Quality", "Specialty", "Culture", "Weapon", "unit id", "dictionary_tag"];
     const ordered = priority.filter((k) => s.has(k));
     for (const k of s) if (!ordered.includes(k)) ordered.push(k);
+    // Append per-faction availability columns at the end, in canonical
+    // (numerical) order from project.factions.
+    for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
     return ordered;
-  }, [units]);
+  }, [units, factionKeys]);
 
   // Build per-column edit metadata. Lookup columns become dropdowns sourced
   // from the project's coreData tables; the dropdown options are the first
@@ -348,10 +373,22 @@ function UnitsScreen({ project, setProject }) {
       const opts = [...new Set([...canonical.filter((c) => seen.has(c)), ...seen])];
       meta["Entries"] = { type: "select", options: opts };
     }
+    // Per-faction availability columns are Y/blank toggles.
+    for (const f of factionKeys) {
+      meta[AVAIL_PREFIX + f] = { type: "select", options: ["", "Y"] };
+    }
     // Other free-text columns get a plain text editor by default — no entry
     // in `meta` is needed for that, the table treats unknown columns as text.
     return meta;
-  }, [project.coreData, project.armour, allKeys, units]);
+  }, [project.coreData, project.armour, allKeys, units, factionKeys]);
+
+  // Display labels: synthetic `avail:<faction>` columns show as just the
+  // faction name in the header. Real columns pass through unchanged.
+  const columnLabels = useMemo(() => {
+    const out = {};
+    for (const f of factionKeys) out[AVAIL_PREFIX + f] = f;
+    return out;
+  }, [factionKeys]);
 
   // Walk the original units list (including kind:"comment" markers) to interleave
   // section dividers between faction blocks. We track each row's index in the
@@ -368,7 +405,13 @@ function UnitsScreen({ project, setProject }) {
         rows.push({ section: t });
         ids.push(-1);
       } else if (u.kind === "unit") {
-        rows.push(allKeys.map((k) => u[k]));
+        rows.push(allKeys.map((k) => {
+          if (k.startsWith(AVAIL_PREFIX)) {
+            const f = k.slice(AVAIL_PREFIX.length);
+            return (u.availability && u.availability[f]) || "";
+          }
+          return u[k];
+        }));
         ids.push(idx);
       }
     }
@@ -381,6 +424,22 @@ function UnitsScreen({ project, setProject }) {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
     const cur = project.units[unitIdx];
     if (!cur || cur.kind !== "unit") return;
+    // Synthetic per-faction availability column: write into the nested
+    // availability dict instead of as a top-level field. Empty value
+    // deletes the faction's entry entirely so the JSON stays compact.
+    if (typeof columnKey === "string" && columnKey.startsWith(AVAIL_PREFIX)) {
+      const f = columnKey.slice(AVAIL_PREFIX.length);
+      const curAvail = (cur.availability && cur.availability[f]) || "";
+      if (curAvail === (newValue || "")) return;
+      const nextAvail = { ...(cur.availability || {}) };
+      if (newValue === "" || newValue == null) delete nextAvail[f];
+      else nextAvail[f] = newValue;
+      const next = { ...cur, availability: nextAvail };
+      const nextUnits = project.units.slice();
+      nextUnits[unitIdx] = next;
+      setProject({ ...project, units: nextUnits });
+      return;
+    }
     if (String(cur[columnKey] ?? "") === String(newValue ?? "")) return; // no-op
     const next = { ...cur };
     if (newValue === "" || newValue == null) delete next[columnKey];
@@ -401,6 +460,7 @@ function UnitsScreen({ project, setProject }) {
         rows={tableRows}
         rowIds={rowIds}
         columnMeta={columnMeta}
+        columnLabels={columnLabels}
         onEdit={onEdit}
         editable
         pinFirstColumn

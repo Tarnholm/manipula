@@ -49,6 +49,7 @@ export default function DataTable({
   rows = [],
   rowIds = null,
   columnMeta = null,
+  columnLabels = null,    // optional { [key]: displayLabel } for header rendering
   onEdit = null,
   editable = false,
   pinFirstColumn = false,
@@ -203,6 +204,7 @@ export default function DataTable({
           {columnsToggleable && (
             <ColumnsPicker
               columns={columns}
+              columnLabels={columnLabels}
               hiddenCols={hiddenCols}
               hiddenCount={hiddenCount}
               pinFirstColumn={pinFirstColumn}
@@ -226,12 +228,15 @@ export default function DataTable({
         <table className={"dtable" + (pinFirstColumn ? " dtable-pinfirst" : "")}>
           <thead>
             <tr>
-              {visibleColumns.map((c) => (
-                <th key={c} title={c}>
-                  {c}
-                  <span className="dtable-caret" aria-hidden="true">▾</span>
-                </th>
-              ))}
+              {visibleColumns.map((c) => {
+                const label = (columnLabels && columnLabels[c]) || c;
+                return (
+                  <th key={c} title={c}>
+                    {label}
+                    <span className="dtable-caret" aria-hidden="true">▾</span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           {groups.map((g, gi) => (
@@ -284,7 +289,7 @@ export default function DataTable({
 // Columns picker — small toolbar button + portal popover with a checkbox per
 // column. Renders via createPortal so the popover can spill outside the
 // table's scroll container without being clipped (same trick as the combobox).
-function ColumnsPicker({ columns, hiddenCols, hiddenCount, pinFirstColumn, open, onOpenChange, onToggle, onShowAll, onHideAll }) {
+function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirstColumn, open, onOpenChange, onToggle, onShowAll, onHideAll }) {
   const btnRef = useRef(null);
   const popRef = useRef(null);
   const [pos, setPos] = useState(null);
@@ -347,6 +352,7 @@ function ColumnsPicker({ columns, hiddenCols, hiddenCount, pinFirstColumn, open,
             {columns.map((c, i) => {
               const isPinned = pinFirstColumn && i === 0;
               const checked = !hiddenCols.has(c);
+              const label = (columnLabels && columnLabels[c]) || c;
               return (
                 <label
                   key={c}
@@ -359,7 +365,7 @@ function ColumnsPicker({ columns, hiddenCols, hiddenCount, pinFirstColumn, open,
                     disabled={isPinned}
                     onChange={() => onToggle(c)}
                   />
-                  <span>{c}</span>
+                  <span>{label}</span>
                   {isPinned && <span className="dim" style={{ marginLeft: "auto", fontSize: 10 }}>pinned</span>}
                 </label>
               );
