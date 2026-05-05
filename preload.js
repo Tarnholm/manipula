@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   gitStatus: (dir) => ipcRenderer.invoke("git-status", dir),
   gitPull: (dir) => ipcRenderer.invoke("git-pull", dir),
   gitPush: (dir) => ipcRenderer.invoke("git-push", dir),
+  gitFetch: (dir) => ipcRenderer.invoke("git-fetch", dir),
   gitCommitAll: (dir, message) => ipcRenderer.invoke("git-commit-all", dir, message),
   logMessage: (level, text) => ipcRenderer.invoke("edm-log-message", level, text),
   getLogPath: () => ipcRenderer.invoke("edm-get-log-path"),

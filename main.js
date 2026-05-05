@@ -1296,6 +1296,12 @@ ipcMain.handle("git-status", async (_e, dir) => {
 
 ipcMain.handle("git-pull", async (_e, dir) => runGit(dir, ["pull", "--ff-only"]));
 ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
+// git-fetch — used as part of the pre-save "is anyone ahead of me on the
+// remote?" check. We need to fetch first because git-status's behind/ahead
+// counts compare HEAD to the LOCAL view of the remote, which is only as
+// fresh as the last fetch / pull. Without this, save would silently miss
+// teammate commits pushed in the last few hours.
+ipcMain.handle("git-fetch", async (_e, dir) => runGit(dir, ["fetch", "--quiet"]));
 ipcMain.handle("git-commit-all", async (_e, dir, message) => {
   const add = await runGit(dir, ["add", "."]);
   if (!add.ok) return add;

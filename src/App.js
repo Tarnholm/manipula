@@ -622,6 +622,11 @@ export default function App() {
   // working from a fresh xlsm import or empty state". Persisted to
   // localStorage so the tool reopens the last project on launch.
   const [projectDir, setProjectDir] = useState(null);
+  // Bumped on every successful Save Project. Watched by SyncButton so it
+  // re-runs git status the moment the user hits save — without this the
+  // dot stays stale on green for up to 5s (the polling cadence) after
+  // touching disk.
+  const [projectSaveTick, setProjectSaveTick] = useState(0);
   // Export hashes per file kind ("edb" / "edu") captured at last write-out.
   // Used to detect "the game file changed under us since we last exported"
   // and warn before clobbering external edits — the missing piece between
@@ -1006,10 +1011,41 @@ export default function App() {
             setProjectDir(dir);
             localStorage.setItem("rt:projectDir", dir);
           }
+
+          // Pre-save remote-state check: if the project dir is a git repo
+          // and the upstream has commits we haven't pulled, ask before
+          // writing. The risk is teammate parallel edits — if Alice pushed
+          // changes to unit X and we save without pulling, our save
+          // creates a divergence. Pulling first surfaces conflicts cleanly
+          // through git instead of "whoever pushes last wins". Network
+          // failure on the fetch (offline / private repo without auth) is
+          // non-fatal — just skip the check and proceed.
+          if (window.eduAPI?.gitFetch && window.eduAPI?.gitStatus) {
+            try {
+              await window.eduAPI.gitFetch(dir);
+              const s = await window.eduAPI.gitStatus(dir);
+              if (s && s.isRepo && (s.behind || 0) > 0) {
+                const ok = window.confirm(
+                  `Remote has ${s.behind} commit${s.behind === 1 ? "" : "s"} you haven't pulled. ` +
+                  `Saving now will create a divergence — your local will need a merge or rebase before it can push.\n\n` +
+                  `Recommended: cancel, click Sync → Pull, then save.\n\n` +
+                  `Save anyway?`
+                );
+                if (!ok) return;
+              }
+            } catch (e) {
+              // Don't block the save on a fetch failure.
+              console.warn("[save] pre-save fetch failed:", e && e.message);
+            }
+          }
+
           try {
             const { saveProject } = await import("./projectStore");
             await saveProject(dir, { eduProject, units, exports: projectExports });
             setEduDirty(false);
+            // Bump so the SyncButton refreshes its dot the moment the
+            // user hits save, instead of waiting up to 5s for the poll.
+            setProjectSaveTick(t => t + 1);
             toast(`Saved project → ${dir}`, "success");
           } catch (e) { toast("Save failed: " + e.message, "error"); }
         }}
@@ -1240,7 +1276,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1274,7 +1310,7 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
       <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)">Save project</button>
       <button onClick={onOpenProject} style={tbtn("#465")} title="Open a Manipula project folder">Open project</button>
-      <SyncButton projectDir={projectDir} />
+      <SyncButton projectDir={projectDir} saveTick={projectSaveTick} />
 
       <button onClick={onFindReplace} title="Bulk find/replace across all units' requires" style={tbtn("#564")}>Find/Replace…</button>
       <button
@@ -1608,7 +1644,7 @@ function syncBtn(activeColor, isActive) {
 // stays out of the way unless it can actually help. Real merges,
 // branch ops, history review etc. are out of scope; users open their
 // usual git tool for those.
-function SyncButton({ projectDir }) {
+function SyncButton({ projectDir, saveTick = 0 }) {
   const api = window.eduAPI;
   const [open, setOpen] = useState(false);
   const [available, setAvailable] = useState(null);
@@ -1636,12 +1672,27 @@ function SyncButton({ projectDir }) {
   }, [api]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  // Refresh the moment the parent reports a successful save — this is the
+  // hot path: user hits Save Project, we want the dot to flip red
+  // immediately so they can Commit + Push without waiting for the next
+  // poll tick.
+  useEffect(() => { if (saveTick > 0) refresh(); }, [saveTick, refresh]);
+  // Light polling so the dot tracks reality between saves (e.g. teammate
+  // pushes new commits, or the user touched a file outside Manipula).
+  // 5s is brisk enough that transitions feel live, cheap enough that
+  // running `git status --porcelain` in the background isn't noticed.
+  useEffect(() => {
+    if (!projectDir) return;
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [projectDir, refresh]);
 
   // Reposition the popover when it opens, and keep it anchored if the
   // window resizes / scrolls while it's open. Same pattern as the
   // combobox popover in DataTable.
   useEffect(() => {
     if (!open) return;
+    refresh();   // pull fresh status the instant the user looks
     const reposition = () => {
       if (!btnRef.current) return;
       const r = btnRef.current.getBoundingClientRect();
@@ -1667,7 +1718,7 @@ function SyncButton({ projectDir }) {
       window.removeEventListener("resize", reposition);
       document.removeEventListener("mousedown", onDocMouseDown);
     };
-  }, [open]);
+  }, [open, refresh]);
 
   if (!projectDir || available === false) return null;
 
