@@ -79,6 +79,33 @@ export default function DataTable({
   const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isNonData(r) ? 0 : 1), 0), [rows]);
   const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isNonData(e.row) ? 0 : 1), 0), [filteredEntries]);
 
+  // Group entries into one tbody per section so sticky-top section dividers
+  // are bounded by their own tbody. Without this, multiple sticky <tr> at the
+  // same top: offset all stick at the same y-coordinate and overlap as the
+  // user scrolls — which is exactly the "non-remastered romans following when
+  // I scroll down" symptom. With per-section tbody, sticky is constrained to
+  // its tbody's bounds: the previous section's header un-sticks when its
+  // tbody scrolls offscreen, and the next section's header takes over.
+  const groups = useMemo(() => {
+    const out = [];
+    let cur = null;
+    for (const e of filteredEntries) {
+      if (isSection(e.row)) {
+        cur = { section: e, entries: [] };
+        out.push(cur);
+        continue;
+      }
+      if (!cur) {
+        // Rows before any section header — keep them in an unlabeled leading
+        // group so we don't drop them.
+        cur = { section: null, entries: [] };
+        out.push(cur);
+      }
+      cur.entries.push(e);
+    }
+    return out;
+  }, [filteredEntries]);
+
   // Column visibility — opt-in via columnsToggleable. Internal state holds the
   // *hidden* set so an unset visibility map still defaults to showing all
   // columns when new ones are added to a project. Pinned-first-column key is
@@ -206,45 +233,47 @@ export default function DataTable({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {filteredEntries.map(({ row, origIdx }) => {
-              if (isSection(row)) {
-                return (
-                  <tr key={`s${origIdx}`} className="dtable-section">
-                    <td colSpan={visibleColumns.length} title={row.section}>{row.section}</td>
-                  </tr>
-                );
-              }
-              if (isSeparator(row)) {
-                return (
-                  <tr key={`d${origIdx}`} className="dtable-separator" aria-hidden="true">
-                    <td colSpan={visibleColumns.length} />
-                  </tr>
-                );
-              }
-              return (
-                <tr key={`r${origIdx}`}>
-                  {visibleColIndices.map((origColIdx, j) => {
-                    const c = columns[origColIdx];
-                    return (
-                      <Cell
-                        key={c}
-                        value={row[origColIdx]}
-                        columnKey={c}
-                        rowOrigIdx={origIdx}
-                        meta={columnMeta && columnMeta[c]}
-                        editable={editable}
-                        onCommit={commitCell}
-                      />
-                    );
-                  })}
+          {groups.map((g, gi) => (
+            <tbody key={`g${gi}`}>
+              {g.section && (
+                <tr key={`s${g.section.origIdx}`} className="dtable-section">
+                  <td colSpan={visibleColumns.length} title={g.section.row.section}>{g.section.row.section}</td>
                 </tr>
-              );
-            })}
-            {filteredEntries.length === 0 && (
+              )}
+              {g.entries.map(({ row, origIdx }) => {
+                if (isSeparator(row)) {
+                  return (
+                    <tr key={`d${origIdx}`} className="dtable-separator" aria-hidden="true">
+                      <td colSpan={visibleColumns.length} />
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={`r${origIdx}`}>
+                    {visibleColIndices.map((origColIdx, j) => {
+                      const c = columns[origColIdx];
+                      return (
+                        <Cell
+                          key={c}
+                          value={row[origColIdx]}
+                          columnKey={c}
+                          rowOrigIdx={origIdx}
+                          meta={columnMeta && columnMeta[c]}
+                          editable={editable}
+                          onCommit={commitCell}
+                        />
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          ))}
+          {filteredEntries.length === 0 && (
+            <tbody>
               <tr><td className="dim" colSpan={visibleColumns.length} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
-            )}
-          </tbody>
+            </tbody>
+          )}
         </table>
       </div>
     </div>
