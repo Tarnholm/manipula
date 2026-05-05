@@ -1225,13 +1225,17 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
 
 // BulkEditScreen — filter EDU rows by any string field, then apply set/add/multiply/append
 // to a chosen field across all matched rows. Shows a live preview of the affected rows.
-function BulkEditScreen({ project, setProject }) {
+function BulkEditScreen({ project: rawProject, setProject }) {
   const [filterField, setFilterField] = useState("");
   const [filterMatch, setFilterMatch] = useState("");
   const [editField, setEditField] = useState("");
   const [op, setOp] = useState("set");
   const [value, setValue] = useState("");
-  if (!project) return <EmptyScreen />;
+  // Same Rules-of-Hooks fix as UnitsScreen / ArmourScreen / CoreData:
+  // shadow the prop with a safe fallback so the useMemo calls below
+  // run on every render, then defer the EmptyScreen render to the
+  // bottom after every hook has been called.
+  const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], modInfo: {} };
   const units = project.units.filter(u => u.kind === "unit");
   const allKeys = useMemo(() => {
     const s = new Set();
@@ -1280,6 +1284,8 @@ function BulkEditScreen({ project, setProject }) {
     });
     setProject({ ...project, units: nextUnits });
   };
+
+  if (!rawProject) return <EmptyScreen />;
 
   return (
     <div className="screen">
