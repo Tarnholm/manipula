@@ -77,7 +77,38 @@ export default function App() {
     if (api.getUpdateStatus) api.getUpdateStatus().then(s => { if (s) setUpdateStatus(s); });
     // Subscribe to live update events going forward.
     const unsub = api.onUpdateStatus && api.onUpdateStatus((s) => setUpdateStatus(s));
-    return () => { if (typeof unsub === "function") unsub(); };
+
+    // Auto-load the last xlsm so the EDU Builder is populated on launch
+    // without re-picking the same file every session. Path was saved to
+    // localStorage by importFromEdumatic on the previous successful import.
+    // Only loads the EDU project (not the EDB import preview) — surfacing a
+    // modal on startup would be more annoying than helpful, and EDB units
+    // are already persisted to disk via writeUnits / readUnits anyway.
+    let cancelled = false;
+    (async () => {
+      const lastPath = localStorage.getItem("rt:lastXlsmPath");
+      if (!lastPath || !window.eduAPI || !window.eduAPI.readFileBinary) return;
+      try {
+        const bytes = await window.eduAPI.readFileBinary(lastPath);
+        if (cancelled || !bytes) return;
+        const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
+        const eduProj = importXlsmBuffer(buf);
+        if (cancelled) return;
+        setEduProject(eduProj);
+        setEduProjectSource(lastPath);
+        setStatus(`Auto-loaded ${lastPath.split(/[\\/]/).pop()}`);
+      } catch (e) {
+        // File moved / deleted / corrupt — silent skip. A missing-xlsm error
+        // banner on every launch (until the user re-imports) would be noise.
+        console.warn("[edu] auto-load skipped:", e && e.message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (typeof unsub === "function") unsub();
+    };
     // eslint-disable-next-line
   }, []);
 
