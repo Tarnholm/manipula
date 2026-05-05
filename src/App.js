@@ -1611,11 +1611,16 @@ function SyncButton({ projectDir }) {
     behind:  "#4f8fd6",
     clean:   "#7c9",
   }[indicator];
+  // Build labels via optional-chaining so the eager object-literal evaluation
+  // doesn't read `status.dirtyCount` when status is still null (which it is
+  // for one render after mount, while git-status is in-flight). The previous
+  // version crashed at boot whenever the project dir loaded faster than the
+  // git status probe — caught by the new AppErrorBoundary in v0.20.3.
   const indicatorLabel = {
     "no-git": "Sync · not a git repo",
-    dirty:   `Sync · ${status.dirtyCount} dirty`,
-    ahead:   `Sync · ${ahead} to push`,
-    behind:  `Sync · ${behind} to pull`,
+    dirty:   `Sync · ${status?.dirtyCount ?? 0} dirty`,
+    ahead:   `Sync · ${ahead ?? 0} to push`,
+    behind:  `Sync · ${behind ?? 0} to pull`,
     clean:   "Sync · up to date",
   }[indicator];
 
