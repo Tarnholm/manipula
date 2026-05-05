@@ -264,8 +264,8 @@ function CoreDataScreen({ project, setProject }) {
   const [pwInput, setPwInput] = useState("");
   const [pwError, setPwError] = useState(null);
 
-  if (!project) return <EmptyScreen />;
-  if (!active) return <div className="screen"><h2>Core Data</h2><p>No tables.</p></div>;
+  // Defer early-returns until after every hook below has been called.
+  // Same Rules-of-Hooks fix as UnitsScreen / ArmourScreen.
   const rows = tables[active] || [];
   // Order columns by union of keys in this table's rows so a sparse row
   // with missing keys doesn't drop the columns entirely.
@@ -365,6 +365,10 @@ function CoreDataScreen({ project, setProject }) {
     }
     setProject({ ...project, coreData: { ...tables, [active]: next } });
   }, [unlocked, tables, active, project, setProject]);
+
+  // Now that all hooks have been called we can early-return safely.
+  if (!project) return <EmptyScreen />;
+  if (!active) return <div className="screen"><h2>Core Data</h2><p>No tables.</p></div>;
 
   return (
     <div className="screen">
@@ -552,8 +556,15 @@ function unitFilePath(u, kind /* "unit" | "armour" */) {
   return `edu/units/${safe}.json`;
 }
 
-function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImportedSnapshot, onJumpToRecruit, projectBlame }) {
-  if (!project) return <EmptyScreen />;
+function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits, lastImportedSnapshot, onJumpToRecruit, projectBlame }) {
+  // Rules of Hooks: hooks must run in the same order on every render,
+  // so we CAN'T early-return before them when project might transition
+  // from null → loaded across renders (which previously corrupted React's
+  // hook table and produced "Cannot access 'Ee' before initialization"
+  // marble-window crashes). Shadow the prop with a safe fallback so all
+  // hooks below see a valid shape; the real EmptyScreen render happens
+  // at the bottom after every hook has been called.
+  const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], modInfo: {} };
   const units = project.units.filter((u) => u.kind === "unit");
   // Filter chips: faction (from availability) and category. Empty string
   // means "no filter on this axis." Stored as state local to the screen.
@@ -1034,6 +1045,11 @@ function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImport
     setProject({ ...project, units: nextUnits });
   }, [bulkColumn, project, setProject]);
 
+  // Now that all hooks have been called we can safely early-return for
+  // the no-project state — bottom-of-function is the only place an
+  // early-return is allowed without violating Rules of Hooks.
+  if (!rawProject) return <EmptyScreen />;
+
   return (
     <div className="screen">
       <h2>Units <span className="dim">({units.length})</span></h2>
@@ -1348,8 +1364,12 @@ const inpStyle = { background: "#252525", border: "1px solid #333", color: "#ddd
 const ARM_PREFIX = "arm:";
 const ARMOUR_BODY_SLOTS = ["Head1","Head2","Torso1","Torso2","Torso3","UpArm","LowArm","Hand","UpLeg","LowLeg","Foot"];
 
-function ArmourScreen({ project, setProject, projectBlame }) {
-  if (!project) return <EmptyScreen />;
+function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
+  // Same Rules-of-Hooks fix as UnitsScreen — shadow `project` with a
+  // safe fallback so all hooks below run on every render regardless of
+  // whether the prop is loaded yet. Real EmptyScreen render at the
+  // bottom after the hook block.
+  const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], modInfo: {} };
   const rows = project.armour || [];
 
   // Per-row git blame, keyed by index in project.armour. Same
@@ -1564,6 +1584,8 @@ function ArmourScreen({ project, setProject, projectBlame }) {
     }
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
+
+  if (!rawProject) return <EmptyScreen />;
 
   return (
     <div className="screen">
