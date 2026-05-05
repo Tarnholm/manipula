@@ -396,9 +396,13 @@ body {
 .dtable tr:hover td { background: var(--bg-elev2); }
 
 /* Section-divider row — full-width gold band echoing the spreadsheet's faction
- * separators (#MACEDON / #EPIRUS / …). Sticky on both axes so the label stays
- * visible during horizontal AND vertical scroll: top offset = column header
- * height so it slides under the column header rather than overlapping it. */
+ * separators (#MACEDON / #EPIRUS / …). Sticky-LEFT always so the label stays
+ * visible during horizontal scroll. Sticky-TOP is gated on the .is-current
+ * class which DataTable's scroll handler applies to exactly one section at a
+ * time (the topmost section whose flow position is under the column header).
+ * Pure-CSS sticky-top on every section just made them all pile up at the
+ * same y coordinate, which is what produced the "bar gets more and more
+ * yellow as I scroll" stacking. */
 .dtable tr.dtable-section td {
   background: rgba(220, 166, 74, 0.14);
   color: var(--accent, #dca64a);
@@ -412,11 +416,13 @@ body {
   border-bottom: 1px solid rgba(220, 166, 74, 0.35);
   position: sticky;
   left: 0;
-  top: var(--dtable-header-h);
   /* Above body cells (z=1 for pinned first column, default 0 for others) but
    * below the column header (z=3) so the th draws over a section row that
    * scrolled past it. */
   z-index: 2;
+}
+.dtable tr.dtable-section.is-current td {
+  top: var(--dtable-header-h);
 }
 .dtable tr.dtable-section:hover td { background: rgba(220, 166, 74, 0.18); }
 

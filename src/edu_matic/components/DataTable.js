@@ -159,6 +159,50 @@ export default function DataTable({
     if (scrollRef.current) scrollRef.current.scrollLeft = 0;
   }, [rows]);
 
+  // Sticky section dividers — JS-driven, not pure CSS. Pure CSS sticky on
+  // multiple <tr>s with the same top: offset all stick at the same y
+  // coordinate and overlap (the "non-remastered romans following while
+  // scrolling through mid-republican rows" bug). Per-tbody containment
+  // doesn't help because Chromium's containing-block resolution for sticky
+  // table rows ignores tbody. Solution: at any given scroll position only
+  // ONE section row is allowed to be sticky-top — the topmost section whose
+  // natural-flow position has already scrolled under the column header.
+  // The others stay in normal flow and slide naturally past the column
+  // header as the user scrolls.
+  useEffect(() => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    // Match var(--dtable-header-h) in App.css. If the header height changes,
+    // both must move together.
+    const HEADER_H = 22;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const sections = sc.querySelectorAll("tr.dtable-section");
+      if (!sections.length) return;
+      const threshold = sc.scrollTop + HEADER_H;
+      let current = null;
+      // sections come in DOM order; the last one whose natural-flow top has
+      // crossed the threshold is the one that should be pinned.
+      sections.forEach((tr) => {
+        if (tr.offsetTop <= threshold) current = tr;
+      });
+      sections.forEach((tr) => {
+        tr.classList.toggle("is-current", tr === current);
+      });
+    };
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(update);
+    };
+    update();
+    sc.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      sc.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [groups, hiddenCols]);
+
   // Wheel: shift+wheel scrolls horizontally; plain wheel scrolls vertically
   // (which the native scrollbar handles). Without an explicit handler some
   // browsers swallow shift+wheel inside table elements.
