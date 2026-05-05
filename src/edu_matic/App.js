@@ -258,36 +258,75 @@ function CoreDataScreen({ project }) {
   );
 }
 
-// Synthetic column-key prefix for per-faction availability columns. Real
-// EDU column keys never contain a colon, so this can't collide with a
-// genuine field. UnitsScreen expands the unit's `availability` object
-// (e.g. {sparta:"Y", romans_julii:"Y", ...}) into one column per faction
-// in the canonical order from project.factions, so reading whether a
-// unit is recruitable for faction X is a glance instead of parsing a
-// 50-key JSON blob.
+// Synthetic column-key prefixes. Real EDU column keys never contain a
+// colon, so these can't collide with genuine fields.
+//   AVAIL_PREFIX → expands the unit's `availability` object
+//                  ({sparta:"Y", romans_julii:"Y", ...}) into one column
+//                  per faction, in the canonical order from project.factions.
+//   OWN_PREFIX   → splits the unit's `ownership` array into four "ownership_N"
+//                  columns. Reading is array index; writing back updates the
+//                  array and trims trailing empties.
 const AVAIL_PREFIX = "avail:";
+const OWN_PREFIX = "own:";
+
+// Canonical column order for the EDU Units table — matches the layout the
+// modteam expects (and that the EDU spreadsheet historically used). Columns
+// not present in any actual unit are omitted; columns present but not in
+// HEAD/TAIL fall through to the catch-all bucket at the end so nothing is
+// silently dropped.
+const UNITS_HEAD = [
+  "name", "Entries", "Recruitment", "Quality", "Category", "Specialty",
+  "Formation", "Dwelling", "Culture", "Weapon", "Wpn Quality",
+  "Projectile", "Melee Skeleton", "Sec Weapon", "S Wpn Quality",
+  "S Melee Skeleton", "Armour Upgr0", "Armour Upgr1", "Armour Upgr2",
+  "Armour Upgr3", "Mount", "Special", "Mount Skeleton", "Engine",
+  "Engine Pri Proj", "Engine Sec Proj", "Ship", "unit id", "dictionary_tag",
+  "voice_type", "voice_indexes", "faction banner", "holy banner",
+  "unit variation", "model id", "officer 1", "officer 2", "officer 3",
+  "officer 4", "officer 5", "ship id", "engine id", "animal id", "mount id",
+  "general unit", "merc unit", "horde unit", "unique unit",
+  "impetuous unit", "no CBs", "pri missile type", "engine missile type",
+  "sec eng missile type", "arm upg mdl 1", "arm upg mdl 2", "arm upg mdl 3",
+  "rec priority",
+];
+const UNITS_TAIL = [
+  "ethnicity region", "ethnicity attributes", "tattoo colour", "hair colour",
+  "hair style", "info pic dir", "card pic dir", "comments", "Tier", "Turns",
+];
 
 function UnitsScreen({ project, setProject }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
   // Faction order from project.factions — the index in this array IS the
-  // faction id used by the underlying VBA / EDU pipeline, so iterating in
-  // order matches the spreadsheet column layout.
+  // faction id used by the underlying VBA / EDU pipeline.
   const factionKeys = useMemo(() => {
     const arr = Array.isArray(project.factions) ? project.factions : [];
     return arr.map(f => typeof f === "string" ? f : (f && (f.Faction || f.faction || f.name || f.Name) || "")).filter(Boolean);
   }, [project.factions]);
-  // Collect all columns that appear in any unit (minus ownership — shown separately).
-  // The raw `availability` field is replaced with one column per faction.
+  // Build the column order: explicit HEAD list, then per-faction availability
+  // columns + slave, then 4 ownership_N columns, then TAIL list, then any
+  // remaining unrecognised keys at the end so we never silently drop one.
   const allKeys = useMemo(() => {
-    const s = new Set();
-    for (const u of units) for (const k of Object.keys(u)) if (k !== "ownership" && k !== "kind" && k !== "row" && k !== "availability") s.add(k);
-    const priority = ["name", "Category", "Recruitment", "Quality", "Specialty", "Culture", "Weapon", "unit id", "dictionary_tag"];
-    const ordered = priority.filter((k) => s.has(k));
-    for (const k of s) if (!ordered.includes(k)) ordered.push(k);
-    // Append per-faction availability columns at the end, in canonical
-    // (numerical) order from project.factions.
-    for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
+    const present = new Set();
+    let hasAvailability = false;
+    let hasOwnership = false;
+    for (const u of units) {
+      for (const k of Object.keys(u)) {
+        if (k === "kind" || k === "row") continue;
+        if (k === "availability") { hasAvailability = true; continue; }
+        if (k === "ownership") { hasOwnership = true; continue; }
+        present.add(k);
+      }
+    }
+    const ordered = [];
+    for (const k of UNITS_HEAD) if (present.has(k)) { ordered.push(k); present.delete(k); }
+    if (hasAvailability) {
+      for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
+      ordered.push(AVAIL_PREFIX + "slave");
+    }
+    if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
+    for (const k of UNITS_TAIL) if (present.has(k)) { ordered.push(k); present.delete(k); }
+    for (const k of present) ordered.push(k);
     return ordered;
   }, [units, factionKeys]);
 
@@ -377,16 +416,24 @@ function UnitsScreen({ project, setProject }) {
     for (const f of factionKeys) {
       meta[AVAIL_PREFIX + f] = { type: "select", options: ["", "Y"] };
     }
+    meta[AVAIL_PREFIX + "slave"] = { type: "select", options: ["", "Y"] };
     // Other free-text columns get a plain text editor by default — no entry
     // in `meta` is needed for that, the table treats unknown columns as text.
     return meta;
   }, [project.coreData, project.armour, allKeys, units, factionKeys]);
 
-  // Display labels: synthetic `avail:<faction>` columns show as just the
-  // faction name in the header. Real columns pass through unchanged.
+  // Display labels:
+  //   - "name" header reads "Unit Name" (matches the EDU spreadsheet).
+  //   - avail:<faction> columns are numbered "faction 1 .. N" by canonical
+  //     position, plus "slave" for the last availability key. Numbered
+  //     labels avoid the visual noise of long faction-key names in a table
+  //     that's already 50+ columns wide.
+  //   - own:<i> columns labeled "ownership_1 .. ownership_4".
   const columnLabels = useMemo(() => {
-    const out = {};
-    for (const f of factionKeys) out[AVAIL_PREFIX + f] = f;
+    const out = { name: "Unit Name" };
+    factionKeys.forEach((f, i) => { out[AVAIL_PREFIX + f] = `faction ${i + 1}`; });
+    out[AVAIL_PREFIX + "slave"] = "slave";
+    for (let i = 0; i < 4; i++) out[OWN_PREFIX + i] = `ownership_${i + 1}`;
     return out;
   }, [factionKeys]);
 
@@ -409,6 +456,10 @@ function UnitsScreen({ project, setProject }) {
           if (k.startsWith(AVAIL_PREFIX)) {
             const f = k.slice(AVAIL_PREFIX.length);
             return (u.availability && u.availability[f]) || "";
+          }
+          if (k.startsWith(OWN_PREFIX)) {
+            const i = parseInt(k.slice(OWN_PREFIX.length), 10);
+            return (Array.isArray(u.ownership) && u.ownership[i]) || "";
           }
           return u[k];
         }));
@@ -435,6 +486,22 @@ function UnitsScreen({ project, setProject }) {
       if (newValue === "" || newValue == null) delete nextAvail[f];
       else nextAvail[f] = newValue;
       const next = { ...cur, availability: nextAvail };
+      const nextUnits = project.units.slice();
+      nextUnits[unitIdx] = next;
+      setProject({ ...project, units: nextUnits });
+      return;
+    }
+    // Synthetic ownership column: write into the array slot, trim trailing
+    // empties so the persisted JSON doesn't carry [..., "", "", ""] noise.
+    if (typeof columnKey === "string" && columnKey.startsWith(OWN_PREFIX)) {
+      const i = parseInt(columnKey.slice(OWN_PREFIX.length), 10);
+      const curOwn = (Array.isArray(cur.ownership) && cur.ownership[i]) || "";
+      if (curOwn === (newValue || "")) return;
+      const nextOwn = Array.isArray(cur.ownership) ? cur.ownership.slice() : [];
+      while (nextOwn.length <= i) nextOwn.push("");
+      nextOwn[i] = newValue || "";
+      while (nextOwn.length && !nextOwn[nextOwn.length - 1]) nextOwn.pop();
+      const next = { ...cur, ownership: nextOwn };
       const nextUnits = project.units.slice();
       nextUnits[unitIdx] = next;
       setProject({ ...project, units: nextUnits });
