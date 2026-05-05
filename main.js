@@ -1044,10 +1044,35 @@ ipcMain.handle("edm-read-project-file", async (_e, dir, name) => {
 });
 ipcMain.handle("edm-write-project-file", async (_e, dir, name, content) => {
   try {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, name), content, "utf8");
+    const target = path.join(dir, name);
+    const parent = path.dirname(target);
+    if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+    fs.writeFileSync(target, content, "utf8");
     return true;
   } catch (e) { console.error("[edm] write-project-file:", e.message); return false; }
+});
+// List immediate file entries in <dir>/<subdir>. Returns []  if the subdir
+// doesn't exist (cold project, not yet populated). Filters to .json only —
+// the project format uses JSON for everything, and silently skipping
+// stray .DS_Store / Thumbs.db / .git / .gitignore avoids loader errors.
+ipcMain.handle("edm-list-project-files", async (_e, dir, subdir) => {
+  try {
+    const root = subdir ? path.join(dir, subdir) : dir;
+    if (!fs.existsSync(root)) return [];
+    return fs.readdirSync(root)
+      .filter(name => name.endsWith(".json"))
+      .filter(name => fs.statSync(path.join(root, name)).isFile());
+  } catch (e) { console.error("[edm] list-project-files:", e.message); return []; }
+});
+// Delete a single project file. Used during save when a unit was renamed
+// or removed: the writer dumps current state, then deletes any orphan
+// files so the on-disk tree exactly reflects the project.
+ipcMain.handle("edm-delete-project-file", async (_e, dir, name) => {
+  try {
+    const target = path.join(dir, name);
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+    return true;
+  } catch (e) { console.error("[edm] delete-project-file:", e.message); return false; }
 });
 ipcMain.handle("edm-log-message", async (_e, level, text) => {
   console.log(`[edm-${level}]`, text);

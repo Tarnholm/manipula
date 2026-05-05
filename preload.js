@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld("eduAPI", {
   chooseSaveDir: () => ipcRenderer.invoke("edm-choose-save-dir"),
   readProjectFile: (dir, name) => ipcRenderer.invoke("edm-read-project-file", dir, name),
   writeProjectFile: (dir, name, content) => ipcRenderer.invoke("edm-write-project-file", dir, name, content),
+  listProjectFiles: (dir, subdir) => ipcRenderer.invoke("edm-list-project-files", dir, subdir),
+  deleteProjectFile: (dir, name) => ipcRenderer.invoke("edm-delete-project-file", dir, name),
   logMessage: (level, text) => ipcRenderer.invoke("edm-log-message", level, text),
   getLogPath: () => ipcRenderer.invoke("edm-get-log-path"),
   revealLogFile: () => ipcRenderer.invoke("edm-reveal-log-file"),

@@ -78,14 +78,32 @@ export default function App() {
     // Subscribe to live update events going forward.
     const unsub = api.onUpdateStatus && api.onUpdateStatus((s) => setUpdateStatus(s));
 
-    // Auto-load the last xlsm so the EDU Builder is populated on launch
-    // without re-picking the same file every session. Path was saved to
-    // localStorage by importFromEdumatic on the previous successful import.
-    // Only loads the EDU project (not the EDB import preview) — surfacing a
-    // modal on startup would be more annoying than helpful, and EDB units
-    // are already persisted to disk via writeUnits / readUnits anyway.
+    // Auto-load on launch. Project directory takes priority — once a user
+    // has saved a Manipula project folder, that's the source of truth for
+    // every subsequent session. Falls back to the last imported xlsm only
+    // if no project dir is remembered (first run after install, or before
+    // the user has saved their first project).
     let cancelled = false;
     (async () => {
+      const lastProject = localStorage.getItem("rt:projectDir");
+      if (lastProject) {
+        try {
+          const { isProjectDir, loadProject } = await import("./projectStore");
+          if (await isProjectDir(lastProject)) {
+            const { project } = await loadProject(lastProject);
+            if (cancelled) return;
+            setEduProject(project);
+            setEduProjectSource(lastProject);
+            setProjectDir(lastProject);
+            setStatus(`Loaded project — ${(project.units || []).length} units`);
+            return;
+          }
+        } catch (e) {
+          // Corrupt / moved project dir — fall through to xlsm auto-load.
+          console.warn("[project] auto-load skipped:", e && e.message);
+        }
+      }
+      // Fallback: last xlsm.
       const lastPath = localStorage.getItem("rt:lastXlsmPath");
       if (!lastPath || !window.eduAPI || !window.eduAPI.readFileBinary) return;
       try {
@@ -99,8 +117,6 @@ export default function App() {
         setEduProjectSource(lastPath);
         setStatus(`Auto-loaded ${lastPath.split(/[\\/]/).pop()}`);
       } catch (e) {
-        // File moved / deleted / corrupt — silent skip. A missing-xlsm error
-        // banner on every launch (until the user re-imports) would be noise.
         console.warn("[edu] auto-load skipped:", e && e.message);
       }
     })();
@@ -564,6 +580,10 @@ export default function App() {
   const [eduProject, setEduProject] = useState(null);
   const [eduView, setEduView] = useState("project"); // sub-view inside EDU Builder tab
   const [eduProjectSource, setEduProjectSource] = useState(null); // path of the xlsm last imported, for the topbar pill
+  // Active Manipula project directory — null means "no project open yet,
+  // working from a fresh xlsm import or empty state". Persisted to
+  // localStorage so the tool reopens the last project on launch.
+  const [projectDir, setProjectDir] = useState(null);
   // EDU dirty state — flips on whenever the eduProject is mutated post-import (bulk
   // edit, stub creation, etc.). Cleared when the user exports or re-imports.
   const [eduDirty, setEduDirty] = useState(false);
@@ -882,35 +902,44 @@ export default function App() {
         theme={theme}
         onThemeToggle={() => setTheme(t => t === "sepia" ? "ink" : "sepia")}
         onSaveProject={async () => {
-          if (!api?.saveManipulaProject) return;
-          const payload = {
-            version: 1,
-            savedAt: new Date().toISOString(),
-            units,
-            eduProject,
-            eduProjectSource,
-            mapZoom: parseFloat(localStorage.getItem("rt:mapZoom") || "1"),
-            mapPan: JSON.parse(localStorage.getItem("rt:mapPan") || "{}"),
-            activeProfile,
-          };
-          const r = await api.saveManipulaProject(payload, `${activeProfile || "default"}.manipula.json`);
-          if (r.ok) toast(`Saved → ${r.path}`, "success");
-          else if (!r.canceled) toast("Save failed: " + (r.reason || "?"), "error");
+          if (!eduProject) { toast("Nothing to save — import an xlsm or open a project first.", "error"); return; }
+          // Reuse the active project dir if there is one. Otherwise prompt
+          // for a folder. The picked dir is remembered so subsequent saves
+          // don't keep asking.
+          let dir = projectDir;
+          if (!dir) {
+            if (!window.eduAPI?.chooseSaveDir) return;
+            dir = await window.eduAPI.chooseSaveDir();
+            if (!dir) return;
+            setProjectDir(dir);
+            localStorage.setItem("rt:projectDir", dir);
+          }
+          try {
+            const { saveProject } = await import("./projectStore");
+            await saveProject(dir, eduProject);
+            setEduDirty(false);
+            toast(`Saved project → ${dir}`, "success");
+          } catch (e) { toast("Save failed: " + e.message, "error"); }
         }}
         onOpenProject={async () => {
-          if (!api?.openManipulaProject) return;
-          const r = await api.openManipulaProject();
-          if (r.canceled) return;
-          if (!r.ok) { toast("Open failed: " + (r.reason || "?"), "error"); return; }
-          const p = r.payload;
-          if (!p || p.version !== 1) { toast("Not a Manipula project file (or unsupported version)", "error"); return; }
-          if (!window.confirm("Loading this project will replace your current units and EDU project. Continue?")) return;
-          history.reset((p.units || []).map(migrateV1));
-          if (p.eduProject) setEduProject(p.eduProject);
-          if (p.eduProjectSource) setEduProjectSource(p.eduProjectSource);
-          if (p.mapZoom) localStorage.setItem("rt:mapZoom", String(p.mapZoom));
-          if (p.mapPan) localStorage.setItem("rt:mapPan", JSON.stringify(p.mapPan));
-          toast(`Loaded project from ${r.path.split(/[\\/]/).pop()} — ${(p.units || []).length} units`, "success");
+          if (!window.eduAPI?.openProject) return;
+          const dir = await window.eduAPI.openProject();
+          if (!dir) return;
+          try {
+            const { isProjectDir, loadProject } = await import("./projectStore");
+            if (!(await isProjectDir(dir))) {
+              toast("Not a Manipula project folder (no manipula.project.json)", "error");
+              return;
+            }
+            if (eduDirty && !window.confirm("You have unsaved changes. Open another project anyway?")) return;
+            const { project } = await loadProject(dir);
+            setEduProject(project);
+            setEduProjectSource(dir);
+            setProjectDir(dir);
+            setEduDirty(false);
+            localStorage.setItem("rt:projectDir", dir);
+            toast(`Loaded project — ${(project.units || []).length} units`, "success");
+          } catch (e) { toast("Open failed: " + e.message, "error"); }
         }}
         onJumpToUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); setActiveTab("editor"); }}
         onJumpToEdu={() => { setEduView("units"); setActiveTab("edu"); }}
