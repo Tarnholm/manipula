@@ -931,23 +931,24 @@ export default function App() {
   };
 
   const exportAllText = useMemo(() => renderAllPreview(units), [units]);
-  // EDU-side validation count for the Sync gate. Lazy-imported because
-  // validate.js lives in the EDU subtree and we don't want it loaded on
-  // launch unless an EDU project is open. *Debounced 800ms* because
-  // validate() walks the whole project (200-500ms on a real one) and
-  // running it on every keystroke / bulk-edit step pinned the renderer
-  // to the point where Task Manager wouldn't open.
-  const [eduValidationErrorCount, setEduValidationErrorCount] = useState(0);
+  // EDU-side validation results for the Sync gate. Lazy-imported because
+  // validate.js lives in the EDU subtree. Debounced 800ms — validate()
+  // walks the whole project (200-500ms on a real one) and running it on
+  // every keystroke / bulk-edit step pinned the renderer hard enough
+  // that Task Manager wouldn't open (v0.24.2 fix). Sync popover reads
+  // the array to surface the actual error messages, not just a count.
+  const [eduValidationErrors, setEduValidationErrors] = useState([]);
+  const eduValidationErrorCount = eduValidationErrors.length;
   useEffect(() => {
-    if (!eduProject) { setEduValidationErrorCount(0); return; }
+    if (!eduProject) { setEduValidationErrors([]); return; }
     let cancelled = false;
     const id = setTimeout(async () => {
       if (cancelled) return;
       try {
         const { validate } = await import("./edu_matic/validate");
         const errs = validate(eduProject);
-        if (!cancelled) setEduValidationErrorCount(Array.isArray(errs) ? errs.length : 0);
-      } catch (e) { if (!cancelled) setEduValidationErrorCount(0); }
+        if (!cancelled) setEduValidationErrors(Array.isArray(errs) ? errs : []);
+      } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
   }, [eduProject]);
@@ -1400,7 +1401,8 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <SyncButton
         projectDir={projectDir}
         saveTick={projectSaveTick}
-        validationErrorCount={eduValidationErrorCount}
+        validationErrors={eduValidationErrors}
+        onViewValidation={() => { setEduView("validate"); setActiveTab("edu"); }}
         webhookUrl={(eduProject && eduProject.modInfo && eduProject.modInfo.webhookUrl) || ""}
       />
 
@@ -1736,7 +1738,8 @@ function syncBtn(activeColor, isActive) {
 // stays out of the way unless it can actually help. Real merges,
 // branch ops, history review etc. are out of scope; users open their
 // usual git tool for those.
-function SyncButton({ projectDir, saveTick = 0, validationErrorCount = 0, webhookUrl = "" }) {
+function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewValidation = null, webhookUrl = "" }) {
+  const validationErrorCount = validationErrors.length;
   const api = window.eduAPI;
   const [open, setOpen] = useState(false);
   const [available, setAvailable] = useState(null);
@@ -1936,6 +1939,33 @@ function SyncButton({ projectDir, saveTick = 0, validationErrorCount = 0, webhoo
                   <pre style={{ margin: "8px 0 0", padding: 6, background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, fontSize: 10, color: "#bbb", maxHeight: 120, overflow: "auto", whiteSpace: "pre" }}>
                     {diffStat.trim()}
                   </pre>
+                )}
+                {validationErrorCount > 0 && (
+                  <div style={{ marginTop: 8, padding: 6, background: "rgba(214,108,108,0.08)", border: "1px solid rgba(214,108,108,0.4)", borderRadius: 4, fontSize: 10, color: "#e88", maxHeight: 160, overflow: "auto" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <span style={{ color: "#d66c6c", fontWeight: 700 }}>
+                        ⚠ {validationErrorCount} validation error{validationErrorCount === 1 ? "" : "s"}
+                      </span>
+                      {onViewValidation && (
+                        <button
+                          type="button"
+                          onClick={() => { onViewValidation(); setOpen(false); }}
+                          style={{ background: "none", border: "none", color: "#dca64a", cursor: "pointer", padding: 0, fontSize: 10, textDecoration: "underline" }}
+                          title="Open the Validate screen to see all errors and fix them"
+                        >view all in Validate tab →</button>
+                      )}
+                    </div>
+                    {validationErrors.slice(0, 5).map((e, i) => (
+                      <div key={i} style={{ padding: "2px 0", fontFamily: "Consolas, monospace", lineHeight: 1.4, color: "#ddd" }}>
+                        <span style={{ color: "#d66c6c" }}>{e.unit || "<project>"}</span>
+                        <span style={{ color: "#888" }}>{e.row != null ? ` r${e.row}` : ""}: </span>
+                        <span>{e.message}</span>
+                      </div>
+                    ))}
+                    {validationErrorCount > 5 && (
+                      <div style={{ padding: "2px 0", color: "#888", fontStyle: "italic" }}>+ {validationErrorCount - 5} more — open Validate tab to see them all</div>
+                    )}
+                  </div>
                 )}
               </div>
 
