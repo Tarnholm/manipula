@@ -627,6 +627,15 @@ export default function App() {
           ? ` [variant ${vi + 1}/${variantCount}: ${factions.slice(0, 3).join(",") || "all"}]`
           : "";
 
+        // Detect whether the existing EDB recruits this unit from a
+        // garrison building. Original heuristic in generator.js was "tier
+        // 1 ⇒ also emit garrison," but real mods (RIS) recruit tier-2+
+        // units from garrison too, and re-emitting only MIC + AOR lines
+        // dropped those entries on write-back. Recording the actual
+        // building presence at import means we preserve whatever the
+        // source EDB had instead of guessing from tier.
+        const garrisonRecruit = variantEntries.some(e => e.building === "garrison");
+
         const v1Unit = {
           id: "u_" + unitName.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 40) + "_v" + vi + "_" + Math.random().toString(36).slice(2, 6),
           unit: unitName,
@@ -638,6 +647,7 @@ export default function App() {
           excludeFactions,
           requires,
           xp,
+          garrisonRecruit,
           notes: `Imported from EDB (${variantEntries.length} lines, ${unitType})${variantLabel}`,
         };
         const u = migrateV1(v1Unit);

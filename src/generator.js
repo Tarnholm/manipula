@@ -246,8 +246,15 @@ function pushAILinesFor(out, u, isAor) {
     });
   }
 
-  // Garrison duplications for canonicalMicTier === 1 only (garrison aliases tier 1).
-  if (minTier === 1) {
+  // Garrison emission. Original heuristic was "tier 1 only — garrison
+  // aliases tier 1," but real mods recruit higher-tier units from
+  // garrison too (e.g. RIS's AOR Cretan Archers at tier 2). Switch to
+  // an explicit flag set at import time (App.js's importFromEDB scans
+  // variantEntries for building === "garrison" and sets
+  // unit.garrisonRecruit). Legacy data with no flag falls back to the
+  // tier-1 heuristic so previously-imported units round-trip the same.
+  const wantGarrison = (u.garrisonRecruit !== undefined) ? u.garrisonRecruit : (minTier === 1);
+  if (wantGarrison) {
     for (const lvl of GARRISON_LEVELS) {
       out.push({
         building: GARRISON_BUILDING, level: lvl,
