@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Lightweight undo/redo stack for the units array.
-// Snapshots are JSON-stringified so equality checks are cheap and recursion is avoided.
-// Capacity caps to avoid memory bloat.
+// Lightweight undo/redo stack — used for both the recruit-line units
+// array and the EDU project. Stack stores REFERENCES to old values
+// (not JSON snapshots) and dedups via Object.is. The previous version
+// JSON.stringify'd the whole project on every set call — fine for the
+// 200-unit recruit-line side, but ~50ms per call for an 800-unit EDU
+// project, which stacked up under bulk edits and pinned the renderer.
+// References mean callers must always replace the value (e.g.
+// `setProject({ ...project, units: nextUnits })`) rather than mutating
+// in place — which is the React convention anyway and is what every
+// call site already does.
+//
+// Memory: each snapshot is a reference (one pointer) plus the unique
+// data it points to, but most of an EDU project's bulk (factions,
+// core data, armour) shares structure across edits so the actual
+// retained memory is bounded. capacity caps the past/future stacks.
 //
 // Usage:
 //   const { value, set, undo, redo, canUndo, canRedo, reset } = useHistory(initial, { capacity: 50 });
@@ -11,40 +23,37 @@ export default function useHistory(initial, { capacity = 50 } = {}) {
   const [value, setValue] = useState(initial);
   const past = useRef([]);
   const future = useRef([]);
-  const lastSnapshot = useRef(JSON.stringify(initial));
+  const lastValue = useRef(initial);
 
-  // Keep value reference fresh
   const set = useCallback((next) => {
-    const cur = lastSnapshot.current;
-    const nextStr = JSON.stringify(next);
-    if (nextStr === cur) { setValue(next); return; }
-    past.current.push(cur);
+    if (Object.is(next, lastValue.current)) { setValue(next); return; }
+    past.current.push(lastValue.current);
     if (past.current.length > capacity) past.current.shift();
     future.current = [];
-    lastSnapshot.current = nextStr;
+    lastValue.current = next;
     setValue(next);
   }, [capacity]);
 
   const reset = useCallback((next) => {
     past.current = [];
     future.current = [];
-    lastSnapshot.current = JSON.stringify(next);
+    lastValue.current = next;
     setValue(next);
   }, []);
 
   const undo = useCallback(() => {
     if (!past.current.length) return;
     const prev = past.current.pop();
-    future.current.push(lastSnapshot.current);
-    lastSnapshot.current = prev;
-    setValue(JSON.parse(prev));
+    future.current.push(lastValue.current);
+    lastValue.current = prev;
+    setValue(prev);
   }, []);
   const redo = useCallback(() => {
     if (!future.current.length) return;
     const fut = future.current.pop();
-    past.current.push(lastSnapshot.current);
-    lastSnapshot.current = fut;
-    setValue(JSON.parse(fut));
+    past.current.push(lastValue.current);
+    lastValue.current = fut;
+    setValue(fut);
   }, []);
 
   return {

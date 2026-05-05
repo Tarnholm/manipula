@@ -565,7 +565,14 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // hooks below see a valid shape; the real EmptyScreen render happens
   // at the bottom after every hook has been called.
   const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], modInfo: {} };
-  const units = project.units.filter((u) => u.kind === "unit");
+  // Stable across renders unless the underlying array changed. Without
+  // this, every render of UnitsScreen produced a new units[] reference,
+  // cascading useMemo invalidation through allKeys → tableRows → rowFlags
+  // → filteredTable on every keystroke.
+  const units = useMemo(
+    () => project.units.filter((u) => u.kind === "unit"),
+    [project.units]
+  );
   // Filter chips: faction (from availability) and category. Empty string
   // means "no filter on this axis." Stored as state local to the screen.
   const [filterFaction, setFilterFaction] = useState("");

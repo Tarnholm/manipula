@@ -106,6 +106,23 @@ export default function DataTable({
   const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isNonData(r) ? 0 : 1), 0), [rows]);
   const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isNonData(e.row) ? 0 : 1), 0), [filteredEntries]);
 
+  // Lazy-render limit. Large EDU projects have ~800-1000 rows; rendering
+  // every Cell on first paint takes seconds even with React.memo. We cap
+  // initial render to ROW_PAGE rows; an IntersectionObserver sentinel
+  // below bumps the limit as the user scrolls near the bottom. Search
+  // narrows filteredEntries before this cap so search results aren't
+  // hidden behind it.
+  const ROW_PAGE = 200;
+  const [renderLimit, setRenderLimit] = useState(ROW_PAGE);
+  // Reset on data / search change so jumping to a different filter
+  // shows results from the top.
+  useEffect(() => { setRenderLimit(ROW_PAGE); }, [rows, q]);
+  const visibleEntries = useMemo(
+    () => filteredEntries.length > renderLimit ? filteredEntries.slice(0, renderLimit) : filteredEntries,
+    [filteredEntries, renderLimit]
+  );
+  const hiddenRowCount = filteredEntries.length - visibleEntries.length;
+
   // Group entries into one tbody per section so sticky-top section dividers
   // are bounded by their own tbody. Without this, multiple sticky <tr> at the
   // same top: offset all stick at the same y-coordinate and overlap as the
@@ -116,7 +133,7 @@ export default function DataTable({
   const groups = useMemo(() => {
     const out = [];
     let cur = null;
-    for (const e of filteredEntries) {
+    for (const e of visibleEntries) {
       if (isSection(e.row)) {
         cur = { section: e, entries: [] };
         out.push(cur);
@@ -131,7 +148,7 @@ export default function DataTable({
       cur.entries.push(e);
     }
     return out;
-  }, [filteredEntries]);
+  }, [visibleEntries]);
 
   // Column visibility — opt-in via columnsToggleable. Internal state holds the
   // *hidden* set so an unset visibility map still defaults to showing all
@@ -432,6 +449,46 @@ export default function DataTable({
           {filteredEntries.length === 0 && (
             <tbody>
               <tr><td className="dim" colSpan={visibleColumns.length} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
+            </tbody>
+          )}
+          {hiddenRowCount > 0 && (
+            <tbody>
+              <tr>
+                <td
+                  colSpan={visibleColumns.length}
+                  ref={(el) => {
+                    // IntersectionObserver sentinel — when this row scrolls
+                    // into view (or near it via rootMargin), bump the
+                    // renderLimit so the next page of rows mounts. Setup
+                    // happens via callback ref so the observer is reattached
+                    // every render the sentinel is present.
+                    if (!el || typeof IntersectionObserver === "undefined") return;
+                    if (el.__manipulaObs) return;
+                    const io = new IntersectionObserver((entries) => {
+                      for (const e of entries) {
+                        if (e.isIntersecting) {
+                          setRenderLimit((n) => n + ROW_PAGE);
+                          io.disconnect();
+                          el.__manipulaObs = null;
+                          return;
+                        }
+                      }
+                    }, { root: scrollRef.current, rootMargin: "400px" });
+                    io.observe(el);
+                    el.__manipulaObs = io;
+                  }}
+                  className="dim"
+                  style={{ textAlign: "center", padding: 14, fontStyle: "italic", borderTop: "1px solid rgba(220,166,74,0.2)" }}
+                >
+                  Loading {Math.min(hiddenRowCount, ROW_PAGE)} more
+                  <span style={{ color: "#666" }}> · {filteredEntries.length - hiddenRowCount} of {filteredEntries.length} rendered · </span>
+                  <button
+                    type="button"
+                    onClick={() => setRenderLimit(filteredEntries.length)}
+                    style={{ background: "none", border: "none", color: "#dca64a", cursor: "pointer", padding: 0, fontSize: "inherit", textDecoration: "underline", fontStyle: "italic" }}
+                  >render all</button>
+                </td>
+              </tr>
             </tbody>
           )}
         </table>
