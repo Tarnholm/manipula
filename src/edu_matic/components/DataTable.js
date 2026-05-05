@@ -181,57 +181,14 @@ export default function DataTable({
   // Reset on data / search change so jumping to a different filter
   // shows results from the top.
   useEffect(() => { setRenderLimit(ROW_PAGE); }, [rows, q]);
-  // Apply client-side sort when set. Section / separator rows are
-  // dropped while sorted (they only make sense in the original order)
-  // and restored when sort is cleared. The sort uses natural-collator
-  // comparison so "10" sorts after "9" in mixed-text columns.
-  const sortedEntries = useMemo(() => {
-    if (!sortBy) return filteredEntries;
-    const colIdx = columns.indexOf(sortBy.key);
-    if (colIdx < 0) return filteredEntries;
-    const sortable = filteredEntries.filter((e) => Array.isArray(e.row));
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-    sortable.sort((a, b) => {
-      const av = a.row[colIdx], bv = b.row[colIdx];
-      const as = av == null ? "" : String(av);
-      const bs = bv == null ? "" : String(bv);
-      const r = collator.compare(as, bs);
-      return sortBy.dir === "asc" ? r : -r;
-    });
-    return sortable;
-  }, [filteredEntries, sortBy, columns]);
-  const visibleEntries = useMemo(
-    () => sortedEntries.length > renderLimit ? sortedEntries.slice(0, renderLimit) : sortedEntries,
-    [sortedEntries, renderLimit]
-  );
-  const hiddenRowCount = filteredEntries.length - visibleEntries.length;
+  // sortedEntries / visibleEntries are computed further down, after the
+  // sort/pinned state is declared. Their deps array reads `sortBy`, so
+  // they MUST come after the useState. Putting them here would TDZ-crash
+  // the entire EDU panel on every project load — see the ee/sortBy bug
+  // diagnosed in v0.33.5 via source-map.
 
-  // Group entries into one tbody per section so sticky-top section dividers
-  // are bounded by their own tbody. Without this, multiple sticky <tr> at the
-  // same top: offset all stick at the same y-coordinate and overlap as the
-  // user scrolls — which is exactly the "non-remastered romans following when
-  // I scroll down" symptom. With per-section tbody, sticky is constrained to
-  // its tbody's bounds: the previous section's header un-sticks when its
-  // tbody scrolls offscreen, and the next section's header takes over.
-  const groups = useMemo(() => {
-    const out = [];
-    let cur = null;
-    for (const e of visibleEntries) {
-      if (isSection(e.row)) {
-        cur = { section: e, entries: [] };
-        out.push(cur);
-        continue;
-      }
-      if (!cur) {
-        // Rows before any section header — keep them in an unlabeled leading
-        // group so we don't drop them.
-        cur = { section: null, entries: [] };
-        out.push(cur);
-      }
-      cur.entries.push(e);
-    }
-    return out;
-  }, [visibleEntries]);
+  // groups (sections-grouped visibleEntries) is computed further down,
+  // after visibleEntries / sortedEntries are declared.
 
   // Column visibility — opt-in via columnsToggleable. Internal state holds the
   // *hidden* set so an unset visibility map still defaults to showing all
@@ -264,6 +221,56 @@ export default function DataTable({
     setTimeout(() => document.addEventListener("click", onAny, { once: true }), 0);
     return () => document.removeEventListener("click", onAny);
   }, [headerMenu]);
+  // Apply client-side sort when set. Section / separator rows are
+  // dropped while sorted (they only make sense in the original order)
+  // and restored when sort is cleared. The sort uses natural-collator
+  // comparison so "10" sorts after "9" in mixed-text columns. Sits
+  // here (not above) so the [filteredEntries, sortBy, columns] deps
+  // array doesn't TDZ on `sortBy` during render.
+  const sortedEntries = useMemo(() => {
+    if (!sortBy) return filteredEntries;
+    const colIdx = columns.indexOf(sortBy.key);
+    if (colIdx < 0) return filteredEntries;
+    const sortable = filteredEntries.filter((e) => Array.isArray(e.row));
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    sortable.sort((a, b) => {
+      const av = a.row[colIdx], bv = b.row[colIdx];
+      const as = av == null ? "" : String(av);
+      const bs = bv == null ? "" : String(bv);
+      const r = collator.compare(as, bs);
+      return sortBy.dir === "asc" ? r : -r;
+    });
+    return sortable;
+  }, [filteredEntries, sortBy, columns]);
+  const visibleEntries = useMemo(
+    () => sortedEntries.length > renderLimit ? sortedEntries.slice(0, renderLimit) : sortedEntries,
+    [sortedEntries, renderLimit]
+  );
+  const hiddenRowCount = filteredEntries.length - visibleEntries.length;
+  // Group entries into one tbody per section so sticky-top section dividers
+  // are bounded by their own tbody. Without this, multiple sticky <tr> at the
+  // same top: offset all stick at the same y-coordinate and overlap as the
+  // user scrolls — which is exactly the "non-remastered romans following when
+  // I scroll down" symptom. With per-section tbody, sticky is constrained to
+  // its tbody's bounds: the previous section's header un-sticks when its
+  // tbody scrolls offscreen, and the next section's header takes over.
+  const groups = useMemo(() => {
+    const out = [];
+    let cur = null;
+    for (const e of visibleEntries) {
+      if (isSection(e.row)) {
+        cur = { section: e, entries: [] };
+        out.push(cur);
+        continue;
+      }
+      if (!cur) {
+        cur = { section: null, entries: [] };
+        out.push(cur);
+      }
+      cur.entries.push(e);
+    }
+    return out;
+  }, [visibleEntries]);
   const visibleColIndices = useMemo(
     () => columns.map((_, i) => i).filter((i) => !hiddenCols.has(columns[i])),
     [columns, hiddenCols]
