@@ -2125,6 +2125,7 @@ function PreviewScreen({ project }) {
           rows={dataRows.map((r) => [r.name, ...cols.map((c) => r[c])])}
           maxHeight="70vh"
           searchable
+          pinFirstColumn
         />
       )}
       {tab === "text" && (
