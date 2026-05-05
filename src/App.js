@@ -909,9 +909,30 @@ export default function App() {
     // eslint-disable-next-line
   }, [units]);
 
-  // Re-check missing unit cards whenever the unit set or EDU index changes. Runs through
-  // an IPC so main does the file existence checks (we don't want hundreds of fs.existsSync
-  // calls in the renderer). Debounced so a typing burst doesn't thrash main.
+  // Stable icon-key for the units' icon-relevant fields ONLY (unit name +
+  // primary faction + dictionary tag). Without this the previous useEffect
+  // re-fired on every keystroke because `units` was a fresh ref each
+  // render, and prewarmUnitCards was doing ~64,000 fs.existsSync calls
+  // per fire on a real project — which on an 800-unit list locked the
+  // renderer for several seconds at boot AND on every edit afterward.
+  const iconKey = useMemo(() => {
+    const stripPrefix = (s) => String(s || "").replace(/^(aor|merc)\s+/i, "");
+    const parts = [];
+    for (const u of units) {
+      const eduEntry = modIndex.eduByType
+        ? (modIndex.eduByType.get(u.unit) || modIndex.eduByType.get(stripPrefix(u.unit)))
+        : null;
+      const faction =
+        (u.factions || []).find(f => f && f !== "all") ||
+        (eduEntry?.ownership || []).find(f => f && f !== "slave") ||
+        "";
+      parts.push(`${u.unit}|${faction}|${eduEntry?.dictionary || ""}`);
+    }
+    return parts.join("\n");
+  }, [units, modIndex.eduByType]);
+
+  // Re-check missing unit cards + prewarm the PNG cache when the icon
+  // identity set actually changes — not on every cell edit.
   useEffect(() => {
     if (!api?.checkUnitCards) return;
     if (!units.length) { setMissingCards(new Set()); return; }
@@ -931,11 +952,13 @@ export default function App() {
         setMissingCards(new Set(missing || []));
       }).catch(() => {});
       // Fire-and-forget: pre-warm the PNG cache for every authored unit's portrait so the
-      // first scroll through UnitList shows them without any decode latency.
+      // first scroll through UnitList shows them without any decode latency. The path-
+      // resolution cache in main makes repeat lookups O(1), so this is cheap on subsequent
+      // calls; only the very first call after a mod-data folder change actually walks disk.
       try { if (api.prewarmUnitCards) api.prewarmUnitCards(list); } catch {}
     }, 300);
     return () => clearTimeout(t);
-  }, [units, modIndex]);
+  }, [iconKey]);
 
   // Single-click bundle export. Builds both texts in the renderer (EDB via applyUnitsToEDB,
   // EDU via compute + formatEdu when an EDU project is loaded), then writes both into one

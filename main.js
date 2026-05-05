@@ -208,6 +208,9 @@ ipcMain.handle("get-data-dir", async () => dataDir());
 ipcMain.handle("set-data-dir", async (_e, dir) => {
   if (!dir || !fs.existsSync(dir)) return { ok: false, reason: "Directory does not exist" };
   writeSettings({ dataDir: dir });
+  // Path-resolution cache is keyed by dataDir; clear so we don't return
+  // stale paths after a folder switch.
+  if (typeof clearResolveTgaCache === "function") clearResolveTgaCache();
   return { ok: true };
 });
 
@@ -892,9 +895,22 @@ function resolveFactionIconTga(factionId) {
   for (const c of candidates) if (c && fs.existsSync(c)) return c;
   return null;
 }
+// Path-resolution cache. resolveUnitTga walks up to ~80 fs.existsSync
+// candidates per unit; with 800-unit projects firing prewarm + img
+// requests, that adds up to tens of thousands of disk hits on boot.
+// Cache by (faction|unit|dict|kind|dataDir) so repeat lookups for the
+// same unit are O(1). Cap growth and clear on dataDir change (see
+// set-data-dir handler) so a project-folder switch doesn't return
+// stale paths.
+const resolveTgaCache = new Map();
+const RESOLVE_CACHE_MAX = 5000;
+function clearResolveTgaCache() { resolveTgaCache.clear(); }
+
 function resolveUnitTga(faction, unitName, dictionary, kind /* "card" | "info" */) {
   if (!unitName) return null;
   const d = dataDir();
+  const cacheKey = `${d}|${faction || ""}|${unitName}|${dictionary || ""}|${kind}`;
+  if (resolveTgaCache.has(cacheKey)) return resolveTgaCache.get(cacheKey);
   const scrub = (s) => String(s).toLowerCase().replace(/['"`]/g, "").replace(/\s+/g, "_");
   const f = faction ? scrub(faction) : null;
   const variants = [];
@@ -924,13 +940,25 @@ function resolveUnitTga(faction, unitName, dictionary, kind /* "card" | "info" *
     else { filenames.push(`#${v}.tga`); filenames.push(`${v}_info.tga`); }
   }
   const subdirs = kind === "info" ? ["unit_info"] : ["units", "unit_info"];
+  const cache = (result) => {
+    if (resolveTgaCache.size >= RESOLVE_CACHE_MAX) {
+      // Cheap eviction — drop the first quarter when full. The hot
+      // working set is well under RESOLVE_CACHE_MAX so this rarely fires.
+      const drop = Math.floor(RESOLVE_CACHE_MAX / 4);
+      let i = 0;
+      for (const k of resolveTgaCache.keys()) { if (i++ >= drop) break; resolveTgaCache.delete(k); }
+    }
+    resolveTgaCache.set(cacheKey, result);
+    return result;
+  };
+
   for (const fac of factions) {
     for (const sub of subdirs) {
       const dir = path.join(d, "ui", sub, fac);
       if (!fs.existsSync(dir)) continue;
       for (const fn of filenames) {
         const full = path.join(dir, fn);
-        if (fs.existsSync(full)) return full;
+        if (fs.existsSync(full)) return cache(full);
       }
     }
   }
@@ -944,11 +972,11 @@ function resolveUnitTga(faction, unitName, dictionary, kind /* "card" | "info" *
       try { if (!fs.statSync(facPath).isDirectory()) continue; } catch { continue; }
       for (const fn of filenames) {
         const full = path.join(facPath, fn);
-        if (fs.existsSync(full)) return full;
+        if (fs.existsSync(full)) return cache(full);
       }
     }
   }
-  return null;
+  return cache(null);
 }
 
 function registerIconProtocol() {
