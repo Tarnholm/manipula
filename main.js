@@ -1186,24 +1186,73 @@ ipcMain.handle("edm-get-user-data-path", () => app.getPath("userData"));
 // verbatim so the renderer can show what git said in a toast or
 // status panel — no parsing on the renderer side beyond exit code.
 
+// Resolve the git executable. Node's child_process.spawn on Windows
+// doesn't do PATHEXT lookup as reliably as a real shell, so passing
+// just "git" can silently fail with ENOENT even when `git --version`
+// works in PowerShell. We probe a few candidates the first time we
+// need git and cache the working one. Only when none respond do we
+// give up and report "git not found" — distinct from "found git, but
+// the dir isn't a repo", which the UI needs to differentiate.
+let gitExePath = null;
+let gitProbeDone = false;
+
+async function findGit() {
+  if (gitProbeDone) return gitExePath;
+  const candidates = process.platform === "win32"
+    ? [
+        "git.exe",                             // PATHEXT-resolved
+        "git",                                 // some shells
+        "C:\\Program Files\\Git\\cmd\\git.exe",          // Git for Windows default
+        "C:\\Program Files\\Git\\bin\\git.exe",
+        "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
+      ]
+    : ["git", "/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
+
+  for (const c of candidates) {
+    try {
+      const ok = await new Promise((resolve) => {
+        const p = spawn(c, ["--version"], { env: process.env, windowsHide: true });
+        let buf = "";
+        p.stdout.on("data", (b) => { buf += b.toString(); });
+        p.on("error", () => resolve(false));
+        p.on("close", (code) => resolve(code === 0 && /^git version/i.test(buf)));
+      });
+      if (ok) {
+        gitExePath = c;
+        gitProbeDone = true;
+        console.log("[git] using", c);
+        return c;
+      }
+    } catch { /* try next */ }
+  }
+  gitProbeDone = true;
+  gitExePath = null;
+  return null;
+}
+
 function runGit(cwd, args) {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     if (!cwd || !fs.existsSync(cwd)) {
       resolve({ ok: false, code: -1, stdout: "", stderr: "project dir missing" });
+      return;
+    }
+    const exe = await findGit();
+    if (!exe) {
+      resolve({ ok: false, code: -1, stdout: "", stderr: "git not found on PATH", missing: true });
       return;
     }
     let stdout = "", stderr = "";
     let proc;
     try {
-      proc = spawn("git", args, { cwd, env: process.env, windowsHide: true });
+      proc = spawn(exe, args, { cwd, env: process.env, windowsHide: true });
     } catch (e) {
-      resolve({ ok: false, code: -1, stdout: "", stderr: "spawn failed: " + e.message });
+      resolve({ ok: false, code: -1, stdout: "", stderr: "spawn failed: " + e.message, missing: true });
       return;
     }
     proc.stdout.on("data", (b) => { stdout += b.toString(); });
     proc.stderr.on("data", (b) => { stderr += b.toString(); });
     proc.on("error", (err) => {
-      resolve({ ok: false, code: -1, stdout, stderr: stderr || err.message });
+      resolve({ ok: false, code: -1, stdout, stderr: stderr || err.message, missing: true });
     });
     proc.on("close", (code) => {
       resolve({ ok: code === 0, code, stdout, stderr });
@@ -1211,14 +1260,9 @@ function runGit(cwd, args) {
   });
 }
 
-// Probe: is git on PATH at all? Cached after the first call so the
-// renderer's status bar isn't spawning a process per render.
-let gitAvailable = null;
 ipcMain.handle("git-available", async () => {
-  if (gitAvailable !== null) return gitAvailable;
-  const r = await runGit(process.cwd(), ["--version"]);
-  gitAvailable = r.ok;
-  return gitAvailable;
+  const exe = await findGit();
+  return exe != null;
 });
 
 // Status: returns enough for the UI to decide what to offer. Counts

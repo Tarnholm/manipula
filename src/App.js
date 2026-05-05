@@ -1564,6 +1564,27 @@ function tbtn(color) {
   return { background: color, color: "#fff", border: "none", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 500 };
 }
 
+// Sync-dropdown action button. Enabled buttons get the active colour;
+// disabled buttons drop to a desaturated dark fill so the eye lands on
+// the action that's actually useful given the current repo state.
+// Width: 100% so the dropdown's three buttons always lay out cleanly
+// in a stack instead of wrapping at awkward widths.
+function syncBtn(activeColor, isActive) {
+  return {
+    background: isActive ? activeColor : "#2a2a2a",
+    color: isActive ? "#fff" : "#666",
+    border: isActive ? "none" : "1px solid #333",
+    padding: "8px 12px",
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 600,
+    width: "100%",
+    textAlign: "left",
+    cursor: isActive ? "pointer" : "not-allowed",
+    fontFamily: "inherit",
+  };
+}
+
 // SyncButton — small "Sync" entry in the topbar that wraps git pull /
 // commit / push for the active project dir. Designed for the team
 // member who doesn't want to learn git: one click pulls the latest,
@@ -1650,41 +1671,95 @@ function SyncButton({ projectDir }) {
       {open && (
         <div
           style={{
-            position: "absolute", top: "calc(100% + 4px)", right: 0,
-            background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6,
-            padding: 12, minWidth: 320, zIndex: 1000, fontFamily: "Consolas, monospace",
-            fontSize: 11, color: "#bbb",
+            position: "absolute", top: "calc(100% + 6px)", right: 0,
+            background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 8,
+            padding: 14, width: 320, zIndex: 1000,
+            fontFamily: "Consolas, monospace", fontSize: 12, color: "#bbb",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
           }}
         >
           {!status?.isRepo ? (
             <div>
-              <div style={{ color: "#dca64a", fontWeight: 600, marginBottom: 4 }}>Project dir is not a git repo</div>
-              <div style={{ marginBottom: 6 }}>Initialise it with your usual git tool, or run <code>git init</code> in {projectDir}.</div>
-              <button onClick={refresh} style={tbtn("#3a4a5a")} disabled={busy}>Re-check</button>
+              <div style={{ color: "#dca64a", fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Not a git repo</div>
+              <div style={{ marginBottom: 10, lineHeight: 1.4, color: "#999" }}>
+                Run <code style={{ background: "#0e0e0e", padding: "1px 4px", borderRadius: 3 }}>git init</code> in the project folder, push it to a remote (e.g. GitHub), then teammates clone and use <b>Open Project</b> here.
+              </div>
+              <button onClick={refresh} style={syncBtn("#3a4a5a", false)} disabled={busy}>Re-check</button>
             </div>
           ) : (
             <>
-              <div style={{ marginBottom: 6, color: "#dca64a" }}>{status.branch}{status.upstream ? ` → ${status.upstream}` : " · no upstream"}</div>
-              <div style={{ marginBottom: 8 }}>
-                {status.dirtyCount} uncommitted file{status.dirtyCount === 1 ? "" : "s"}
-                {status.ahead != null ? ` · ${status.ahead} ahead, ${status.behind} behind` : ""}
+              {/* Header — branch + upstream + counters in two compact rows. */}
+              <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid #2a2a2a" }}>
+                <div style={{ color: "#dca64a", fontWeight: 700, fontSize: 13 }}>
+                  {status.branch}
+                  {status.upstream ? <span style={{ color: "#555", fontWeight: 400 }}> → <span style={{ color: "#888" }}>{status.upstream}</span></span> : <span style={{ color: "#666", fontWeight: 400 }}> · no upstream</span>}
+                </div>
+                <div style={{ color: "#888", fontSize: 11, marginTop: 4, display: "flex", gap: 10 }}>
+                  <span style={{ color: dirty ? "#d66c6c" : "#666" }}>● {status.dirtyCount} dirty</span>
+                  <span style={{ color: (ahead || 0) > 0 ? "#dca64a" : "#666" }}>↑ {ahead ?? 0} ahead</span>
+                  <span style={{ color: (behind || 0) > 0 ? "#4f8fd6" : "#666" }}>↓ {behind ?? 0} behind</span>
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                <button disabled={busy || behind === 0} onClick={() => run("Pull", () => api.gitPull(projectDir))} style={tbtn("#4f8fd6")} title="git pull --ff-only">Pull{behind ? ` (${behind})` : ""}</button>
-                <button disabled={busy || !dirty} onClick={async () => {
-                  const msg = window.prompt("Commit message:", "Manipula update");
-                  if (!msg) return;
-                  await run("Commit + push", async () => {
-                    const c = await api.gitCommitAll(projectDir, msg);
-                    if (!c.ok) return c;
-                    return await api.gitPush(projectDir);
-                  });
-                }} style={tbtn("#7c9")} title="git add . && git commit -m && git push">Commit + Push</button>
-                <button disabled={busy || (ahead === 0)} onClick={() => run("Push", () => api.gitPush(projectDir))} style={tbtn("#465")}>Push{ahead ? ` (${ahead})` : ""}</button>
-                <button disabled={busy} onClick={refresh} style={tbtn("#3a4a5a")}>Refresh</button>
+
+              {/* Action buttons — stacked full-width so they always lay out
+                  cleanly regardless of label length / count badges. The
+                  primary action (the one most likely to be useful right
+                  now, based on state) gets the brighter colour. */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <button
+                  disabled={busy || (behind || 0) === 0}
+                  onClick={() => run("Pull", () => api.gitPull(projectDir))}
+                  style={syncBtn("#4f8fd6", (behind || 0) > 0)}
+                  title="git pull --ff-only"
+                >
+                  Pull {behind ? `(${behind})` : ""}
+                </button>
+                <button
+                  disabled={busy || !dirty}
+                  onClick={async () => {
+                    const msg = window.prompt("Commit message:", "Manipula update");
+                    if (!msg) return;
+                    await run("Commit + push", async () => {
+                      const c = await api.gitCommitAll(projectDir, msg);
+                      if (!c.ok) return c;
+                      return await api.gitPush(projectDir);
+                    });
+                  }}
+                  style={syncBtn("#7c9", dirty)}
+                  title="git add . && git commit -m && git push"
+                >
+                  Commit + Push {dirty ? `(${status.dirtyCount})` : ""}
+                </button>
+                <button
+                  disabled={busy || (ahead || 0) === 0}
+                  onClick={() => run("Push", () => api.gitPush(projectDir))}
+                  style={syncBtn("#465", (ahead || 0) > 0)}
+                  title="git push (no commit)"
+                >
+                  Push only {ahead ? `(${ahead})` : ""}
+                </button>
               </div>
+
+              {/* Footer — refresh + log. Tucked below the action area so it
+                  doesn't compete with the primary buttons for attention. */}
+              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #2a2a2a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <button
+                  disabled={busy}
+                  onClick={refresh}
+                  style={{ background: "none", border: "none", color: "#888", cursor: busy ? "default" : "pointer", padding: "2px 4px", fontSize: 11, textDecoration: "underline" }}
+                  title="Re-check git state"
+                >
+                  Refresh
+                </button>
+                {busy && <span style={{ color: "#dca64a", fontSize: 11 }}>Working…</span>}
+              </div>
+
               {log && (
-                <pre style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, padding: 6, maxHeight: 160, overflow: "auto", fontSize: 10, color: "#ccc", whiteSpace: "pre-wrap", margin: 0 }}>{log}</pre>
+                <pre style={{
+                  background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4,
+                  padding: 8, marginTop: 10, maxHeight: 140, overflow: "auto",
+                  fontSize: 10, color: "#ccc", whiteSpace: "pre-wrap", lineHeight: 1.4,
+                }}>{log}</pre>
               )}
             </>
           )}
