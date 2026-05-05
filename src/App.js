@@ -617,6 +617,12 @@ export default function App() {
   };
 
   const [diff, setDiff] = useState(null); // { added, removed, kept } | null
+  // Conflict resolver state — populated when previewWriteBack detects
+  // that the on-disk EDB has changed since Manipula's last export.
+  // Keeps the freshly-read EDB text on hand so the resolver's actions
+  // (Show diff / Overwrite anyway) don't have to re-read it. null
+  // when no conflict is active.
+  const [edbConflict, setEdbConflict] = useState(null);
   const [edumaticPreview, setEdumaticPreview] = useState(null); // { source, rows, selected: Set } | null
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
@@ -882,6 +888,20 @@ export default function App() {
     setEduDirty(false);
   };
 
+  // Shared "compute the proposed diff modal payload" closure — used by
+  // both the normal write-back flow and the conflict-resolver's
+  // "overwrite anyway" path so the integrity check is identical either
+  // way. Returns the payload that setDiff() should be called with.
+  const buildWriteBackDiff = useCallback((fresh) => {
+    const d = diffEDB(fresh, units);
+    let integrity = null;
+    try {
+      const proposed = applyUnitsToEDB(fresh, units);
+      integrity = verifyRoundTrip(proposed, units);
+    } catch (e) { integrity = { ok: false, missing: [], error: e.message, expectedCount: 0 }; }
+    return { ...d, fresh, integrity };
+  }, [units]);
+
   const previewWriteBack = async () => {
     if (!api) return;
     if (!units.length) { alert("No units to write."); return; }
@@ -890,27 +910,23 @@ export default function App() {
     // Stale-export detection: if we exported EDB before, compare the live
     // file's hash against the hash we recorded at export time. A mismatch
     // means the EDB was edited externally (teammate ran the game,
-    // hand-authored a section, or pulled a newer commit) — we want the
-    // user to confirm before overwriting that work.
+    // hand-authored a section, or pulled a newer commit). Open the
+    // conflict resolver instead of just bailing — it shows the diff,
+    // offers to open the file in the default editor, and lets the user
+    // pick "overwrite anyway" with full information.
     if (projectExports?.edb?.hashAtExport) {
       const { hashOfText } = await import("./projectStore");
       const liveHash = hashOfText(fresh);
       if (liveHash !== projectExports.edb.hashAtExport) {
-        const ok = window.confirm(
-          "External changes detected: export_descr_buildings.txt has been modified " +
-          "since Manipula last wrote it. Continuing will overwrite those changes " +
-          "(a .bak is created either way).\n\nWrite back anyway?"
-        );
-        if (!ok) return;
+        setEdbConflict({
+          fresh,
+          exportedAt: projectExports.edb.exportedAt,
+          path: projectExports.edb.path,
+        });
+        return;
       }
     }
-    const d = diffEDB(fresh, units);
-    let integrity = null;
-    try {
-      const proposed = applyUnitsToEDB(fresh, units);
-      integrity = verifyRoundTrip(proposed, units);
-    } catch (e) { integrity = { ok: false, missing: [], error: e.message, expectedCount: 0 }; }
-    setDiff({ ...d, fresh, integrity });
+    setDiff(buildWriteBackDiff(fresh));
   };
 
   const confirmWriteBack = async () => {
@@ -1193,6 +1209,27 @@ export default function App() {
       />
       {diff && (
         <DiffModal diff={diff} onCancel={() => setDiff(null)} onConfirm={confirmWriteBack} />
+      )}
+      {edbConflict && (
+        <EdbConflictModal
+          conflict={edbConflict}
+          onCancel={() => setEdbConflict(null)}
+          onShowDiff={() => {
+            const fresh = edbConflict.fresh;
+            setEdbConflict(null);
+            setDiff(buildWriteBackDiff(fresh));
+          }}
+          onOpenInEditor={async () => {
+            if (api && api.openPath && edbConflict.path) {
+              await api.openPath(edbConflict.path);
+            }
+          }}
+          onOverwrite={() => {
+            const fresh = edbConflict.fresh;
+            setEdbConflict(null);
+            setDiff(buildWriteBackDiff(fresh));
+          }}
+        />
       )}
       {showBackups && (
         <BackupsModal
@@ -2244,6 +2281,68 @@ function FindReplaceModal({ units, onApply, onClose }) {
             onClick={() => { const n = onApply({ find, replace }); onClose(); }}
             style={{ background: !find || preview.lineCount === 0 ? "rgba(220,166,74,0.2)" : "#dca64a", color: !find || preview.lineCount === 0 ? "#888" : "#1a1a1a", border: "none", padding: "8px 16px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: !find || preview.lineCount === 0 ? "default" : "pointer" }}
           >Replace {preview.lineCount} {preview.lineCount === 1 ? "line" : "lines"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Conflict resolver — surfaces when previewWriteBack detects that the
+// game's EDB has been modified externally since Manipula's last export.
+// Replaces the previous bare window.confirm() so the user can:
+//   - See *when* the last export was, so they can correlate
+//   - Open the EDB in their default text editor to inspect what changed
+//   - Show the about-to-be-written diff (jumps to the existing DiffModal)
+//   - Overwrite anyway (the .bak rotation in main still fires)
+//   - Cancel without writing
+// Three-way merge / per-line cherry-pick is out of scope here — that
+// belongs in the user's normal git client. This modal exists to make
+// the "I'm about to clobber someone's work" moment legible and
+// recoverable.
+function EdbConflictModal({ conflict, onCancel, onShowDiff, onOpenInEditor, onOverwrite }) {
+  const filename = conflict.path ? String(conflict.path).split(/[\\/]/).pop() : "export_descr_buildings.txt";
+  const exportedAt = conflict.exportedAt ? new Date(conflict.exportedAt) : null;
+  const ago = exportedAt ? Math.round((Date.now() - exportedAt.getTime()) / 60000) : null;
+  const agoLabel = ago == null ? "" :
+    ago < 1 ? "just now" :
+    ago < 60 ? `${ago} min ago` :
+    ago < 24 * 60 ? `${Math.round(ago / 60)} hr ago` :
+    `${Math.round(ago / 60 / 24)} day ago`;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 6000, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "rgba(28,30,32,0.98)", border: "1px solid #d66c6c", borderRadius: 10, padding: 24, maxWidth: 560, color: "#ddd", boxShadow: "0 12px 40px rgba(0,0,0,0.6)" }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#d66c6c", marginBottom: 6 }}>Conflict on {filename}</div>
+        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 14, lineHeight: 1.5 }}>
+          The file on disk has been modified since Manipula's last export
+          {agoLabel ? ` (${agoLabel})` : ""}. Writing now will overwrite those external
+          changes — possibly someone else's work or hand-edits to a section the tool
+          doesn't manage.
+        </div>
+        {conflict.path && (
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 16, fontFamily: "Consolas, monospace", padding: "6px 8px", background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, wordBreak: "break-all" }}>
+            {conflict.path}
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <button
+            onClick={onShowDiff}
+            style={{ background: "#3a4a5a", color: "#fff", border: "1px solid #4f8fd6", padding: "8px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer", textAlign: "left", fontSize: 12 }}
+            title="See exactly what Manipula would change vs the current EDB"
+          >Show diff (what Manipula would write)</button>
+          <button
+            onClick={onOpenInEditor}
+            style={{ background: "#2a2a2a", color: "#ddd", border: "1px solid #3a3a3a", padding: "8px 14px", borderRadius: 6, fontWeight: 600, cursor: "pointer", textAlign: "left", fontSize: 12 }}
+            title="Open the file in your default text editor so you can inspect the external changes directly"
+          >Open EDB in default editor</button>
+          <button
+            onClick={onOverwrite}
+            style={{ background: "#d66c6c", color: "#fff", border: "none", padding: "8px 14px", borderRadius: 6, fontWeight: 700, cursor: "pointer", textAlign: "left", fontSize: 12 }}
+            title="Proceed to the diff modal and overwrite the on-disk EDB. .bak is created by main."
+          >Overwrite anyway</button>
+          <button
+            onClick={onCancel}
+            style={{ background: "transparent", color: "#aaa", border: "1px solid #3a3a3a", padding: "8px 14px", borderRadius: 6, fontWeight: 500, cursor: "pointer", textAlign: "left", fontSize: 12 }}
+          >Cancel</button>
         </div>
       </div>
     </div>

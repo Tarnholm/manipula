@@ -1314,6 +1314,20 @@ ipcMain.handle("git-log-file", async (_e, dir, relPath, n) => {
   return runGit(dir, ["log", `--format=%h|%an|%ar`, `-n`, String(limit), "--", relPath]);
 });
 
+// Open a path in the OS default editor / file association. Used by the
+// EDB conflict resolver: when an external change is detected, the user
+// can open the file directly to inspect/resolve before deciding whether
+// to overwrite. shell.openPath is fire-and-forget; we surface the empty
+// string return code as ok and the OS error message as failure.
+ipcMain.handle("open-path", async (_e, p) => {
+  if (!p) return { ok: false, reason: "no path" };
+  try {
+    const { shell } = require("electron");
+    const err = await shell.openPath(p);
+    return err ? { ok: false, reason: err } : { ok: true };
+  } catch (e) { return { ok: false, reason: e.message }; }
+});
+
 // export_units integration — append a stub block for a new EDU unit so
 // the user doesn't have to hand-edit text/export_units.txt every time
 // they create one. Block format (3 lines, blank line separator after):
