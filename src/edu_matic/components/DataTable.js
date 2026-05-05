@@ -33,18 +33,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 
-// DLOG — writes diagnostics to %APPDATA%/recruitment-tool/edu-matic.log
-// via the existing eduAPI bridge. Used while we chase intermittent edit-
-// commit issues whose console output the user can't easily capture.
-// Falls back to console.log if the API is missing.
-function DLOG(tag, data) {
-  try {
-    const line = `${tag} ${typeof data === "object" ? JSON.stringify(data) : String(data)}`;
-    if (window.eduAPI && window.eduAPI.logMessage) window.eduAPI.logMessage("trace", line);
-    else console.log("[" + tag + "]", data);
-  } catch (e) { /* don't let logging break the app */ }
-}
-
 // Wide-table scrolling: relies on native overflow-x:auto on .dtable-scroll.
 // The min-width:0 chain on the parent containers (App.js: flex children below
 // the row-flex level) lets the scroll container constrain its width to the
@@ -159,7 +147,6 @@ export default function DataTable({
   commitRef.current.rowIds = rowIds;
   const commitCell = useCallback((rowOrigIdx, columnKey, newValue) => {
     const { onEdit: f, rowIds: ids } = commitRef.current;
-    DLOG("dtable.commitCell", { rowOrigIdx, columnKey, newValue, hasOnEdit: !!f, hasRowIds: !!ids, rowId: ids ? ids[rowOrigIdx] : rowOrigIdx });
     if (!f) return;
     const rowId = ids ? ids[rowOrigIdx] : rowOrigIdx;
     f(rowId, columnKey, newValue);
@@ -408,12 +395,10 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     setEditing(true);
   };
   const commit = () => {
-    DLOG("cell.commit.entered", { columnKey, rowOrigIdx, editing, touched: touchedRef.current, draft: draftRef.current, text });
-    if (!editing) { DLOG("cell.commit.bail", "editing was false — closure stale"); return; }
+    if (!editing) return;
     setEditing(false);
-    if (!touchedRef.current) { DLOG("cell.commit.bail", "touchedRef was false"); return; }
+    if (!touchedRef.current) return;
     const final = draftRef.current;
-    DLOG("cell.commit.proceed", { columnKey, rowOrigIdx, text, final, willFire: final !== text });
     if (final !== text) onCommit(rowOrigIdx, columnKey, final);
   };
   const cancel = () => setEditing(false);
@@ -540,11 +525,10 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
   }, []);
 
   const commitWith = (val) => {
-    DLOG("combo.commitWith", { val });
     onChange(val);
     // Defer commit to after the parent applies the new value, so the editor's
     // touched flag captures the intent before the cell tears down.
-    setTimeout(() => { DLOG("combo.deferredCommit"); onCommit(); }, 0);
+    setTimeout(onCommit, 0);
   };
 
   const onKeyDown = (e) => {
@@ -605,7 +589,17 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
           // ever needing an internal horizontal scrollbar. minWidth keeps
           // it at least as wide as the input it anchors to.
           style={{ left: pos.left, top: pos.top, minWidth: pos.minWidth }}
-          onMouseDown={(e) => { DLOG("combo.popoverMouseDown", { target: e.target.tagName, className: e.target.className }); e.preventDefault(); /* prevent input blur */ }}
+          onMouseDown={(e) => e.preventDefault() /* prevent input blur */}
+          // The popover is rendered via createPortal into document.body, but
+          // React's synthetic events bubble through the *virtual* DOM tree,
+          // not the real one — so a click here propagates back up to the
+          // <td onClick={startEdit}> that opened it. That second startEdit
+          // ran *after* onDraftChange had set touchedRef to true, blanking
+          // it back to false and clobbering draftRef with "" before the
+          // deferred commit could fire — which produced the "edit reverts
+          // back to original value" symptom. Stop the click so it doesn't
+          // bubble out of the popover.
+          onClick={(e) => e.stopPropagation()}
         >
           {filtered.length === 0 && (
             <div className="dtable-combo-empty">no match — Enter to keep "{value}"</div>
@@ -616,7 +610,7 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
               data-combo-idx={i}
               className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "")}
               onMouseEnter={() => setHighlightIdx(i)}
-              onClick={(e) => { DLOG("combo.optionClick", { opt }); commitWith(opt); }}
+              onClick={() => commitWith(opt)}
             >
               {opt}
             </div>
