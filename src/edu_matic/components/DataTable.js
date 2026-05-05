@@ -67,6 +67,21 @@ export default function DataTable({
   onDeleteRow = null,        // context menu — delete this row
   addRowLabel = "+ Add row",
   rowMenuExtras = null,      // optional [{ label, onClick(rowId), destructive? }, ...]
+  // Per-row flag indicators for inline validation. Map keyed by ROWID
+  // (not row index): { [rowId]: { error?: string, warn?: string } }.
+  // First column gets a small dot showing the highest severity; the
+  // tooltip carries the message.
+  rowFlags = null,
+  // Bulk operations on multi-selected rows. When the user has anything
+  // selected, a strip appears in the toolbar with action buttons here.
+  // Each item: { label, onClick(rowIds[]) }.
+  bulkActions = null,
+  // Find/Replace box in the toolbar — opt-in via this prop. The
+  // simpler `searchable` highlights only; find/replace adds a Replace
+  // input + a "Replace all visible" button that calls onReplaceAll
+  // with the matching rowIds and the chosen replacement.
+  findReplace = false,
+  onReplaceAll = null,        // (rowIds[], find, replace) => void
 }) {
   const [q, setQ] = useState("");
   const filteredEntries = useMemo(() => {
@@ -166,6 +181,15 @@ export default function DataTable({
 
   const scrollRef = useRef(null);
 
+  // Multi-select state. Keys are rowIds (caller-domain), so selection
+  // survives table re-renders / search filtering. Click a row to select
+  // (replace), shift-click to range-select, ctrl/cmd-click to toggle.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const lastClickedRowIdRef = useRef(null);
+
+  // Find/Replace state. Replace is only revealed when findReplace prop is on.
+  const [replaceText, setReplaceText] = useState("");
+
   // Per-row context menu state. Click outside or pick an action to close.
   // Rendered via portal so it can spill outside the table's scroll container.
   const [ctxMenu, setCtxMenu] = useState(null);
@@ -211,7 +235,8 @@ export default function DataTable({
     else if (e.key === "End")        { sc.scrollLeft = sc.scrollWidth; e.preventDefault(); }
   };
 
-  const showToolbar = searchable || columnsToggleable || onAddRow;
+  const showToolbar = searchable || columnsToggleable || onAddRow || findReplace || (bulkActions && bulkActions.length);
+  const selectionArr = useMemo(() => [...selectedIds], [selectedIds]);
   const hiddenCount = hiddenCols.size;
   return (
     <div className="dtable-wrap">
@@ -230,6 +255,31 @@ export default function DataTable({
               </span>
             </>
           )}
+          {findReplace && (
+            <input
+              className="input"
+              placeholder="Replace with…"
+              value={replaceText}
+              onChange={(e) => setReplaceText(e.target.value)}
+              style={{ minWidth: 140 }}
+              title="Replace all matches of the Search text in visible rows"
+            />
+          )}
+          {findReplace && onReplaceAll && (
+            <button
+              type="button"
+              className="btn"
+              disabled={!q.trim()}
+              onClick={() => {
+                const matchingIds = filteredEntries
+                  .filter(en => Array.isArray(en.row))
+                  .map(en => rowIds ? rowIds[en.origIdx] : en.origIdx);
+                if (!matchingIds.length) return;
+                onReplaceAll(matchingIds, q, replaceText);
+              }}
+              title="Replace the search text with the replacement in all visible rows"
+            >Replace all visible</button>
+          )}
           {onAddRow && (
             <button
               type="button"
@@ -241,6 +291,27 @@ export default function DataTable({
               {addRowLabel}
             </button>
           )}
+          {selectionArr.length > 0 && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 8, padding: "2px 8px", background: "rgba(220,166,74,0.12)", border: "1px solid rgba(220,166,74,0.4)", borderRadius: 12, fontSize: 11, color: "#dca64a" }}>
+              {selectionArr.length} selected
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                style={{ background: "none", border: "none", color: "#dca64a", cursor: "pointer", padding: 0, fontSize: 11, textDecoration: "underline" }}
+                title="Clear selection"
+              >clear</button>
+            </span>
+          )}
+          {selectionArr.length > 0 && bulkActions && bulkActions.map((a, i) => (
+            <button
+              key={`bulk-${i}`}
+              type="button"
+              className="btn"
+              onClick={() => a.onClick(selectionArr)}
+              title={a.title || a.label}
+              style={a.destructive ? { borderColor: "#d66c6c", color: "#d66c6c" } : undefined}
+            >{a.label}</button>
+          ))}
           {columnsToggleable && (
             <ColumnsPicker
               columns={columns}
@@ -295,9 +366,44 @@ export default function DataTable({
                   );
                 }
                 const hasRowOps = onDuplicateRow || onInsertRowBelow || onDeleteRow || (rowMenuExtras && rowMenuExtras.length);
+                const rowId = rowIds ? rowIds[origIdx] : origIdx;
+                const isSelected = selectedIds.has(rowId);
+                // Visual flag for inline validation. Highest severity wins
+                // — if a row has both an error and a warn we render the
+                // error dot; tooltip carries the message regardless.
+                const flag = rowFlags && rowFlags[rowId];
                 return (
                   <tr
                     key={`r${origIdx}`}
+                    style={isSelected ? { background: "rgba(220,166,74,0.18)" } : undefined}
+                    onClick={(e) => {
+                      // Selection only fires on modifier-click — plain click
+                      // continues to enter cell-edit mode. Without this gate,
+                      // every click on a cell would also flip the row's
+                      // selected state, fighting the editor.
+                      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return;
+                      e.stopPropagation();
+                      setSelectedIds(prev => {
+                        const next = new Set(prev);
+                        if (e.shiftKey && lastClickedRowIdRef.current != null) {
+                          // Range-select between last-clicked and this row,
+                          // walking the visible filteredEntries sequence.
+                          const visibleIds = filteredEntries
+                            .filter(en => Array.isArray(en.row))
+                            .map(en => rowIds ? rowIds[en.origIdx] : en.origIdx);
+                          const a = visibleIds.indexOf(lastClickedRowIdRef.current);
+                          const b = visibleIds.indexOf(rowId);
+                          if (a >= 0 && b >= 0) {
+                            const lo = Math.min(a, b), hi = Math.max(a, b);
+                            for (let k = lo; k <= hi; k++) next.add(visibleIds[k]);
+                          } else next.add(rowId);
+                        } else {
+                          if (next.has(rowId)) next.delete(rowId); else next.add(rowId);
+                        }
+                        lastClickedRowIdRef.current = rowId;
+                        return next;
+                      });
+                    }}
                     onContextMenu={hasRowOps ? (e) => {
                       e.preventDefault();
                       setCtxMenu({ x: e.clientX, y: e.clientY, rowOrigIdx: origIdx });
@@ -314,6 +420,7 @@ export default function DataTable({
                           meta={columnMeta && columnMeta[c]}
                           editable={editable}
                           onCommit={commitCell}
+                          flag={j === 0 ? flag : null}
                         />
                       );
                     })}
@@ -480,7 +587,7 @@ function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirs
 // Cell — owns its own editing state. Memoized so only the clicked cell (or a
 // cell whose underlying value just changed) re-renders. Without this, a click
 // on one cell would re-render the whole 25k-cell table.
-const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit }) {
+const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   // Ref alongside state so commit() reads the latest typed/picked value even
@@ -490,7 +597,11 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
   const draftRef = useRef("");
   const touchedRef = useRef(false);
   const text = value != null ? String(value) : "";
-  const startEdit = () => {
+  const startEdit = (e) => {
+    // Modifier-click is row selection (handled at the tr level); skip
+    // entering edit mode in that case so the user's shift/ctrl-click
+    // toggles selection without also opening an editor.
+    if (e && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
     if (!editable) return;
     const isCombo = meta && meta.type === "select";
     const initial = isCombo ? "" : text;
@@ -508,9 +619,23 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
   };
   const cancel = () => setEditing(false);
   const onDraftChange = (v) => { touchedRef.current = true; draftRef.current = v; setDraft(v); };
+  // Validation flag dot — small coloured circle in the leftmost cell of
+  // any row that has an error or warning, with the message in the
+  // tooltip. The dot is rendered in front of the cell content so it
+  // doesn't shift the column layout.
+  const flagDot = flag ? (
+    <span
+      title={flag.error || flag.warn || ""}
+      style={{
+        display: "inline-block", width: 7, height: 7, borderRadius: 4,
+        background: flag.error ? "#d66c6c" : "#dca64a",
+        marginRight: 6, verticalAlign: "middle",
+      }}
+    />
+  ) : null;
   return (
     <td
-      title={text}
+      title={(flag && (flag.error || flag.warn)) || text}
       className={editable ? "dtable-editable" : ""}
       onClick={startEdit}
     >
@@ -524,7 +649,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
           onCancel={cancel}
         />
       ) : (
-        renderCell(value)
+        <>{flagDot}{renderCell(value)}</>
       )}
     </td>
   );
@@ -537,7 +662,8 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       && prev.rowOrigIdx === next.rowOrigIdx
       && prev.meta === next.meta
       && prev.editable === next.editable
-      && prev.onCommit === next.onCommit;
+      && prev.onCommit === next.onCommit
+      && prev.flag === next.flag;
 });
 
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel }) {

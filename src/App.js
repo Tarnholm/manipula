@@ -900,6 +900,24 @@ export default function App() {
   };
 
   const exportAllText = useMemo(() => renderAllPreview(units), [units]);
+  // EDU-side validation count for the Sync gate. Lazy-imported because
+  // validate.js lives in the EDU subtree and we don't want it loaded on
+  // launch unless an EDU project is open. Recomputed on project change;
+  // throws are swallowed so a bad data shape doesn't block a save.
+  const [eduValidationErrorCount, setEduValidationErrorCount] = useState(0);
+  useEffect(() => {
+    if (!eduProject) { setEduValidationErrorCount(0); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { validate } = await import("./edu_matic/validate");
+        const errs = validate(eduProject);
+        if (!cancelled) setEduValidationErrorCount(Array.isArray(errs) ? errs.length : 0);
+      } catch (e) { if (!cancelled) setEduValidationErrorCount(0); }
+    })();
+    return () => { cancelled = true; };
+  }, [eduProject]);
+
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
     // conflict pass. The full validation view (which only mounts when the user opens the tab)
@@ -1006,6 +1024,7 @@ export default function App() {
         eduProject={eduProject}
         eduProjectSource={eduProjectSource}
         eduDirty={eduDirty}
+        eduValidationErrorCount={eduValidationErrorCount}
         projectDir={projectDir}
         unitsCount={units.length}
         units={units}
@@ -1300,7 +1319,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrorCount = 0, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1334,7 +1353,12 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
       <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)">Save project</button>
       <button onClick={onOpenProject} style={tbtn("#465")} title="Open a Manipula project folder">Open project</button>
-      <SyncButton projectDir={projectDir} saveTick={projectSaveTick} />
+      <SyncButton
+        projectDir={projectDir}
+        saveTick={projectSaveTick}
+        validationErrorCount={eduValidationErrorCount}
+        webhookUrl={(eduProject && eduProject.modInfo && eduProject.modInfo.webhookUrl) || ""}
+      />
 
       <button onClick={onFindReplace} title="Bulk find/replace across all units' requires" style={tbtn("#564")}>Find/Replace…</button>
       <button
@@ -1668,7 +1692,7 @@ function syncBtn(activeColor, isActive) {
 // stays out of the way unless it can actually help. Real merges,
 // branch ops, history review etc. are out of scope; users open their
 // usual git tool for those.
-function SyncButton({ projectDir, saveTick = 0 }) {
+function SyncButton({ projectDir, saveTick = 0, validationErrorCount = 0, webhookUrl = "" }) {
   const api = window.eduAPI;
   const [open, setOpen] = useState(false);
   const [available, setAvailable] = useState(null);
@@ -1689,9 +1713,19 @@ function SyncButton({ projectDir, saveTick = 0 }) {
   const btnRef = useRef(null);
   const [pos, setPos] = useState(null);
 
+  const [diffStat, setDiffStat] = useState("");
   const refresh = useCallback(async () => {
     if (!projectDir || !api?.gitStatus) { setStatus(null); return; }
-    setStatus(await api.gitStatus(projectDir));
+    const s = await api.gitStatus(projectDir);
+    setStatus(s);
+    if (api.gitDiffStat && s && s.isRepo && s.dirtyCount > 0) {
+      try {
+        const d = await api.gitDiffStat(projectDir);
+        setDiffStat((d && d.stdout) || "");
+      } catch { setDiffStat(""); }
+    } else {
+      setDiffStat("");
+    }
   }, [projectDir, api]);
 
   useEffect(() => {
@@ -1835,7 +1869,13 @@ function SyncButton({ projectDir, saveTick = 0 }) {
                   <span style={{ color: dirty ? "#d66c6c" : "#666" }}>● {status.dirtyCount} dirty</span>
                   <span style={{ color: (ahead || 0) > 0 ? "#dca64a" : "#666" }}>↑ {ahead ?? 0} ahead</span>
                   <span style={{ color: (behind || 0) > 0 ? "#4f8fd6" : "#666" }}>↓ {behind ?? 0} behind</span>
+                  {validationErrorCount > 0 && <span style={{ color: "#d66c6c" }}>⚠ {validationErrorCount} errors</span>}
                 </div>
+                {dirty && diffStat && (
+                  <pre style={{ margin: "8px 0 0", padding: 6, background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, fontSize: 10, color: "#bbb", maxHeight: 120, overflow: "auto", whiteSpace: "pre" }}>
+                    {diffStat.trim()}
+                  </pre>
+                )}
               </div>
 
               {/* Action buttons — stacked full-width so they always lay out
@@ -1853,11 +1893,23 @@ function SyncButton({ projectDir, saveTick = 0 }) {
                 </button>
                 <button
                   disabled={busy || !dirty}
-                  onClick={() => setCommitPrompt("Manipula update")}
+                  onClick={() => {
+                    if (validationErrorCount > 0) {
+                      const ok = window.confirm(
+                        `Validation reports ${validationErrorCount} error${validationErrorCount === 1 ? "" : "s"} in this project. ` +
+                        `Pushing now means teammates will pull broken state.\n\nPush anyway?`
+                      );
+                      if (!ok) return;
+                    }
+                    setCommitPrompt("Manipula update");
+                  }}
                   style={syncBtn("#7c9", dirty)}
-                  title="git add . && git commit -m && git push"
+                  title={validationErrorCount > 0
+                    ? `git add . && git commit -m && git push  ⚠ ${validationErrorCount} validation errors`
+                    : "git add . && git commit -m && git push"}
                 >
                   Commit + Push {dirty ? `(${status.dirtyCount})` : ""}
+                  {validationErrorCount > 0 ? ` ⚠` : ""}
                 </button>
                 {commitPrompt !== null && (
                   <div style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1875,7 +1927,21 @@ function SyncButton({ projectDir, saveTick = 0 }) {
                           await run("Commit + push", async () => {
                             const c = await api.gitCommitAll(projectDir, msg);
                             if (!c.ok) return c;
-                            return await api.gitPush(projectDir);
+                            const p = await api.gitPush(projectDir);
+                            if (p.ok && webhookUrl) {
+                              // Fire-and-forget Discord-style POST. Failures
+                              // are non-fatal and we don't surface them in
+                              // the log so a stale webhook URL doesn't
+                              // distract from a successful push.
+                              try {
+                                await fetch(webhookUrl, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ content: `**Manipula push** — ${msg}` }),
+                                });
+                              } catch {}
+                            }
+                            return p;
                           });
                         }
                       }}
@@ -1894,7 +1960,21 @@ function SyncButton({ projectDir, saveTick = 0 }) {
                           await run("Commit + push", async () => {
                             const c = await api.gitCommitAll(projectDir, msg);
                             if (!c.ok) return c;
-                            return await api.gitPush(projectDir);
+                            const p = await api.gitPush(projectDir);
+                            if (p.ok && webhookUrl) {
+                              // Fire-and-forget Discord-style POST. Failures
+                              // are non-fatal and we don't surface them in
+                              // the log so a stale webhook URL doesn't
+                              // distract from a successful push.
+                              try {
+                                await fetch(webhookUrl, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ content: `**Manipula push** — ${msg}` }),
+                                });
+                              } catch {}
+                            }
+                            return p;
                           });
                         }}
                         style={{ background: "#7c9", color: "#fff", border: "none", padding: "4px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "pointer" }}

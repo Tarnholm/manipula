@@ -1302,6 +1302,17 @@ ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
 // fresh as the last fetch / pull. Without this, save would silently miss
 // teammate commits pushed in the last few hours.
 ipcMain.handle("git-fetch", async (_e, dir) => runGit(dir, ["fetch", "--quiet"]));
+// Diff stat for the working tree vs HEAD — used by Sync to preview what
+// the user is about to commit. --stat is human-readable and short
+// enough for an inline panel; we don't try to pretty-render the diff itself.
+ipcMain.handle("git-diff-stat", async (_e, dir) => runGit(dir, ["diff", "--stat", "HEAD"]));
+// Per-file blame summary — last N commits touching a path. Used to
+// surface "last edited by X (3h ago)" tooltips on rows. Returns
+// pipe-delimited "shortHash|author|relativeDate" lines.
+ipcMain.handle("git-log-file", async (_e, dir, relPath, n) => {
+  const limit = Math.max(1, Math.min(20, parseInt(n, 10) || 5));
+  return runGit(dir, ["log", `--format=%h|%an|%ar`, `-n`, String(limit), "--", relPath]);
+});
 
 // export_units integration — append a stub block for a new EDU unit so
 // the user doesn't have to hand-edit text/export_units.txt every time

@@ -117,7 +117,7 @@ export default function App({ externalProject = null, onProjectChange, controlle
       )}
       <main className="app-main">
         {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} />}
-        {view === "modinfo"  && <ModInfoScreen  project={project} />}
+        {view === "modinfo"  && <ModInfoScreen  project={project} setProject={setProject} />}
         {view === "coredata" && <CoreDataScreen project={project} setProject={setProject} />}
         {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
@@ -202,10 +202,15 @@ function ProjectScreen({ project, onImport }) {
   );
 }
 
-function ModInfoScreen({ project }) {
+function ModInfoScreen({ project, setProject }) {
   if (!project) return <EmptyScreen />;
   const mi = project.modInfo;
   const g = project.globals;
+  // Webhook URL — POSTed to as a Discord-style {content: "..."} payload on
+  // every successful Commit + Push. Edited inline; saved with the project.
+  const setWebhook = (url) => {
+    setProject({ ...project, modInfo: { ...mi, webhookUrl: url || "" } });
+  };
   return (
     <div className="screen">
       <h2>Mod Info</h2>
@@ -213,6 +218,17 @@ function ModInfoScreen({ project }) {
         <div className="field"><span>Name</span><strong>{mi.name}</strong></div>
         <div className="field"><span>Platform</span><strong>{mi.platform}</strong></div>
         <div className="field"><span>Era</span><strong>{mi.era || "—"}</strong></div>
+        <div className="field" style={{ alignItems: "center" }}>
+          <span>Webhook URL</span>
+          <input
+            className="input"
+            placeholder="https://discord.com/api/webhooks/…"
+            value={mi.webhookUrl || ""}
+            onChange={(e) => setWebhook(e.target.value)}
+            style={{ flex: 1, minWidth: 280 }}
+            title="Posted to as {content: 'Manipula push — <message>'} on every successful push. Discord webhooks work directly; for Slack/Teams adapt the payload server-side."
+          />
+        </div>
       </div>
       <h3 style={{ marginTop: 24 }}>Globals ({Object.keys(g).length})</h3>
       <DataTable
@@ -422,6 +438,10 @@ const UNITS_TAIL = [
 function UnitsScreen({ project, setProject, modDataDir }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
+  // Filter chips: faction (from availability) and category. Empty string
+  // means "no filter on this axis." Stored as state local to the screen.
+  const [filterFaction, setFilterFaction] = useState("");
+  const [filterCategory, setFilterCategory] = useState("");
   // Faction order from project.factions — the index in this array IS the
   // faction id used by the underlying VBA / EDU pipeline.
   const factionKeys = useMemo(() => {
@@ -692,27 +712,165 @@ function UnitsScreen({ project, setProject, modDataDir }) {
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
 
+  // Per-row validation flags. validate(project) returns an array of
+  // ErrorEntry { unit, row, message }; diagnose(project) returns warnings
+  // with the same shape. We bucket both by unit name so the per-row flag
+  // computation below is O(1) per row instead of scanning the array.
+  const validationByName = useMemo(() => {
+    const out = new Map();
+    try {
+      for (const e of validate(project)) {
+        if (!e.unit || e.unit.startsWith("<")) continue;
+        if (!out.has(e.unit)) out.set(e.unit, { error: e.message, warn: null });
+        else if (!out.get(e.unit).error) out.get(e.unit).error = e.message;
+      }
+      for (const e of diagnose(project)) {
+        if (!e.unit || e.unit.startsWith("<")) continue;
+        if (!out.has(e.unit)) out.set(e.unit, { error: null, warn: e.message });
+        else if (!out.get(e.unit).warn) out.get(e.unit).warn = e.message;
+      }
+    } catch (err) { console.warn("[edu] validate failed:", err && err.message); }
+    return out;
+  }, [project]);
+
+  // rowFlags keyed by rowId (= original index in project.units, per
+  // UnitsScreen's rowIds construction).
+  const rowFlags = useMemo(() => {
+    const out = {};
+    for (let idx = 0; idx < project.units.length; idx++) {
+      const u = project.units[idx];
+      if (!u || u.kind !== "unit") continue;
+      const f = validationByName.get(u.name);
+      if (f) out[idx] = f;
+    }
+    return out;
+  }, [project.units, validationByName]);
+
+  // Filter chips. We narrow the table by patching tableRows + rowIds
+  // through filters before passing them to DataTable. Search-bar text
+  // (inside DataTable) layers on top of this.
+  const categoryOptions = useMemo(() => {
+    const s = new Set();
+    for (const u of units) if (u.Category) s.add(u.Category);
+    return [...s].sort();
+  }, [units]);
+  const filteredTable = useMemo(() => {
+    if (!filterFaction && !filterCategory) return { rows: tableRows, rowIds };
+    const rows = []; const ids = [];
+    for (let i = 0; i < tableRows.length; i++) {
+      const r = tableRows[i];
+      const id = rowIds[i];
+      if (!Array.isArray(r)) { rows.push(r); ids.push(id); continue; }
+      const u = project.units[id];
+      if (!u || u.kind !== "unit") continue;
+      if (filterCategory && u.Category !== filterCategory) continue;
+      if (filterFaction && (!u.availability || u.availability[filterFaction] !== "Y")) continue;
+      rows.push(r); ids.push(id);
+    }
+    return { rows, rowIds: ids };
+  }, [tableRows, rowIds, filterFaction, filterCategory, project.units]);
+
+  // Bulk-set field for selected rows. The button opens an inline picker
+  // that lets the user choose a column then a value, then applies the
+  // value to every selected unit's matching field. Avoids the user
+  // having to click 30 cells one-by-one to set Category=Foot Missile.
+  const [bulkColumn, setBulkColumn] = useState(null);
+  const [bulkValue, setBulkValue] = useState("");
+  const applyBulk = useCallback((rowIds, column, value) => {
+    if (!rowIds || !rowIds.length || !column) return;
+    const selSet = new Set(rowIds);
+    const nextUnits = project.units.slice();
+    for (let i = 0; i < nextUnits.length; i++) {
+      if (!selSet.has(i)) continue;
+      const cur = nextUnits[i];
+      if (!cur || cur.kind !== "unit") continue;
+      const next = { ...cur };
+      if (value === "" || value == null) delete next[column];
+      else next[column] = value;
+      nextUnits[i] = next;
+    }
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  const bulkDelete = useCallback((rowIds) => {
+    if (!rowIds || !rowIds.length) return;
+    if (!window.confirm(`Delete ${rowIds.length} selected unit${rowIds.length === 1 ? "" : "s"}?`)) return;
+    const selSet = new Set(rowIds);
+    const nextUnits = project.units.filter((_, i) => !selSet.has(i));
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+
+  // Find/Replace across visible rows in the active column. Replaces
+  // case-sensitively across all string-valued cells whose column key
+  // matches the current bulkColumn (defaults to "name" if none picked
+  // yet). Cheap implementation; can broaden later.
+  const onReplaceAll = useCallback((rowIds, find, replace) => {
+    if (!find || !rowIds || !rowIds.length) return;
+    const col = bulkColumn || "name";
+    const selSet = new Set(rowIds);
+    let changed = 0;
+    const nextUnits = project.units.map((u, i) => {
+      if (!selSet.has(i)) return u;
+      if (!u || u.kind !== "unit") return u;
+      const v = u[col];
+      if (typeof v !== "string" || !v.includes(find)) return u;
+      changed++;
+      return { ...u, [col]: v.split(find).join(replace) };
+    });
+    if (!changed) return;
+    setProject({ ...project, units: nextUnits });
+  }, [bulkColumn, project, setProject]);
+
   return (
     <div className="screen">
       <h2>Units <span className="dim">({units.length})</span></h2>
       <p className="dim" style={{ marginTop: -6, marginBottom: 8, fontSize: 12 }}>
-        Click any cell to edit. Lookup fields (Category, Quality, Weapon, …) open as dropdowns sourced from this project's Core Data.
+        Click any cell to edit. Lookup fields (Category, Quality, Weapon, …) open as dropdowns. Ctrl/Shift-click rows to multi-select. Right-click for row ops.
       </p>
+      {/* Filter chips: quick faction / category narrowing. The columns
+          picker still narrows columns; these narrow rows. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#999" }}>Filter:</span>
+        <select
+          value={filterFaction}
+          onChange={(e) => setFilterFaction(e.target.value)}
+          className="input"
+          style={{ minWidth: 160 }}
+          title="Show only units recruitable for this faction"
+        >
+          <option value="">— any faction —</option>
+          {factionKeys.map((f, i) => <option key={f} value={f}>faction {i + 1}: {f}</option>)}
+        </select>
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value)}
+          className="input"
+          style={{ minWidth: 140 }}
+          title="Show only units of this Category"
+        >
+          <option value="">— any category —</option>
+          {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {(filterFaction || filterCategory) && (
+          <button
+            className="btn"
+            onClick={() => { setFilterFaction(""); setFilterCategory(""); }}
+          >clear filters</button>
+        )}
+      </div>
       <DataTable
         columns={allKeys}
-        rows={tableRows}
-        rowIds={rowIds}
+        rows={filteredTable.rows}
+        rowIds={filteredTable.rowIds}
         columnMeta={columnMeta}
         columnLabels={columnLabels}
         onEdit={onEdit}
         editable
         pinFirstColumn
-        /* No maxHeight — .dtable-wrap and .dtable-scroll use flex:1 inside
-         * .screen, so the scroll container's height matches the visible
-         * panel exactly. Bottom edge stays in viewport at any window size,
-         * which means the horizontal scrollbar is always reachable. */
         searchable
+        findReplace
+        onReplaceAll={onReplaceAll}
         columnsToggleable
+        rowFlags={rowFlags}
         onAddRow={addBlankUnit}
         onDuplicateRow={duplicateUnit}
         onInsertRowBelow={insertBlankUnitBelow}
@@ -722,6 +880,39 @@ function UnitsScreen({ project, setProject, modDataDir }) {
           label: "Stub in export_units.txt",
           onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
         }] : null}
+        bulkActions={[
+          {
+            label: "Set field on selected…",
+            onClick: (rowIds) => {
+              const col = window.prompt("Field name to set on the selected units:", bulkColumn || "Category");
+              if (!col) return;
+              const val = window.prompt(`New value for "${col}" (blank to clear):`, "");
+              if (val === null) return;
+              setBulkColumn(col);
+              setBulkValue(val);
+              applyBulk(rowIds, col, val);
+            },
+          },
+          {
+            label: "Duplicate selected",
+            onClick: (rowIds) => {
+              if (!rowIds.length) return;
+              const sorted = rowIds.slice().sort((a, b) => b - a);
+              let next = project.units.slice();
+              for (const idx of sorted) {
+                const cur = next[idx];
+                if (!cur || cur.kind !== "unit") continue;
+                const copy = JSON.parse(JSON.stringify(cur));
+                if (copy.name) copy.name = copy.name + " (copy)";
+                if (copy["unit id"]) copy["unit id"] = "";
+                if (copy["dictionary_tag"]) copy["dictionary_tag"] = "";
+                next.splice(idx + 1, 0, copy);
+              }
+              setProject({ ...project, units: next });
+            },
+          },
+          { label: "Delete selected", destructive: true, onClick: bulkDelete },
+        ]}
       />
     </div>
   );
