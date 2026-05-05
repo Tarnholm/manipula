@@ -232,11 +232,28 @@ async function loadProject(dir) {
 
   const project = {};
 
-  // Singleton EDU files.
+  // Singleton EDU files. Defaults applied both when the file is missing
+  // AND when the file contains the literal JSON `null` — which is what
+  // the v0.20.0 saver wrote for any singleton that happened to be
+  // undefined at save time. Without this, `project.modInfo` came back
+  // as null and downstream code that does `eduProject.modInfo.name`
+  // crashed React at mount, producing the white-marble (background-only)
+  // symptom on launch.
+  const SINGLETON_DEFAULTS = {
+    modInfo: { name: "", platform: "", era: "" },
+    globals: {},
+    merc: [],
+    header: [],
+  };
   for (const key of SINGLE_FILE_KEYS) {
     const raw = pickFile(indexed, "edu", `${key}.json`)
       ?? (allFiles ? null : await api.readProjectFile(dir, `edu/${key}.json`));
-    project[key] = raw ? JSON.parse(raw) : (key === "modInfo" ? { name: "", platform: "", era: "" } : (key === "globals" ? {} : []));
+    let parsed = null;
+    if (raw) {
+      try { parsed = JSON.parse(raw); }
+      catch (e) { console.warn(`[projectStore] corrupt edu/${key}.json: ${e.message}`); }
+    }
+    project[key] = (parsed == null) ? SINGLETON_DEFAULTS[key] : parsed;
   }
 
   project.coreData = parseKeyedFromIndex(indexed, "edu/coreData");

@@ -19,6 +19,38 @@ class EditorErrorBoundary extends Component {
     return this.props.children;
   }
 }
+// Top-level error boundary — catches anything that escapes the main App
+// tree (e.g. a bad eduProject shape from a malformed project dir on disk
+// at startup). Without this, an unhandled render error during boot
+// produces a fully-blank window with only the body-background visible
+// — the "white marble screen" symptom that's hard to diagnose because
+// there's nothing on-screen to copy. This boundary surfaces the actual
+// error message and a button to clear the cached project dir so the
+// user can recover without reinstalling.
+class AppErrorBoundary extends Component {
+  constructor(p) { super(p); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("[app]", error, info); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    const msg = String(this.state.error.message || this.state.error);
+    return (
+      <div style={{ padding: 40, color: "#fff", fontFamily: "Consolas, monospace", fontSize: 13, maxWidth: 720, margin: "40px auto", background: "rgba(20,22,23,0.9)", border: "1px solid #d66c6c", borderRadius: 8 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#d66c6c", marginBottom: 12 }}>Manipula failed to start</div>
+        <div style={{ marginBottom: 8 }}>{msg}</div>
+        <pre style={{ background: "#0e0e0e", padding: 8, borderRadius: 4, fontSize: 11, color: "#bbb", maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap" }}>{(this.state.error.stack || "").split("\n").slice(0, 12).join("\n")}</pre>
+        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={() => this.setState({ error: null })} style={{ background: "#dca64a", color: "#1a1a1a", border: "none", padding: "8px 14px", borderRadius: 6, fontWeight: 700, cursor: "pointer" }}>Try again</button>
+          <button
+            onClick={() => { localStorage.removeItem("rt:projectDir"); localStorage.removeItem("rt:lastXlsmPath"); window.location.reload(); }}
+            style={{ background: "#3a4a5a", color: "#fff", border: "none", padding: "8px 14px", borderRadius: 6, fontWeight: 700, cursor: "pointer" }}
+            title="Clears the cached project + xlsm paths and reloads — use this if the auto-load is what's failing."
+          >Forget last project & reload</button>
+        </div>
+      </div>
+    );
+  }
+}
 import UnitList from "./components/UnitList";
 import UnitEditor from "./components/UnitEditor";
 import BulkEditor from "./components/BulkEditor";
@@ -851,6 +883,7 @@ export default function App() {
   }, [units, modIndex, missingCards]);
 
   return (
+    <AppErrorBoundary>
     <LightboxProvider>
     {/* Toast queue — fixed top-right, stacks bottom-down. */}
     {toasts.length > 0 && (
@@ -1188,6 +1221,7 @@ export default function App() {
       </div>
     </div>
     </LightboxProvider>
+    </AppErrorBoundary>
   );
 }
 
@@ -1199,8 +1233,8 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
         <span title={`${unitsCount} authored recruit entries`} style={{ background: unitsCount > 0 ? "rgba(124,201,153,0.10)" : "rgba(255,255,255,0.04)", border: "1px solid " + (unitsCount > 0 ? "rgba(124,201,153,0.25)" : "rgba(255,255,255,0.08)"), color: unitsCount > 0 ? "#7c9" : "#666", padding: "1px 6px", borderRadius: 3 }}>
           EDB · {unitsCount}
         </span>
-        <span title={eduProject ? `${eduProject.units.length} EDU rows from ${eduProject.modInfo.name || "(unnamed)"}\n${eduProjectSource || ""}${eduDirty ? "\n— unsaved changes since import —" : ""}` : "No EDU project loaded"} style={{ background: eduProject ? "rgba(220,166,74,0.10)" : "rgba(255,255,255,0.04)", border: "1px solid " + (eduProject ? "rgba(220,166,74,0.25)" : "rgba(255,255,255,0.08)"), color: eduProject ? "#dca64a" : "#666", padding: "1px 6px", borderRadius: 3 }}>
-          EDU · {eduProject ? eduProject.units.length : "—"}{eduDirty ? "*" : ""}
+        <span title={eduProject ? `${eduProject.units?.length ?? 0} EDU rows from ${eduProject.modInfo?.name || "(unnamed)"}\n${eduProjectSource || ""}${eduDirty ? "\n— unsaved changes since import —" : ""}` : "No EDU project loaded"} style={{ background: eduProject ? "rgba(220,166,74,0.10)" : "rgba(255,255,255,0.04)", border: "1px solid " + (eduProject ? "rgba(220,166,74,0.25)" : "rgba(255,255,255,0.08)"), color: eduProject ? "#dca64a" : "#666", padding: "1px 6px", borderRadius: 3 }}>
+          EDU · {eduProject ? (eduProject.units?.length ?? 0) : "—"}{eduDirty ? "*" : ""}
         </span>
         {eduProjectSource && (
           <span title={eduProjectSource} style={{ color: "#888", fontSize: 10, fontStyle: "italic", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
