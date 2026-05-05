@@ -1302,6 +1302,48 @@ ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
 // fresh as the last fetch / pull. Without this, save would silently miss
 // teammate commits pushed in the last few hours.
 ipcMain.handle("git-fetch", async (_e, dir) => runGit(dir, ["fetch", "--quiet"]));
+
+// export_units integration — append a stub block for a new EDU unit so
+// the user doesn't have to hand-edit text/export_units.txt every time
+// they create one. Block format (3 lines, blank line separator after):
+//   {<unitKey>}<Display Name>
+//   {<unitKey>_descr_short}This unit needs a short description.
+//   {<unitKey>_descr}\n\nThis unit needs a long description.
+// Idempotent on the unit key — if the block already exists we leave it
+// alone and report "exists" so the caller can show a non-noisy status.
+ipcMain.handle("append-export-units-stub", async (_e, modDataDir, unitKey, displayName) => {
+  if (!modDataDir || !unitKey) return { ok: false, reason: "missing args" };
+  const candidates = [
+    path.join(modDataDir, "text", "export_units.txt"),
+    path.join(modDataDir, "data", "text", "export_units.txt"),
+  ];
+  const target = candidates.find(p => fs.existsSync(p));
+  if (!target) return { ok: false, reason: "export_units.txt not found in " + modDataDir };
+  try {
+    const original = fs.readFileSync(target, "utf16le");
+    // The mod's export_units.txt is UTF-16 LE with BOM (RTW convention).
+    // Strip BOM for the existence check / writing, restore it on save.
+    const text = original.charCodeAt(0) === 0xFEFF ? original.slice(1) : original;
+    const has = new RegExp(`^\\{${unitKey}\\}`, "m").test(text);
+    if (has) return { ok: true, status: "exists", path: target };
+    const useCRLF = /\r\n/.test(text);
+    const eol = useCRLF ? "\r\n" : "\n";
+    const stub =
+      `{${unitKey}}${displayName || unitKey}${eol}` +
+      `{${unitKey}_descr_short}This unit needs a short description.${eol}` +
+      `{${unitKey}_descr}\\n\\nThis unit needs a long description.${eol}`;
+    // Backup once per session (mirrors descr_regions.txt convention).
+    const bak = target + ".bak";
+    if (!fs.existsSync(bak)) fs.writeFileSync(bak, original, { encoding: "binary" });
+    // Re-attach BOM and write back as UTF-16 LE.
+    const ensureTrailingNl = text.endsWith("\n") ? text : text + eol;
+    const bomChar = "﻿";
+    fs.writeFileSync(target, bomChar + ensureTrailingNl + stub, { encoding: "utf16le" });
+    return { ok: true, status: "added", path: target };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
 ipcMain.handle("git-commit-all", async (_e, dir, message) => {
   const add = await runGit(dir, ["add", "."]);
   if (!add.ok) return add;

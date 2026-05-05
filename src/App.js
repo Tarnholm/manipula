@@ -83,7 +83,11 @@ export default function App() {
   const history = useHistory([], { capacity: 80 });
   const units = history.value;
   const setUnits = history.set;
-  useUndoShortcuts({ undo: history.undo, redo: history.redo });
+  // Ctrl+Z / Ctrl+Y route to whichever tab the user is on: EDU Builder
+  // walks eduHistory, every other tab walks the recruit-line `history`.
+  // Defined further down (eduHistory) and wired via the activeTab read
+  // inside the dispatcher closure.
+
   const [selectedId, setSelectedId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set()); // multi-select for bulk-edit
   const [lastClickedId, setLastClickedId] = useState(null); // anchor for shift-click range
@@ -125,7 +129,7 @@ export default function App() {
           if (await isProjectDir(lastProject)) {
             const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(lastProject);
             if (cancelled) return;
-            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) setEduProject(loadedEdu);
+            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) eduHistory.reset(loadedEdu);
             if (loadedUnits && loadedUnits.length) {
               history.reset(loadedUnits.map(migrateV1));
               if (api && api.writeUnits) api.writeUnits({ units: loadedUnits });
@@ -151,7 +155,7 @@ export default function App() {
         const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
         const eduProj = importXlsmBuffer(buf);
         if (cancelled) return;
-        setEduProject(eduProj);
+        eduHistory.reset(eduProj);
         setEduProjectSource(lastPath);
         setStatus(`Auto-loaded ${lastPath.split(/[\\/]/).pop()}`);
       } catch (e) {
@@ -465,7 +469,7 @@ export default function App() {
       const choice = window.confirm(`This is the same xlsm you imported last time:\n${p}\n\nRefresh (replace existing imported units) — OK\nAppend (keep current + add new) — Cancel`);
       if (choice) {
         // refresh: reset eduProject + drop import-flagged units before re-importing
-        setEduProject(null);
+        eduHistory.reset(null);
       }
     }
     localStorage.setItem("rt:lastXlsmPath", p);
@@ -483,7 +487,7 @@ export default function App() {
           const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
           const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
           const eduProj = importXlsmBuffer(buf);
-          setEduProject(eduProj);
+          eduHistory.reset(eduProj);
           setEduProjectSource(p);
         }
       }
@@ -615,7 +619,18 @@ export default function App() {
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
-  const [eduProject, setEduProject] = useState(null);
+  // EDU project history — Ctrl+Z / Ctrl+Y on the EDU Builder tab walks
+  // back through every project mutation (cell edit, add/duplicate/delete
+  // row, etc). useHistory snapshots via JSON.stringify so the past stack
+  // is robust to nested object refs. Initial null is reset(...) when a
+  // project is loaded / imported / opened.
+  const eduHistory = useHistory(null, { capacity: 50 });
+  const eduProject = eduHistory.value;
+  const setEduProject = eduHistory.set;
+  useUndoShortcuts({
+    undo: () => (activeTab === "edu" ? eduHistory.undo() : history.undo()),
+    redo: () => (activeTab === "edu" ? eduHistory.redo() : history.redo()),
+  });
   const [eduView, setEduView] = useState("project"); // sub-view inside EDU Builder tab
   const [eduProjectSource, setEduProjectSource] = useState(null); // path of the xlsm last imported, for the topbar pill
   // Active Manipula project directory — null means "no project open yet,
@@ -706,7 +721,7 @@ export default function App() {
         const buf = new Uint8Array(await f.arrayBuffer());
         const { importXlsmBuffer } = await import("./edu_matic/xlsmImporter");
         const eduProj = importXlsmBuffer(buf);
-        setEduProject(eduProj);
+        eduHistory.reset(eduProj);
         setEduProjectSource(f.name);
         setStatus(`Imported ${f.name} via drag-drop · ${eduProj.units.length} EDU rows`);
         toast(`Imported ${f.name}`, "success");
@@ -1061,7 +1076,7 @@ export default function App() {
             }
             if (eduDirty && !window.confirm("You have unsaved changes. Open another project anyway?")) return;
             const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(dir);
-            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) setEduProject(loadedEdu);
+            if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) eduHistory.reset(loadedEdu);
             if (loadedUnits && loadedUnits.length) {
               history.reset(loadedUnits.map(migrateV1));
               if (api) await api.writeUnits({ units: loadedUnits });
@@ -1271,6 +1286,7 @@ export default function App() {
                     controlledView={eduView}
                     onControlledView={setEduView}
                     hideSidebar={true}
+                    modDataDir={dataDir}
                   />
                 </div>
               </div>

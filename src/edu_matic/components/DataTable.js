@@ -56,6 +56,17 @@ export default function DataTable({
   maxHeight = "60vh",
   searchable = false,
   columnsToggleable = false,
+  // Row-mutating operations. Wire any subset; the right-click context menu
+  // and toolbar surface only the verbs that have a callback. rowOrigIdx
+  // passed back is the row's index in the SOURCE rows array (not after
+  // search filtering), and rowIds[rowOrigIdx] still resolves to the
+  // caller's domain id when rowIds is provided.
+  onAddRow = null,           // toolbar "+ Add row" (no row context)
+  onDuplicateRow = null,     // context menu — copy + insert below
+  onInsertRowBelow = null,   // context menu — blank insert below
+  onDeleteRow = null,        // context menu — delete this row
+  addRowLabel = "+ Add row",
+  rowMenuExtras = null,      // optional [{ label, onClick(rowId), destructive? }, ...]
 }) {
   const [q, setQ] = useState("");
   const filteredEntries = useMemo(() => {
@@ -155,6 +166,24 @@ export default function DataTable({
 
   const scrollRef = useRef(null);
 
+  // Per-row context menu state. Click outside or pick an action to close.
+  // Rendered via portal so it can spill outside the table's scroll container.
+  const [ctxMenu, setCtxMenu] = useState(null);
+  // null | { x, y, rowOrigIdx }
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    document.addEventListener("mousedown", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("mousedown", close);
+    };
+  }, [ctxMenu]);
+
   // Reset to leftmost on dataset change so the user sees the first column.
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollLeft = 0;
@@ -182,7 +211,7 @@ export default function DataTable({
     else if (e.key === "End")        { sc.scrollLeft = sc.scrollWidth; e.preventDefault(); }
   };
 
-  const showToolbar = searchable || columnsToggleable;
+  const showToolbar = searchable || columnsToggleable || onAddRow;
   const hiddenCount = hiddenCols.size;
   return (
     <div className="dtable-wrap">
@@ -200,6 +229,17 @@ export default function DataTable({
                 {dataCount} of {totalDataCount} row{totalDataCount === 1 ? "" : "s"}
               </span>
             </>
+          )}
+          {onAddRow && (
+            <button
+              type="button"
+              className="btn"
+              onClick={onAddRow}
+              title="Append a new blank row at the end"
+              style={{ marginLeft: 4 }}
+            >
+              {addRowLabel}
+            </button>
           )}
           {columnsToggleable && (
             <ColumnsPicker
@@ -254,8 +294,15 @@ export default function DataTable({
                     </tr>
                   );
                 }
+                const hasRowOps = onDuplicateRow || onInsertRowBelow || onDeleteRow || (rowMenuExtras && rowMenuExtras.length);
                 return (
-                  <tr key={`r${origIdx}`}>
+                  <tr
+                    key={`r${origIdx}`}
+                    onContextMenu={hasRowOps ? (e) => {
+                      e.preventDefault();
+                      setCtxMenu({ x: e.clientX, y: e.clientY, rowOrigIdx: origIdx });
+                    } : undefined}
+                  >
                     {visibleColIndices.map((origColIdx, j) => {
                       const c = columns[origColIdx];
                       return (
@@ -282,6 +329,58 @@ export default function DataTable({
           )}
         </table>
       </div>
+      {ctxMenu && createPortal(
+        <div
+          data-row-context-menu
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed", left: ctxMenu.x, top: ctxMenu.y,
+            background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6,
+            padding: 4, zIndex: 11000, minWidth: 200,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+            fontFamily: "Consolas, monospace", fontSize: 12, color: "#ddd",
+          }}
+        >
+          {onDuplicateRow && (
+            <div
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={() => { onDuplicateRow(rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx); setCtxMenu(null); }}
+            >Duplicate row (insert below)</div>
+          )}
+          {onInsertRowBelow && (
+            <div
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={() => { onInsertRowBelow(rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx); setCtxMenu(null); }}
+            >Insert blank row below</div>
+          )}
+          {rowMenuExtras && rowMenuExtras.map((item, i) => (
+            <div
+              key={`extra-${i}`}
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: item.destructive ? "#d66c6c" : "#ddd" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = item.destructive ? "rgba(214,108,108,0.18)" : "rgba(220,166,74,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={() => { item.onClick(rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx); setCtxMenu(null); }}
+            >{item.label}</div>
+          ))}
+          {onDeleteRow && (
+            <div
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#d66c6c" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(214,108,108,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={() => {
+                if (window.confirm("Delete this row?")) onDeleteRow(rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx);
+                setCtxMenu(null);
+              }}
+            >Delete row</div>
+          )}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

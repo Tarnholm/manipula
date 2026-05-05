@@ -46,7 +46,7 @@ const VIEWS = [
 //   - hideSidebar: hide EDU-matic's own brand + nav (parent has its own)
 //   - jumpToUnit: when the parent jumps from the recruitment editor, scroll the Units screen
 //                 to that unit on mount
-export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null } = {}) {
+export default function App({ externalProject = null, onProjectChange, controlledView, onControlledView, hideSidebar = false, jumpToUnit = null, modDataDir = null } = {}) {
   const [internalView, setInternalView] = useState("project");
   const view = controlledView || internalView;
   const setView = onControlledView || setInternalView;
@@ -118,10 +118,10 @@ export default function App({ externalProject = null, onProjectChange, controlle
       <main className="app-main">
         {view === "project"  && <ProjectScreen  project={project} onImport={importXlsm} />}
         {view === "modinfo"  && <ModInfoScreen  project={project} />}
-        {view === "coredata" && <CoreDataScreen project={project} />}
-        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} />}
+        {view === "coredata" && <CoreDataScreen project={project} setProject={setProject} />}
+        {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
-        {view === "armour"   && <ArmourScreen   project={project} />}
+        {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} />}
         {view === "merc"     && <MercScreen     project={project} />}
         {view === "validate" && <ValidateScreen project={project} />}
         {view === "preview"  && <PreviewScreen  project={project} />}
@@ -225,17 +225,135 @@ function ModInfoScreen({ project }) {
   );
 }
 
-function CoreDataScreen({ project }) {
+// Hash a password to hex SHA-256 via Web Crypto. Used for the optional
+// password gate on Core Data editing — the hash is stored in the
+// project's manipula.project.json (modInfo.coreDataLockHash) so the
+// project itself carries the lock and travels with git, but the
+// password is never persisted in plaintext.
+async function sha256Hex(text) {
+  const buf = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function CoreDataScreen({ project, setProject }) {
   const tables = project?.coreData || {};
   const names = Object.keys(tables);
   const [active, setActive] = useState(names[0] || null);
+  // Lock state for editable mode. The project's modInfo carries the hash
+  // (set on first lock), so a teammate cloning the repo inherits the gate.
+  const lockHash = (project && project.modInfo && project.modInfo.coreDataLockHash) || null;
+  const [unlocked, setUnlocked] = useState(false);
+  const [pwPrompt, setPwPrompt] = useState(null);   // null | "set" | "verify"
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState(null);
+
   if (!project) return <EmptyScreen />;
   if (!active) return <div className="screen"><h2>Core Data</h2><p>No tables.</p></div>;
   const rows = tables[active] || [];
-  const columns = rows[0] ? Object.keys(rows[0]) : [];
+  // Order columns by union of keys in this table's rows so a sparse row
+  // with missing keys doesn't drop the columns entirely.
+  const columns = useMemo(() => {
+    const s = new Set();
+    for (const r of rows) for (const k of Object.keys(r)) s.add(k);
+    return [...s];
+  }, [rows]);
+
+  const tryUnlock = async () => {
+    setPwError(null);
+    if (!pwInput) return;
+    if (lockHash) {
+      const h = await sha256Hex(pwInput);
+      if (h === lockHash) {
+        setUnlocked(true); setPwPrompt(null); setPwInput("");
+      } else {
+        setPwError("Wrong password.");
+      }
+    } else {
+      // First-time set — hash and stash on the project.
+      const h = await sha256Hex(pwInput);
+      const nextProject = { ...project, modInfo: { ...(project.modInfo || {}), coreDataLockHash: h } };
+      setProject(nextProject);
+      setUnlocked(true); setPwPrompt(null); setPwInput("");
+    }
+  };
+
+  const onEdit = useCallback((rowIdx, columnKey, newValue) => {
+    if (!unlocked) return;
+    const t = tables[active];
+    if (!Array.isArray(t)) return;
+    const cur = t[rowIdx];
+    if (!cur) return;
+    if (String(cur[columnKey] ?? "") === String(newValue ?? "")) return;
+    const next = { ...cur };
+    if (newValue === "" || newValue == null) delete next[columnKey];
+    else next[columnKey] = newValue;
+    const nextTable = t.slice(); nextTable[rowIdx] = next;
+    setProject({ ...project, coreData: { ...tables, [active]: nextTable } });
+  }, [unlocked, tables, active, project, setProject]);
+
+  const addBlank = useCallback(() => {
+    if (!unlocked) return;
+    const t = tables[active] || [];
+    // Seed a blank row using the first existing row's keys (so the column
+    // shape stays consistent) — empty strings everywhere.
+    const seed = t[0] ? Object.fromEntries(Object.keys(t[0]).map(k => [k, ""])) : {};
+    setProject({ ...project, coreData: { ...tables, [active]: [...t, seed] } });
+  }, [unlocked, tables, active, project, setProject]);
+  const duplicateRow = useCallback((idx) => {
+    if (!unlocked) return;
+    const t = tables[active] || [];
+    const cur = t[idx]; if (!cur) return;
+    const copy = JSON.parse(JSON.stringify(cur));
+    const next = t.slice(); next.splice(idx + 1, 0, copy);
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+  }, [unlocked, tables, active, project, setProject]);
+  const deleteRow = useCallback((idx) => {
+    if (!unlocked) return;
+    const t = tables[active] || [];
+    const next = t.slice(); next.splice(idx, 1);
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+  }, [unlocked, tables, active, project, setProject]);
+
   return (
     <div className="screen">
-      <h2>Core Data</h2>
+      <h2 style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        Core Data
+        {unlocked ? (
+          <span style={{ fontSize: 11, color: "#7c9", border: "1px solid #7c9", padding: "2px 8px", borderRadius: 12, fontWeight: 400 }}>editing unlocked</span>
+        ) : (
+          <button
+            className="btn"
+            onClick={() => setPwPrompt(lockHash ? "verify" : "set")}
+            style={{ marginLeft: 8 }}
+            title={lockHash ? "Enter the team password to edit core data" : "Set a password to gate core-data edits for this project"}
+          >🔒 {lockHash ? "Unlock for editing" : "Set lock + edit"}</button>
+        )}
+      </h2>
+
+      {pwPrompt && (
+        <div style={{ background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6, padding: 12, marginBottom: 14, maxWidth: 420, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ color: "#dca64a", fontSize: 12 }}>
+            {pwPrompt === "set"
+              ? "Set a password to gate Core Data edits for this project. Hashed and stored in manipula.project.json — teammates need to know it to edit."
+              : "Enter the project's Core Data password."}
+          </div>
+          <input
+            type="password"
+            autoFocus
+            value={pwInput}
+            onChange={(e) => setPwInput(e.target.value)}
+            onKeyDown={async (e) => { if (e.key === "Enter") await tryUnlock(); else if (e.key === "Escape") { setPwPrompt(null); setPwInput(""); setPwError(null); } }}
+            style={{ background: "#0e0e0e", color: "#fff", border: "1px solid #3a3a3a", borderRadius: 4, padding: "6px 10px", fontFamily: "Consolas, monospace", outline: "none" }}
+          />
+          {pwError && <div style={{ color: "#d66c6c", fontSize: 11 }}>{pwError}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={tryUnlock}>{pwPrompt === "set" ? "Set" : "Unlock"}</button>
+            <button className="btn" onClick={() => { setPwPrompt(null); setPwInput(""); setPwError(null); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       <div className="tabs">
         {names.map((n) => (
           <button
@@ -251,8 +369,15 @@ function CoreDataScreen({ project }) {
       <DataTable
         columns={columns}
         rows={rows.map((r) => columns.map((c) => r[c]))}
+        rowIds={rows.map((_, i) => i)}
+        onEdit={onEdit}
+        editable={unlocked}
         maxHeight="65vh"
         searchable
+        onAddRow={unlocked ? addBlank : null}
+        onDuplicateRow={unlocked ? duplicateRow : null}
+        onDeleteRow={unlocked ? deleteRow : null}
+        addRowLabel="+ New row"
       />
     </div>
   );
@@ -294,7 +419,7 @@ const UNITS_TAIL = [
   "hair style", "info pic dir", "card pic dir", "comments", "Tier", "Turns",
 ];
 
-function UnitsScreen({ project, setProject }) {
+function UnitsScreen({ project, setProject, modDataDir }) {
   if (!project) return <EmptyScreen />;
   const units = project.units.filter((u) => u.kind === "unit");
   // Faction order from project.factions — the index in this array IS the
@@ -471,6 +596,57 @@ function UnitsScreen({ project, setProject }) {
     return { rows, rowIds: ids };
   }, [project.units, allKeys]);
 
+  // Row mutators — add/duplicate/insert/delete on the project.units array.
+  // All operate on raw indices into project.units (NOT filtered table rows);
+  // the DataTable resolves rowOrigIdx → rowIds[rowOrigIdx] before calling
+  // these so we always get a true source-array index.
+  //
+  // New units also try to drop a matching stub block into the mod's
+  // text/export_units.txt — RTW reads the unit's display strings from
+  // there, so a freshly-added EDU row without an export_units entry
+  // shows up in-game as raw key text. The IPC handler is idempotent on
+  // the unit key, so re-firing for an existing key is a safe no-op.
+  const stubInExportUnits = useCallback(async (unit) => {
+    if (!modDataDir || !window.eduAPI?.appendExportUnitsStub) return;
+    const key = unit && (unit["unit id"] || unit["dictionary_tag"] || unit.name);
+    if (!key) return;
+    const display = unit && (unit.name || key);
+    try {
+      const r = await window.eduAPI.appendExportUnitsStub(modDataDir, String(key), String(display));
+      if (!r || !r.ok) console.warn("[edu] export_units stub failed:", r && r.reason);
+    } catch (e) { console.warn("[edu] export_units stub threw:", e.message); }
+  }, [modDataDir]);
+
+  const addBlankUnit = useCallback(() => {
+    const blank = { kind: "unit", row: 0, name: "" };
+    setProject({ ...project, units: [...project.units, blank] });
+  }, [project, setProject]);
+  const duplicateUnit = useCallback((unitIdx) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const cur = project.units[unitIdx];
+    if (!cur || cur.kind !== "unit") return;
+    const copy = JSON.parse(JSON.stringify(cur));
+    if (copy.name) copy.name = copy.name + " (copy)";
+    if (copy["unit id"]) copy["unit id"] = "";       // dedupe required scalar fields
+    if (copy["dictionary_tag"]) copy["dictionary_tag"] = "";
+    const nextUnits = project.units.slice();
+    nextUnits.splice(unitIdx + 1, 0, copy);
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  const insertBlankUnitBelow = useCallback((unitIdx) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const blank = { kind: "unit", row: 0, name: "" };
+    const nextUnits = project.units.slice();
+    nextUnits.splice(unitIdx + 1, 0, blank);
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  const deleteUnit = useCallback((unitIdx) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const nextUnits = project.units.slice();
+    nextUnits.splice(unitIdx, 1);
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+
   const onEdit = useCallback((unitIdx, columnKey, newValue) => {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
     const cur = project.units[unitIdx];
@@ -537,6 +713,15 @@ function UnitsScreen({ project, setProject }) {
          * which means the horizontal scrollbar is always reachable. */
         searchable
         columnsToggleable
+        onAddRow={addBlankUnit}
+        onDuplicateRow={duplicateUnit}
+        onInsertRowBelow={insertBlankUnitBelow}
+        onDeleteRow={deleteUnit}
+        addRowLabel="+ New unit"
+        rowMenuExtras={modDataDir ? [{
+          label: "Stub in export_units.txt",
+          onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
+        }] : null}
       />
     </div>
   );
@@ -670,60 +855,187 @@ function BulkEditScreen({ project, setProject }) {
 const selStyle = { background: "#252525", border: "1px solid #333", color: "#ddd", padding: "5px 8px", borderRadius: 4, fontSize: 12 };
 const inpStyle = { background: "#252525", border: "1px solid #333", color: "#ddd", padding: "5px 8px", borderRadius: 4, fontSize: 12, fontFamily: "Consolas, monospace", minWidth: 160 };
 
-function ArmourScreen({ project }) {
+// Body-part slot keys + their shape on disk.
+//   Body parts (Head1/Head2/Torso1..3/UpArm/LowArm/Hand/UpLeg/LowLeg/Foot)
+//     have { type, material, instances }. We split into TWO columns each:
+//     "<slot> Type" + "<slot> Material" so users edit dropdown values in
+//     place instead of parsing a "Cuirass · Bronze" join.
+//   Shield has { size, material, onBack, instances } — "Shield Size"
+//     (e.g. "4. large") and "Shield Material" (e.g. "reinforced").
+//
+// Synthetic column key format:  arm:<slot>:type | arm:<slot>:material |
+//                              arm:Shield:size | arm:Shield:material
+const ARM_PREFIX = "arm:";
+const ARMOUR_BODY_SLOTS = ["Head1","Head2","Torso1","Torso2","Torso3","UpArm","LowArm","Hand","UpLeg","LowLeg","Foot"];
+
+function ArmourScreen({ project, setProject }) {
   if (!project) return <EmptyScreen />;
-  const rows = project.armour;
-  const slotKeys = ["Head1","Head2","Torso1","Torso2","Torso3","UpArm","LowArm","Hand","UpLeg","LowLeg","Foot","Shield"];
-  const cols = ["Model Set Name", ...slotKeys];
-  // Walk the sheet's natural row order. Names starting with "#" are section
-  // markers (#NON REMASTERED ROMANS, #POLYBIAN ROMANS, …) — render them as
-  // full-width gold bands. Consecutive rows that share a Model Set Name belong
-  // to one unit (different helmet/armour tiers); when the name changes we emit
-  // a thin separator so the eye can pick the unit boundary at a glance without
-  // having to read the leftmost column.
-  const tableRows = useMemo(() => {
+  const rows = project.armour || [];
+
+  // Column order: Model Set Name (pinned), then for each body slot a Type
+  // and Material column, then Shield Size + Shield Material at the end.
+  const cols = useMemo(() => {
+    const out = ["Model Set Name"];
+    for (const s of ARMOUR_BODY_SLOTS) {
+      out.push(`${ARM_PREFIX}${s}:type`);
+      out.push(`${ARM_PREFIX}${s}:material`);
+    }
+    out.push(`${ARM_PREFIX}Shield:size`);
+    out.push(`${ARM_PREFIX}Shield:material`);
+    return out;
+  }, []);
+
+  const columnLabels = useMemo(() => {
+    const out = {};
+    for (const s of ARMOUR_BODY_SLOTS) {
+      out[`${ARM_PREFIX}${s}:type`] = `${s} Type`;
+      out[`${ARM_PREFIX}${s}:material`] = `${s} Material`;
+    }
+    out[`${ARM_PREFIX}Shield:size`] = "Shield Size";
+    out[`${ARM_PREFIX}Shield:material`] = "Shield Material";
+    return out;
+  }, []);
+
+  // Edit metadata: dropdown options gathered from the actual data so users
+  // pick from existing types/materials/sizes (mirrors how UnitsScreen
+  // sources options from coreData tables).
+  const columnMeta = useMemo(() => {
+    const meta = {};
+    const collect = (slot, field) => {
+      const seen = new Set();
+      for (const r of rows) {
+        const v = r[slot];
+        if (v && v[field] != null && v[field] !== "") seen.add(String(v[field]));
+      }
+      return [...seen].sort();
+    };
+    for (const s of ARMOUR_BODY_SLOTS) {
+      const types = collect(s, "type");
+      const mats  = collect(s, "material");
+      if (types.length) meta[`${ARM_PREFIX}${s}:type`] = { type: "select", options: ["", ...types] };
+      if (mats.length)  meta[`${ARM_PREFIX}${s}:material`] = { type: "select", options: ["", ...mats] };
+    }
+    const sizes = collect("Shield", "size");
+    const sMats = collect("Shield", "material");
+    if (sizes.length) meta[`${ARM_PREFIX}Shield:size`] = { type: "select", options: ["", ...sizes] };
+    if (sMats.length) meta[`${ARM_PREFIX}Shield:material`] = { type: "select", options: ["", ...sMats] };
+    return meta;
+  }, [rows]);
+
+  // Build table rows with section dividers / per-unit separators (same
+  // logic as before — just emitting per-field values into the new
+  // wider column layout).
+  const { rows: tableRows, rowIds } = useMemo(() => {
     const out = [];
+    const ids = [];
     let prevName = null;
-    let lastWasDecoration = true; // suppresses a separator at the very top
-    for (const r of rows) {
+    let lastWasDecoration = true;
+    for (let idx = 0; idx < rows.length; idx++) {
+      const r = rows[idx];
       const name = String(r["Model Set Name"] || "").trim();
       if (!name) continue;
       if (name.startsWith("#")) {
-        // Skip the auto-generated "#ACTUAL EDU STARTS HERE" marker; useful in
-        // the EDU file but visual noise above the first faction header.
         if (/^#?actual edu starts here\s*$/i.test(name)) { prevName = null; continue; }
         out.push({ section: name.replace(/^#/, "") });
+        ids.push(-1);
         prevName = null;
         lastWasDecoration = true;
         continue;
       }
       if (prevName !== null && name !== prevName && !lastWasDecoration) {
         out.push({ separator: true });
+        ids.push(-1);
       }
       out.push(cols.map((c) => {
         if (c === "Model Set Name") return r[c];
-        const v = r[c];
-        if (!v) return "";
-        const parts = [];
-        if (v.type)     parts.push(v.type);
-        if (v.material) parts.push(v.material);
-        if (v.size)     parts.push(v.size);
-        if (v.onBack)   parts.push(`(onBack: ${v.onBack})`);
-        return parts.join(" · ");
+        if (c.startsWith(ARM_PREFIX)) {
+          const rest = c.slice(ARM_PREFIX.length);
+          const sep = rest.indexOf(":");
+          const slot = rest.slice(0, sep);
+          const field = rest.slice(sep + 1);
+          const v = r[slot];
+          return (v && v[field]) || "";
+        }
+        return r[c];
       }));
+      ids.push(idx);
       prevName = name;
       lastWasDecoration = false;
     }
-    return out;
-  }, [rows]);
+    return { rows: out, rowIds: ids };
+  }, [rows, cols]);
+
+  const onEdit = useCallback((rowIdx, columnKey, newValue) => {
+    if (typeof rowIdx !== "number" || rowIdx < 0) return;
+    const cur = rows[rowIdx];
+    if (!cur) return;
+    if (columnKey === "Model Set Name") {
+      if (String(cur[columnKey] ?? "") === String(newValue ?? "")) return;
+      const nextRow = { ...cur, [columnKey]: newValue };
+      const nextRows = rows.slice(); nextRows[rowIdx] = nextRow;
+      setProject({ ...project, armour: nextRows });
+      return;
+    }
+    if (columnKey.startsWith(ARM_PREFIX)) {
+      const rest = columnKey.slice(ARM_PREFIX.length);
+      const sep = rest.indexOf(":");
+      const slot = rest.slice(0, sep);
+      const field = rest.slice(sep + 1);
+      const slotObj = cur[slot] || { instances: 1 };
+      if (String(slotObj[field] ?? "") === String(newValue ?? "")) return;
+      const nextSlot = { ...slotObj };
+      if (newValue === "" || newValue == null) nextSlot[field] = null;
+      else nextSlot[field] = newValue;
+      const nextRow = { ...cur, [slot]: nextSlot };
+      const nextRows = rows.slice(); nextRows[rowIdx] = nextRow;
+      setProject({ ...project, armour: nextRows });
+    }
+  }, [rows, project, setProject]);
+
+  // Row operations.
+  const addBlankArmour = useCallback(() => {
+    const blank = { row: 0, "Model Set Name": "" };
+    setProject({ ...project, armour: [...rows, blank] });
+  }, [rows, project, setProject]);
+  const duplicateArmour = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const cur = rows[idx]; if (!cur) return;
+    const copy = JSON.parse(JSON.stringify(cur));
+    if (copy["Model Set Name"]) copy["Model Set Name"] = copy["Model Set Name"] + " (copy)";
+    const next = rows.slice(); next.splice(idx + 1, 0, copy);
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+  const insertBlankArmourBelow = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const blank = { row: 0, "Model Set Name": "" };
+    const next = rows.slice(); next.splice(idx + 1, 0, blank);
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+  const deleteArmour = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const next = rows.slice(); next.splice(idx, 1);
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+
   return (
     <div className="screen">
       <h2>Armour Models <span className="dim">({rows.length})</span></h2>
       <DataTable
         columns={cols}
         rows={tableRows}
-        maxHeight="75vh"
+        rowIds={rowIds}
+        columnMeta={columnMeta}
+        columnLabels={columnLabels}
+        onEdit={onEdit}
+        editable
+        pinFirstColumn
         searchable
+        columnsToggleable
+        onAddRow={addBlankArmour}
+        onDuplicateRow={duplicateArmour}
+        onInsertRowBelow={insertBlankArmourBelow}
+        onDeleteRow={deleteArmour}
+        addRowLabel="+ New armour set"
       />
     </div>
   );
