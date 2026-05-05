@@ -625,24 +625,44 @@ const OWN_PREFIX = "own:";
 // not present in any actual unit are omitted; columns present but not in
 // HEAD/TAIL fall through to the catch-all bucket at the end so nothing is
 // silently dropped.
+// Column order for the Units edit screen. Mirrors the EDUMatic
+// UnitDefinitions sheet — identification first (name / id / dictionary
+// / category / specialty), then the source fields that drive the
+// emit-side EDU output in roughly the order they show up there
+// (voice → model → officers → category-specific → flags → formation
+// → weapons → armour → banners → priority). Per-faction availability
+// columns are emitted separately, between HEAD and TAIL, by the screen.
+// Anything not in HEAD/TAIL falls through to a catch-all bucket so we
+// never silently drop a key.
 const UNITS_HEAD = [
-  "name", "Entries", "Recruitment", "Quality", "Category", "Specialty",
-  "Formation", "Dwelling", "Culture", "Weapon", "Wpn Quality",
-  "Projectile", "Melee Skeleton", "Sec Weapon", "S Wpn Quality",
-  "S Melee Skeleton", "Armour Upgr0", "Armour Upgr1", "Armour Upgr2",
-  "Armour Upgr3", "Mount", "Special", "Mount Skeleton", "Engine",
-  "Engine Pri Proj", "Engine Sec Proj", "Ship", "unit id", "dictionary_tag",
-  "voice_type", "voice_indexes", "faction banner", "holy banner",
-  "unit variation", "model id", "officer 1", "officer 2", "officer 3",
-  "officer 4", "officer 5", "ship id", "engine id", "animal id", "mount id",
+  "name", "Entries", "comments",
+  "unit id", "dictionary_tag",
+  "Category", "Specialty",
+  "Recruitment", "Quality",
+  "voice_type", "voice_indexes",
+  "unit variation", "model id",
+  "officer 1", "officer 2", "officer 3", "officer 4", "officer 5",
+  "ship id", "engine id", "animal id", "mount id",
   "general unit", "merc unit", "horde unit", "unique unit",
-  "impetuous unit", "no CBs", "pri missile type", "engine missile type",
-  "sec eng missile type", "arm upg mdl 1", "arm upg mdl 2", "arm upg mdl 3",
+  "impetuous unit", "no CBs",
+  "Formation", "Dwelling", "Culture",
+  "Weapon", "Wpn Quality", "Projectile", "Melee Skeleton",
+  "pri missile type",
+  "Sec Weapon", "S Wpn Quality", "S Melee Skeleton",
+  "Engine", "Engine Pri Proj", "Engine Sec Proj",
+  "engine missile type", "sec eng missile type",
+  "Mount", "Special", "Mount Skeleton",
+  "Ship",
+  "Armour Upgr0", "Armour Upgr1", "Armour Upgr2", "Armour Upgr3",
+  "arm upg mdl 1", "arm upg mdl 2", "arm upg mdl 3",
+  "faction banner", "holy banner",
   "rec priority",
+  "Tier", "Turns",
 ];
 const UNITS_TAIL = [
-  "ethnicity region", "ethnicity attributes", "tattoo colour", "hair colour",
-  "hair style", "info pic dir", "card pic dir", "comments", "Tier", "Turns",
+  "ethnicity region", "ethnicity attributes",
+  "tattoo colour", "hair colour", "hair style",
+  "info pic dir", "card pic dir",
 ];
 
 // Mirror of projectStore.js's sanitiseKey — used to derive the on-disk
@@ -1290,6 +1310,11 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
           >clear filters</button>
         )}
         <span style={{ flex: 1 }} />
+        <button
+          className="btn"
+          onClick={() => insertSectionHeader(null, "above")}
+          title="Insert a section header line at the top of the table (e.g. MID-REPUBLICAN ROMANS). For mid-list placement, right-click any row → Insert section header above/below."
+        >+ Section header</button>
         <div style={{ position: "relative" }}>
           <button
             className="btn"
@@ -1792,19 +1817,31 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     if (typeof idx !== "number" || idx < 0) return;
     const cur = rows[idx]; if (!cur) return;
     const copy = JSON.parse(JSON.stringify(cur));
-    if (copy["Model Set Name"]) copy["Model Set Name"] = copy["Model Set Name"] + " (copy)";
+    // Don't append "(copy)" — armour rows that share a Model Set Name
+    // group together as variants of the same unit. Renaming the dup
+    // breaks the grouping and the row appears between separators as if
+    // it were its own unit. The user can rename via the cell editor
+    // when they actually want to start a new group.
     const next = rows.slice(); next.splice(idx + 1, 0, copy);
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
   const insertBlankArmourBelow = useCallback((idx) => {
     if (typeof idx !== "number" || idx < 0) return;
-    const blank = { row: 0, "Model Set Name": "" };
+    // Inherit the neighbor's Model Set Name so the new blank row
+    // joins the adjacent unit's group instead of looking like its
+    // own unit between separators. Empty string is the fall-back if
+    // the row above has no name yet.
+    const cur = rows[idx];
+    const name = cur && cur["Model Set Name"] ? String(cur["Model Set Name"]) : "";
+    const blank = { row: 0, "Model Set Name": name };
     const next = rows.slice(); next.splice(idx + 1, 0, blank);
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
   const insertBlankArmourAbove = useCallback((idx) => {
     if (typeof idx !== "number" || idx < 0) return;
-    const blank = { row: 0, "Model Set Name": "" };
+    const cur = rows[idx];
+    const name = cur && cur["Model Set Name"] ? String(cur["Model Set Name"]) : "";
+    const blank = { row: 0, "Model Set Name": name };
     const next = rows.slice(); next.splice(idx, 0, blank);
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
