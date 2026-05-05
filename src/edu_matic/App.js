@@ -122,10 +122,10 @@ export default function App({ externalProject = null, onProjectChange, controlle
         {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} recruitUnits={recruitUnits} lastImportedSnapshot={lastImportedSnapshot} onJumpToRecruit={onJumpToRecruit} projectBlame={projectBlame} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
         {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} projectBlame={projectBlame} />}
-        {view === "merc"     && <MercScreen     project={project} />}
+        {view === "merc"     && <MercScreen     project={project} modDataDir={modDataDir} />}
         {view === "validate" && <ValidateScreen project={project} onView={setView} />}
         {view === "preview"  && <PreviewScreen  project={project} />}
-        {view === "export"   && <ExportScreen   project={project} onExport={exportEdu} />}
+        {view === "export"   && <ExportScreen   project={project} onExport={exportEdu} modDataDir={modDataDir} />}
       </main>
       {toast && <div className={`toast toast-${toast.kind}`}>{toast.text}</div>}
     </div>
@@ -872,6 +872,28 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     nextUnits.splice(unitIdx + 1, 0, blank);
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
+  const insertBlankUnitAbove = useCallback((unitIdx) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const blank = { kind: "unit", row: 0, name: "" };
+    const nextUnits = project.units.slice();
+    nextUnits.splice(unitIdx, 0, blank);
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  // Move a row up or down within project.units. Skips section/comment
+  // rows so the move feels like a 1-row jump in the visible table even
+  // when the underlying array has interleaved comment markers.
+  const moveUnit = useCallback((unitIdx, dir /* "up" | "down" */) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const arr = project.units;
+    if (unitIdx >= arr.length) return;
+    const step = dir === "up" ? -1 : 1;
+    let target = unitIdx + step;
+    while (target >= 0 && target < arr.length && arr[target] && arr[target].kind !== "unit") target += step;
+    if (target < 0 || target >= arr.length) return;
+    const next = arr.slice();
+    [next[unitIdx], next[target]] = [next[target], next[unitIdx]];
+    setProject({ ...project, units: next });
+  }, [project, setProject]);
   const deleteUnit = useCallback((unitIdx) => {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
     const nextUnits = project.units.slice();
@@ -1217,6 +1239,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
         rowMenuExtras={[
+          { label: "↑ Move row up", onClick: (idx) => moveUnit(idx, "up") },
+          { label: "↓ Move row down", onClick: (idx) => moveUnit(idx, "down") },
+          { label: "Insert blank above", onClick: (idx) => insertBlankUnitAbove(idx) },
           ...(modDataDir ? [{
             label: "Stub in export_units.txt",
             onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
@@ -1597,6 +1622,20 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     const next = rows.slice(); next.splice(idx + 1, 0, blank);
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
+  const insertBlankArmourAbove = useCallback((idx) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const blank = { row: 0, "Model Set Name": "" };
+    const next = rows.slice(); next.splice(idx, 0, blank);
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+  const moveArmour = useCallback((idx, dir) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const target = dir === "up" ? idx - 1 : idx + 1;
+    if (target < 0 || target >= rows.length) return;
+    const next = rows.slice();
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
   const deleteArmour = useCallback((idx) => {
     if (typeof idx !== "number" || idx < 0) return;
     const next = rows.slice(); next.splice(idx, 1);
@@ -1681,6 +1720,11 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         searchPersistKey="edu-armour"
         rowFlags={rowFlags}
         rowToJSON={(idx) => rows[idx] || null}
+        rowMenuExtras={[
+          { label: "↑ Move row up", onClick: (idx) => moveArmour(idx, "up") },
+          { label: "↓ Move row down", onClick: (idx) => moveArmour(idx, "down") },
+          { label: "Insert blank above", onClick: (idx) => insertBlankArmourAbove(idx) },
+        ]}
         bulkActions={[
           { label: "Set field on selected…", setField: { onApply: bulkSetArmour } },
           { label: "Duplicate selected", onClick: bulkDuplicateArmour },
@@ -1697,7 +1741,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
 const MERC_NUMERIC_FIELDS = new Set(["exp", "cost", "maxInPool", "initial", "replenishMin", "replenishMax"]);
 const MERC_COLS = ["unitId", "exp", "cost", "replenishMin", "replenishMax", "maxInPool", "initial", "refUnitId"];
 
-function MercScreen({ project: rawProject, setProject }) {
+function MercScreen({ project: rawProject, setProject, modDataDir }) {
   const project = rawProject || { units: [], factions: [], coreData: {}, armour: [], merc: [], modInfo: {} };
   const rows = useMemo(() => project.merc || [], [project.merc]);
   const [filterPool, setFilterPool] = useState("");
@@ -1923,11 +1967,108 @@ function MercScreen({ project: rawProject, setProject }) {
     setProject({ ...project, merc: next });
   }, [rows, project, setProject]);
 
+  // Cross-check the project's merc rows against the on-disk
+  // descr_mercenaries.txt. Surfaces:
+  //   - Pools / regions present in one source but not the other
+  //   - Per-unit cost / max-pool / replenish drift between project and game file
+  // Result shape: { pools:[…], regions:[…], units:[…] } where each
+  // entry is { kind:"missing"|"extra"|"diff", message }.
+  const [mercDiff, setMercDiff] = useState(null);
+  const runMercCrossCheck = useCallback(async () => {
+    if (!modDataDir || !window.eduAPI?.readDescrMercenaries) {
+      setMercDiff({ error: "modDataDir not set or IPC unavailable" });
+      return;
+    }
+    const r = await window.eduAPI.readDescrMercenaries(modDataDir);
+    if (!r || !r.ok) { setMercDiff({ error: r?.reason || "read failed" }); return; }
+    // Parse the on-disk file into pool blocks.
+    const onDiskPools = new Map();   // poolName -> { regions: string, units: Map<unitId, {cost, maxInPool, replenishMin, replenishMax, exp, initial}> }
+    let curPool = null;
+    for (const raw of r.text.split(/\r?\n/)) {
+      const ln = raw.trim();
+      if (!ln || ln.startsWith(";")) continue;
+      let m = ln.match(/^pool\s+(.+?)\s*$/i);
+      if (m) {
+        curPool = m[1].trim();
+        if (!onDiskPools.has(curPool)) onDiskPools.set(curPool, { regions: "", units: new Map() });
+        continue;
+      }
+      m = ln.match(/^regions\s+(.+?)\s*$/i);
+      if (m && curPool) { onDiskPools.get(curPool).regions = m[1].trim(); continue; }
+      m = ln.match(/^unit\s+(.+?),\s*exp\s+(\d+)\s+cost\s+(\d+)\s+replenish\s+([\d.]+)\s*-\s*([\d.]+)\s+max\s+(\d+)\s+initial\s+(\d+)/i);
+      if (m && curPool) {
+        const id = m[1].trim();
+        onDiskPools.get(curPool).units.set(id.toLowerCase(), {
+          unit: id, exp: Number(m[2]), cost: Number(m[3]), replenishMin: Number(m[4]), replenishMax: Number(m[5]), maxInPool: Number(m[6]), initial: Number(m[7]),
+        });
+      }
+    }
+    // Build the project-side view.
+    const projectPools = new Map();
+    let pCur = null;
+    for (const m of project.merc || []) {
+      if (m.kind === "pool") { pCur = m.name; if (!projectPools.has(pCur)) projectPools.set(pCur, { regions: "", units: new Map() }); }
+      else if (m.kind === "regions" && pCur) projectPools.get(pCur).regions = String(m.list || "").trim();
+      else if (m.kind === "unit" && pCur) projectPools.get(pCur).units.set(String(m.unitId || "").toLowerCase(), m);
+    }
+    const out = { pools: [], regions: [], units: [], summary: "" };
+    for (const name of projectPools.keys()) {
+      if (!onDiskPools.has(name)) out.pools.push({ kind: "missing", message: `Pool "${name}" exists in project but NOT in descr_mercenaries.txt` });
+    }
+    for (const name of onDiskPools.keys()) {
+      if (!projectPools.has(name)) out.pools.push({ kind: "extra", message: `Pool "${name}" in descr_mercenaries.txt but NOT in project` });
+    }
+    for (const [name, p] of projectPools) {
+      const d = onDiskPools.get(name);
+      if (!d) continue;
+      const projRegions = p.regions || "";
+      const diskRegions = d.regions || "";
+      if (projRegions.split(/\s+/).filter(Boolean).sort().join(" ") !== diskRegions.split(/\s+/).filter(Boolean).sort().join(" ")) {
+        out.regions.push({ kind: "diff", message: `Pool "${name}" regions differ\n  project: ${projRegions}\n  on-disk: ${diskRegions}` });
+      }
+      for (const [uid, pu] of p.units) {
+        const du = d.units.get(uid);
+        if (!du) { out.units.push({ kind: "missing", message: `[${name}] "${pu.unitId}" — in project, NOT in descr_mercenaries.txt` }); continue; }
+        const fields = ["cost", "maxInPool", "replenishMin", "replenishMax", "exp", "initial"];
+        const drifts = fields.filter(f => Number(pu[f] ?? 0) !== Number(du[f] ?? 0));
+        if (drifts.length) {
+          const detail = drifts.map(f => `${f}: project=${pu[f]} disk=${du[f]}`).join(", ");
+          out.units.push({ kind: "diff", message: `[${name}] "${pu.unitId}" — ${detail}` });
+        }
+      }
+      for (const [uid, du] of d.units) {
+        if (!p.units.has(uid)) out.units.push({ kind: "extra", message: `[${name}] "${du.unit}" — in descr_mercenaries.txt, NOT in project` });
+      }
+    }
+    out.summary = `${out.pools.length} pool · ${out.regions.length} regions · ${out.units.length} unit difference(s)`;
+    setMercDiff({ ok: true, ...out, path: r.path });
+  }, [modDataDir, project]);
+
   if (!rawProject) return <EmptyScreen />;
 
   return (
     <div className="screen">
       <h2>Mercenaries <span className="dim">({rows.filter(r => r && r.kind === "unit").length} units across {pools.length} pools)</span></h2>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <button className="btn" onClick={runMercCrossCheck} disabled={!modDataDir} title={modDataDir ? "Compare project's pools / regions / unit cost against the on-disk descr_mercenaries.txt" : "Set the mod data folder first"}>
+          Cross-check descr_mercenaries.txt
+        </button>
+        {mercDiff && mercDiff.error && <span style={{ color: "#d66c6c", fontSize: 11 }}>{mercDiff.error}</span>}
+        {mercDiff && mercDiff.ok && (
+          <span style={{ fontSize: 11, color: (mercDiff.pools.length + mercDiff.regions.length + mercDiff.units.length) === 0 ? "#7c9" : "#dca64a" }}>
+            {(mercDiff.pools.length + mercDiff.regions.length + mercDiff.units.length) === 0 ? "✓ no differences" : mercDiff.summary}
+          </span>
+        )}
+      </div>
+      {mercDiff && mercDiff.ok && (mercDiff.pools.length + mercDiff.regions.length + mercDiff.units.length) > 0 && (
+        <div className="card" style={{ marginBottom: 12, maxHeight: 220, overflow: "auto", fontFamily: "Consolas, monospace", fontSize: 11 }}>
+          {[...mercDiff.pools, ...mercDiff.regions, ...mercDiff.units].map((d, i) => (
+            <div key={i} style={{ padding: "3px 0", color: d.kind === "diff" ? "#dca64a" : d.kind === "missing" ? "#d66c6c" : "#7c9", whiteSpace: "pre-wrap" }}>
+              [{d.kind}] {d.message}
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, color: "#999" }}>Filter pool:</span>
         <select
@@ -2137,12 +2278,38 @@ function PreviewScreen({ project }) {
   );
 }
 
-function ExportScreen({ project, onExport }) {
+function ExportScreen({ project, onExport, modDataDir }) {
   const [baseName, setBaseName] = useState("export_descr_unit");
   const [running, setRunning] = useState(false);
   const [preview, setPreview] = useState(null);
   const [lastExport, setLastExport] = useState(() => localStorage.getItem("rt:eduLastExport") || null);
+  const [syncStatus, setSyncStatus] = useState(null);
   if (!project) return <EmptyScreen />;
+
+  // Reorder text/export_units.txt blocks to match the project's EDU
+  // unit sequence. Uses dictionary_tag (with underscores) when present
+  // — that's what RTW actually looks up — falling back to unit id /
+  // name. Idempotent: rerunning produces no change once the file is
+  // already in EDU order.
+  const doSyncExportUnitsOrder = async () => {
+    if (!modDataDir || !window.eduAPI?.syncExportUnitsOrder) {
+      setSyncStatus({ ok: false, msg: "modDataDir not set or IPC unavailable" });
+      return;
+    }
+    const ordered = [];
+    const seen = new Set();
+    for (const u of project.units || []) {
+      if (!u || u.kind !== "unit") continue;
+      const k = String(u["dictionary_tag"] || u["unit id"] || u.name || "").trim();
+      if (k && !seen.has(k)) { ordered.push(k); seen.add(k); }
+    }
+    setSyncStatus({ ok: false, msg: "Working…" });
+    try {
+      const r = await window.eduAPI.syncExportUnitsOrder(modDataDir, ordered);
+      if (r?.ok) setSyncStatus({ ok: true, msg: `✓ reordered ${r.ordered} blocks (+${r.trailing} trailing not in EDU)` });
+      else setSyncStatus({ ok: false, msg: r?.reason || "sync failed" });
+    } catch (e) { setSyncStatus({ ok: false, msg: e.message || "threw" }); }
+  };
 
   const doExport = async () => {
     setRunning(true);
@@ -2185,7 +2352,13 @@ function ExportScreen({ project, onExport }) {
             {running ? "Working…" : "Export EDU…"}
           </button>
           <button className="btn" onClick={doPreview} disabled={running}>Preview EDU text</button>
+          <button className="btn" onClick={doSyncExportUnitsOrder} disabled={!modDataDir} title={modDataDir ? "Reorder text/export_units.txt blocks to match the EDU project's unit sequence (uses dictionary_tag)." : "Set the mod data folder first"}>
+            Sync export_units.txt order
+          </button>
         </div>
+        {syncStatus && (
+          <div style={{ marginTop: 8, fontSize: 11, color: syncStatus.ok ? "#7c9" : "#dca64a" }}>{syncStatus.msg}</div>
+        )}
         {lastExport && (
           <div className="field" style={{ marginTop: 12, alignItems: "center" }}>
             <span>Last export</span>

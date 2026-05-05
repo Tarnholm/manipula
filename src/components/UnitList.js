@@ -8,7 +8,7 @@ const GRADE_ORDER = { Levy: 1, Standard: 2, Professional: 3, Elite: 4, Veteran: 
 // Map role string → bucket number (mirrors generator.js bucketOf, derived from ROSTER_ROLES).
 const BUCKET_OF_ROLE = Object.fromEntries(ROSTER_ROLES.map((r, i) => [r, i + 1]));
 
-export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, modIndex, filter, onFilterChange, eduProject }) {
+export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, modIndex, filter, onFilterChange, eduProject }) {
   // Build a Map of unit name → EDU row, so the badge can show a stat-preview tooltip.
   const eduMap = useMemo(() => {
     if (!eduProject || !Array.isArray(eduProject.units)) return null;
@@ -50,10 +50,28 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
   }, [units]);
   const [q, setQ] = useState("");
   const searchRef = React.useRef(null);
+  const scrollRef = React.useRef(null);
   // Compact mode toggle — when on, rows shrink to ~40px (no portrait, just name + tier).
   // Useful for scrolling 4000-unit profiles. Persisted across launches.
   const [compact, setCompact] = useState(() => localStorage.getItem("rt:compactList") === "1");
   useEffect(() => { localStorage.setItem("rt:compactList", compact ? "1" : "0"); }, [compact]);
+  // Drag-and-drop reorder state. dragGroupIdx is the visible-group index
+  // currently being dragged; dropTargetIdx is the visible-group index
+  // hovered over (with side="above"/"below" determining where the item
+  // lands relative to the target).
+  const [dragGroupIdx, setDragGroupIdx] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);   // { idx, side }
+  // Auto-scroll the selected card into view whenever selectedId changes.
+  // Without this, "+ New unit" felt like a no-op — the new unit was
+  // prepended to the units array but the sidebar's scroll position
+  // didn't move, so the user couldn't see the freshly added row.
+  useEffect(() => {
+    if (!selectedId || !scrollRef.current) return;
+    const el = scrollRef.current.querySelector(`[data-unit-id="${selectedId}"]`);
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [selectedId]);
   // Right-click context menu — { x, y, unit } | null.
   const [ctxMenu, setCtxMenu] = useState(null);
   useEffect(() => {
@@ -157,10 +175,16 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
       }
       return true;
     });
-    // Sort by (category, grade, name) so the list mirrors the EDB output order:
-    //   Infantry → Missiles → Cavalry → Camels → Elephants → General
-    //   Levy → Standard → Professional → Elite → Veteran
+    // Sort: when manualOrder is stamped on units (the user has dragged
+    // or inserted via the context menu), it takes priority over the
+    // category/grade default. Units with no manualOrder fall back to
+    // role/grade/tier ordering to mirror the EDB output sequence.
     list.sort((a, b) => {
+      const ma = (typeof a.manualOrder === "number") ? a.manualOrder : null;
+      const mb = (typeof b.manualOrder === "number") ? b.manualOrder : null;
+      if (ma != null && mb != null) return ma - mb;
+      if (ma != null) return -1;
+      if (mb != null) return 1;
       const ba = BUCKET_OF_ROLE[categorizeUnit(a)] || 99;
       const bb = BUCKET_OF_ROLE[categorizeUnit(b)] || 99;
       if (ba !== bb) return ba - bb;
@@ -284,7 +308,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
           </select>
         </div>
       </div>
-      <div style={{ flex: 1, overflow: "auto" }}>
+      <div ref={scrollRef} style={{ flex: 1, overflow: "auto" }}>
         {filtered.length === 0 && ghostUnits.length === 0 && (
           <div style={{ color: "#777", padding: 20, textAlign: "center" }}>
             {units.length === 0 ? "No units yet — click ＋ New unit to add one." : "No matches."}
@@ -295,7 +319,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             Authored — {filtered.length}
           </div>
         )}
-        {filteredGroups.map((group) => {
+        {filteredGroups.map((group, gIdx) => {
           const variants = group.variants;
           // Pick a "representative" variant for the card preview — the
           // currently-selected one if any variant in the group is
@@ -329,18 +353,59 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             (u.factions || []).find(f => f && f !== "all") ||
             (eduEntry?.ownership || []).find(f => f && f !== "slave") ||
             null;
+          const showDropAbove = dropTarget && dropTarget.idx === gIdx && dropTarget.side === "above";
+          const showDropBelow = dropTarget && dropTarget.idx === gIdx && dropTarget.side === "below";
+          const isBeingDragged = dragGroupIdx === gIdx;
           return (
             <div
               key={group.name + "|" + u.id}
+              data-unit-id={u.id}
+              draggable={!!onReorder}
+              onDragStart={(e) => {
+                if (!onReorder) return;
+                setDragGroupIdx(gIdx);
+                e.dataTransfer.effectAllowed = "move";
+                try { e.dataTransfer.setData("text/plain", String(gIdx)); } catch {}
+              }}
+              onDragOver={(e) => {
+                if (!onReorder || dragGroupIdx == null) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                const r = e.currentTarget.getBoundingClientRect();
+                const side = (e.clientY - r.top) < r.height / 2 ? "above" : "below";
+                setDropTarget((cur) => (cur && cur.idx === gIdx && cur.side === side) ? cur : { idx: gIdx, side });
+              }}
+              onDragLeave={() => {
+                setDropTarget((cur) => (cur && cur.idx === gIdx) ? null : cur);
+              }}
+              onDrop={(e) => {
+                if (!onReorder || dragGroupIdx == null) return;
+                e.preventDefault();
+                const from = dragGroupIdx;
+                let to = gIdx;
+                if (dropTarget && dropTarget.side === "below") to = to + 1;
+                setDragGroupIdx(null); setDropTarget(null);
+                if (from === to || from + 1 === to) return;
+                const groups = [...filteredGroups];
+                const [moved] = groups.splice(from, 1);
+                const insertAt = from < to ? to - 1 : to;
+                groups.splice(insertAt, 0, moved);
+                const orderedIds = [];
+                for (const g of groups) for (const v of g.variants) orderedIds.push(v.id);
+                onReorder(orderedIds);
+              }}
+              onDragEnd={() => { setDragGroupIdx(null); setDropTarget(null); }}
               onClick={(ev) => onSelect(u.id, ev)}
               onContextMenu={(ev) => { ev.preventDefault(); setCtxMenu({ x: ev.clientX, y: ev.clientY, unit: u }); }}
               style={{
                 padding: compact ? "4px 12px" : "8px 12px",
-                borderBottom: "1px solid rgba(255,255,255,0.04)",
+                borderTop: showDropAbove ? "2px solid #dca64a" : "2px solid transparent",
+                borderBottom: showDropBelow ? "2px solid #dca64a" : "1px solid rgba(255,255,255,0.04)",
                 cursor: "pointer",
+                opacity: isBeingDragged ? 0.45 : 1,
                 background: isPrimary ? "rgba(220,166,74,0.18)" : isMulti ? "rgba(220,166,74,0.08)" : "",
                 borderLeft: !enabledAny ? "3px solid #555" : isPrimary ? "3px solid #dca64a" : isMulti ? "3px solid rgba(220,166,74,0.5)" : "3px solid transparent",
-                transition: "background 0.12s",
+                transition: "background 0.12s, opacity 0.1s",
                 display: "flex",
                 gap: 10,
                 alignItems: compact ? "center" : "flex-start",
@@ -523,6 +588,8 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
           <div style={{ padding: "5px 10px", color: "#dca64a", fontWeight: 700, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 4 }}>{ctxMenu.unit.unit}</div>
           {[
             { label: "Edit (select)", onClick: () => onSelect(ctxMenu.unit.id, {}) },
+            onInsertNear ? { label: "Insert blank above", onClick: () => onInsertNear(ctxMenu.unit.id, "above") } : null,
+            onInsertNear ? { label: "Insert blank below", onClick: () => onInsertNear(ctxMenu.unit.id, "below") } : null,
             { label: "Duplicate…", onClick: () => onDuplicate && onDuplicate(ctxMenu.unit.id) },
             { label: "Toggle reference-only", onClick: () => onSelect(ctxMenu.unit.id, {}) /* user toggles in editor */ },
             { label: "Filter to faction…", onClick: () => {
@@ -532,7 +599,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             },
             { label: "Copy unit name", onClick: () => navigator.clipboard?.writeText(ctxMenu.unit.unit) },
             { label: "Delete…", onClick: () => window.confirm(`Delete "${ctxMenu.unit.unit}"?`) && onDelete(ctxMenu.unit.id), color: "#e88" },
-          ].map((it, i) => (
+          ].filter(Boolean).map((it, i) => (
             <div key={i}
               onClick={() => { it.onClick(); setCtxMenu(null); }}
               style={{ padding: "5px 10px", cursor: "pointer", borderRadius: 3, color: it.color || "#ddd" }}

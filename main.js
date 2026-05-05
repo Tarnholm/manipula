@@ -1439,6 +1439,110 @@ ipcMain.handle("append-export-units-stub", async (_e, modDataDir, unitKey, displ
     return { ok: false, reason: e.message };
   }
 });
+// Read descr_mercenaries.txt from the mod data dir so the renderer can
+// cross-check the project's merc rows against what the game actually
+// loads. Returns the file text as UTF-8 (it may have been authored as
+// UTF-16 LE; we sniff the BOM and decode appropriately).
+ipcMain.handle("read-descr-mercenaries", async (_e, modDataDir) => {
+  if (!modDataDir) return { ok: false, reason: "missing modDataDir" };
+  const candidates = [
+    path.join(modDataDir, "descr_mercenaries.txt"),
+    path.join(modDataDir, "data", "descr_mercenaries.txt"),
+  ];
+  const target = candidates.find(p => fs.existsSync(p));
+  if (!target) return { ok: false, reason: "descr_mercenaries.txt not found in " + modDataDir };
+  try {
+    const buf = fs.readFileSync(target);
+    let text;
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+      text = buf.slice(2).toString("utf16le");
+    } else if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+      text = buf.slice(3).toString("utf8");
+    } else {
+      text = buf.toString("utf8");
+    }
+    return { ok: true, path: target, text };
+  } catch (e) { return { ok: false, reason: e.message }; }
+});
+
+// Reorder export_units.txt blocks so each block follows the order of
+// `orderedKeys` (typically the project's EDU dictionary_tag sequence).
+// Blocks not in orderedKeys are kept at the end in their original
+// relative order. The file is rewritten as UTF-16 LE with BOM (RTW
+// convention) and a .bak is created on first call per session.
+ipcMain.handle("sync-export-units-order", async (_e, modDataDir, orderedKeys) => {
+  if (!modDataDir) return { ok: false, reason: "missing modDataDir" };
+  if (!Array.isArray(orderedKeys) || !orderedKeys.length) return { ok: false, reason: "no keys" };
+  const candidates = [
+    path.join(modDataDir, "text", "export_units.txt"),
+    path.join(modDataDir, "data", "text", "export_units.txt"),
+  ];
+  const target = candidates.find(p => fs.existsSync(p));
+  if (!target) return { ok: false, reason: "export_units.txt not found in " + modDataDir };
+  try {
+    const original = fs.readFileSync(target, "utf16le");
+    const text = original.charCodeAt(0) === 0xFEFF ? original.slice(1) : original;
+    const useCRLF = /\r\n/.test(text);
+    const eol = useCRLF ? "\r\n" : "\n";
+    // Split into blocks. Each block starts with a {<key>}<...> line and
+    // optionally has up to ~3 follow-on lines for descr_short / descr.
+    // We treat any contiguous run of {<key>}-prefixed lines that share a
+    // base key (key, key_descr_short, key_descr) as one block.
+    const lines = text.split(/\r?\n/);
+    const blocks = [];        // [{ baseKey, lines: [], leadingBlank: boolean }]
+    let header = [];
+    let curBase = null;
+    let curLines = [];
+    const flushBlock = () => { if (curBase !== null) blocks.push({ baseKey: curBase, lines: curLines }); curBase = null; curLines = []; };
+    const baseOf = (k) => k.replace(/_descr(_short)?$/, "");
+    for (const ln of lines) {
+      const m = ln.match(/^\{([^}]+)\}/);
+      if (m) {
+        const base = baseOf(m[1]);
+        if (curBase === null) {
+          curBase = base; curLines = [ln];
+        } else if (base === curBase) {
+          curLines.push(ln);
+        } else {
+          flushBlock();
+          curBase = base; curLines = [ln];
+        }
+      } else if (ln.trim() === "") {
+        if (curBase !== null) { curLines.push(ln); }
+        else if (blocks.length === 0) header.push(ln);
+        else { /* drop trailing blank between blocks; we'll re-emit one */ }
+      } else {
+        // Plain text line (rare — comments). Treat as part of the current
+        // block if one is open; otherwise file header.
+        if (curBase !== null) curLines.push(ln);
+        else header.push(ln);
+      }
+    }
+    flushBlock();
+    const blockByKey = new Map();
+    for (const b of blocks) blockByKey.set(b.baseKey, b);
+    const ordered = [];
+    const seen = new Set();
+    for (const k of orderedKeys) {
+      const b = blockByKey.get(String(k));
+      if (b && !seen.has(b.baseKey)) { ordered.push(b); seen.add(b.baseKey); }
+    }
+    // Append any remaining blocks (not in orderedKeys) in their original
+    // file order so we never silently drop content.
+    const trailing = [];
+    for (const b of blocks) if (!seen.has(b.baseKey)) trailing.push(b);
+    const bak = target + ".bak";
+    if (!fs.existsSync(bak)) fs.writeFileSync(bak, original, { encoding: "binary" });
+    const headerText = header.length ? header.join(eol) + eol : "";
+    const blockText = [...ordered, ...trailing]
+      .map((b) => b.lines.filter((l) => l.trim() !== "").join(eol))
+      .join(eol + eol) + eol;
+    const bomChar = "﻿";
+    fs.writeFileSync(target, bomChar + headerText + blockText, { encoding: "utf16le" });
+    return { ok: true, path: target, ordered: ordered.length, trailing: trailing.length };
+  } catch (e) { return { ok: false, reason: e.message }; }
+});
+
 ipcMain.handle("git-commit-all", async (_e, dir, message) => {
   const add = await runGit(dir, ["add", "."]);
   if (!add.ok) return add;

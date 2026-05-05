@@ -434,9 +434,52 @@ export default function App() {
       id, unit: "new unit", enabled: true, minTier: 1, factions: [], requires: [],
     });
     newUnit.writeBack = true;
-    persistUnits([newUnit, ...units]);
+    // Stamp manualOrder = 0 so the new unit lands at the top of the
+    // sidebar regardless of the existing category/grade sort. Without
+    // this the new "new unit" sorted to the bottom (no grade → bucket
+    // 99) and looked like the action did nothing.
+    newUnit.manualOrder = 0;
+    const renumbered = [newUnit, ...units].map((u, i) => ({ ...u, manualOrder: i }));
+    persistUnits(renumbered);
     setSelectedId(id);
   };
+
+  // Drag-and-drop reorder from UnitList. orderedIds is the new sequence
+  // of unit ids the user wants to see — typically the visible-filtered
+  // set in their dragged order. Units not in orderedIds keep their
+  // existing relative order, appended at the end.
+  const onReorder = useCallback((orderedIds) => {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+    const idToUnit = new Map(units.map(u => [u.id, u]));
+    const seen = new Set();
+    const next = [];
+    for (const id of orderedIds) {
+      const u = idToUnit.get(id);
+      if (u && !seen.has(id)) { next.push(u); seen.add(id); }
+    }
+    for (const u of units) if (!seen.has(u.id)) next.push(u);
+    const renumbered = next.map((u, i) => ({ ...u, manualOrder: i }));
+    persistUnits(renumbered);
+  }, [units, persistUnits]);
+
+  // Context menu "Insert blank above/below" — creates a new unit and
+  // splices it next to the reference unit, then re-stamps manualOrder
+  // on every unit so the visual ordering persists across reloads.
+  const onInsertNear = useCallback((refId, position /* "above" | "below" */) => {
+    const idx = units.findIndex(u => u.id === refId);
+    if (idx < 0) return;
+    const id = "unit_" + Date.now().toString(36);
+    const newUnit = migrateV1({
+      id, unit: "new unit", enabled: true, minTier: 1, factions: [], requires: [],
+    });
+    newUnit.writeBack = true;
+    const insertAt = position === "above" ? idx : idx + 1;
+    const next = [...units];
+    next.splice(insertAt, 0, newUnit);
+    const renumbered = next.map((u, i) => ({ ...u, manualOrder: i }));
+    persistUnits(renumbered);
+    setSelectedId(id);
+  }, [units, persistUnits]);
 
   const onCreateFromEDU = (eduEntry) => {
     if (!eduEntry) return;
@@ -1449,6 +1492,8 @@ export default function App() {
                 onDelete={onDelete}
                 onDuplicate={onDuplicate}
                 onCreateFromEDU={onCreateFromEDU}
+                onReorder={onReorder}
+                onInsertNear={onInsertNear}
                 modIndex={modIndex}
                 filter={listFilter}
                 onFilterChange={setListFilter}
