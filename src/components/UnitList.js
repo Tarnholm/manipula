@@ -345,7 +345,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                 gap: 10,
                 alignItems: compact ? "center" : "flex-start",
                 contentVisibility: "auto",
-                containIntrinsicSize: compact ? "36px" : "85px",
+                containIntrinsicSize: compact ? "36px" : (totalSame > 1 ? `${85 + 22 * totalSame}px` : "85px"),
               }}
             >
               {!compact && (
@@ -362,22 +362,10 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                 <div style={{ fontWeight: 600, color: u.enabled === false ? "#888" : "#ddd", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                   <span>{display || u.unit}</span>
                   {display && <span style={{ color: "#666", fontWeight: 400, fontSize: 11 }}>({u.unit})</span>}
-                  {/* Variant count badge — when more than one entry
-                   *  shares this unit name, show "× N" so users know
-                   *  the editor will expose tabs for them. */}
                   {totalSame > 1 && (
-                    <span title={`${totalSame} variants of this unit — open in the editor to switch between them`} style={{ background: "rgba(220,166,74,0.18)", color: "#dca64a", fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>
+                    <span title={`${totalSame} variants of this unit — click a row below to jump to that variant`} style={{ background: "rgba(220,166,74,0.18)", color: "#dca64a", fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>
                       × {totalSame}
                     </span>
-                  )}
-                  {/* writeBack indicator — group-aware. Pure ref-only,
-                   *  pure write, or mixed (some variants are ref-only). */}
-                  {refCount === 0 ? (
-                    <span title="All variants will write back to EDB on next Write-to-EDB" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
-                  ) : writeCount === 0 ? (
-                    <span title="All variants are reference-only — Write-to-EDB will skip them. Toggle 'Writes to EDB' in the editor to enable writes." style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
-                  ) : (
-                    <span title={`${writeCount} of ${totalSame} variants will write to EDB; the others are ref-only.`} style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>{writeCount}/{totalSame} WRITE</span>
                   )}
                   {eduMap && eduMap.has(u.unit) && (() => {
                     const tip = summarizeEdu(eduMap.get(u.unit));
@@ -386,46 +374,95 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                     );
                   })()}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#888", flexWrap: "wrap" }}>
-                  <span>
-                    {u.grade || "?"} · t{u.canonicalMicTier ?? u.minTier ?? "?"}
-                    {u.homelandMicTier && u.homelandMicTier !== (u.canonicalMicTier ?? u.minTier) ? `(home t${u.homelandMicTier})` : ""}
-                    {u.aor && u.aor.enabled ? " · +AOR" : ""}
-                  </span>
-                  {/* Variant kind badges — single FACTIONAL or AOR if
-                   *  the group is uniform; both side-by-side when the
-                   *  group contains at least one of each. */}
-                  {factionalCount > 0 && (
-                    <span title={`${factionalCount} factional variant${factionalCount === 1 ? "" : "s"} — main MIC-chain recruitment for the unit's faction list`} style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
-                      FACTIONAL{factionalCount > 1 ? ` ×${factionalCount}` : ""}
+                {/* One row per variant — its own kind (FACTIONAL / AOR),
+                 *  WRITE/REF status, tier, and faction list. The user
+                 *  asked to see all variants individually inside the
+                 *  same card instead of one collapsed summary. */}
+                {!compact && variants.map((v, vIdx) => {
+                  const vIsAor = !!(v.aor && v.aor.enabled);
+                  const vWrites = v.writeBack !== false;
+                  const vSel = v.id === selectedId;
+                  const vMulti = selectedIds.has(v.id);
+                  const vFactions = (v.factions || []).filter(f => f && f !== "all");
+                  const tier = v.canonicalMicTier ?? v.minTier ?? "?";
+                  return (
+                    <div
+                      key={v.id}
+                      onClick={(ev) => { ev.stopPropagation(); onSelect(v.id, ev); }}
+                      title={vIsAor ? "AOR variant — recruits via hidden_resource regions" : "Factional variant — main MIC-chain recruitment"}
+                      style={{
+                        marginTop: vIdx === 0 ? 4 : 2,
+                        padding: "3px 6px",
+                        borderRadius: 4,
+                        background: vSel ? "rgba(220,166,74,0.20)" : vMulti ? "rgba(220,166,74,0.08)" : "rgba(255,255,255,0.025)",
+                        border: vSel ? "1px solid rgba(220,166,74,0.55)" : "1px solid rgba(255,255,255,0.05)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        flexWrap: "wrap",
+                        fontSize: 11,
+                        color: v.enabled === false ? "#777" : "#bbb",
+                      }}
+                    >
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: vSel ? "#dca64a" : "#555", flexShrink: 0 }} />
+                      <span style={{ color: "#888", fontFamily: "Consolas, monospace", fontSize: 10 }}>
+                        {v.grade || "?"} · t{tier}
+                      </span>
+                      {vIsAor ? (
+                        <span style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>AOR</span>
+                      ) : (
+                        <span style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>FACTIONAL</span>
+                      )}
+                      {vWrites ? (
+                        <span title="Will write back to EDB on next Write-to-EDB" style={{ background: "rgba(124,201,153,0.12)", color: "#7c9", border: "1px solid rgba(124,201,153,0.30)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
+                      ) : (
+                        <span title="Reference-only — Write-to-EDB skips this variant" style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
+                      )}
+                      {vFactions.length > 0 && (
+                        <span style={{ color: "#aaa", fontFamily: "Consolas, monospace", fontSize: 10 }}>
+                          {vFactions.slice(0, 3).join(", ")}
+                          {vFactions.length > 3 && ` +${vFactions.length - 3}`}
+                        </span>
+                      )}
+                      {(v.factions || []).slice(0, 4).map(fid => (
+                        fid === "all" ? null : (
+                          <FactionIcon
+                            key={fid}
+                            iconPath={`faction_icons/${fid}.tga`}
+                            alt={fid}
+                            size={14}
+                            modIconsDir={modIndex.factionIconsDir}
+                          />
+                        )
+                      ))}
+                    </div>
+                  );
+                })}
+                {compact && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#888", flexWrap: "wrap" }}>
+                    <span>
+                      {u.grade || "?"} · t{u.canonicalMicTier ?? u.minTier ?? "?"}
+                      {u.aor && u.aor.enabled ? " · +AOR" : ""}
                     </span>
-                  )}
-                  {aorCount > 0 && (
-                    <span title={`${aorCount} AOR variant${aorCount === 1 ? "" : "s"} — recruits via hidden_resource regions, not the main faction MIC pool`} style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
-                      AOR{aorCount > 1 ? ` ×${aorCount}` : ""}
-                    </span>
-                  )}
-                  {/* Faction list as text (first three) — much easier to
-                   *  tell which "Lyttian Archers" applies to which factions
-                   *  without parsing tiny icons. */}
-                  {(u.factions || []).filter(f => f && f !== "all").length > 0 && (
-                    <span style={{ color: "#aaa", fontFamily: "Consolas, monospace", fontSize: 10 }}>
-                      {(u.factions || []).filter(f => f && f !== "all").slice(0, 3).join(", ")}
-                      {(u.factions || []).filter(f => f && f !== "all").length > 3 && ` +${(u.factions || []).filter(f => f && f !== "all").length - 3}`}
-                    </span>
-                  )}
-                  {(u.factions || []).slice(0, 6).map(fid => (
-                    fid === "all" ? null : (
-                      <FactionIcon
-                        key={fid}
-                        iconPath={`faction_icons/${fid}.tga`}
-                        alt={fid}
-                        size={16}
-                        modIconsDir={modIndex.factionIconsDir}
-                      />
-                    )
-                  ))}
-                </div>
+                    {factionalCount > 0 && (
+                      <span style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
+                        FACTIONAL{factionalCount > 1 ? ` ×${factionalCount}` : ""}
+                      </span>
+                    )}
+                    {aorCount > 0 && (
+                      <span style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
+                        AOR{aorCount > 1 ? ` ×${aorCount}` : ""}
+                      </span>
+                    )}
+                    {refCount === 0 ? (
+                      <span style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
+                    ) : writeCount === 0 ? (
+                      <span style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
+                    ) : (
+                      <span style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>{writeCount}/{totalSame} WRITE</span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );
