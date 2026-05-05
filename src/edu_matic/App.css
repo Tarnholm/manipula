@@ -454,9 +454,9 @@ body {
  * on click. Solid background on the inputs so they don't blend with the row. */
 .dtable td.dtable-editable { cursor: text; }
 .dtable td.dtable-editable:hover {
-  outline: 1px solid rgba(220, 166, 74, 0.35);
+  outline: 1px solid rgba(220, 166, 74, 0.18);
   outline-offset: -1px;
-  background: rgba(220, 166, 74, 0.06);
+  background: rgba(220, 166, 74, 0.025);
 }
 .dtable-cell-input {
   width: 100%;

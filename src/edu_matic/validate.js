@@ -111,6 +111,29 @@ function validate(project) {
     checkUnitFactionOwnership(u, ctx, project, push);
   }
 
+  // unit id / dictionary_tag collision check — two units with the same
+  // unit id (or same dictionary_tag) are silently broken in-game; the
+  // game keeps only one and the rest stop loading. Flag every duplicate.
+  const idMap = new Map();   // unit id → [unit names]
+  const dictMap = new Map(); // dictionary_tag → [unit names]
+  for (const u of project.units) {
+    if (u.kind !== "unit") continue;
+    const id = String(u["unit id"] || "").trim();
+    const dict = String(u["dictionary_tag"] || "").trim();
+    if (id) (idMap.get(id) || idMap.set(id, []).get(id)).push(u.name || "(unnamed)");
+    if (dict) (dictMap.get(dict) || dictMap.set(dict, []).get(dict)).push(u.name || "(unnamed)");
+  }
+  for (const [id, names] of idMap) {
+    if (names.length > 1) {
+      for (const n of names) push({ unit: n, row: null, message: `Duplicate unit id "${id}" (also used by ${names.filter((x) => x !== n).join(", ")})`, category: "collision" });
+    }
+  }
+  for (const [d, names] of dictMap) {
+    if (names.length > 1) {
+      for (const n of names) push({ unit: n, row: null, message: `Duplicate dictionary_tag "${d}" (also used by ${names.filter((x) => x !== n).join(", ")})`, category: "collision" });
+    }
+  }
+
   return errors;
 }
 

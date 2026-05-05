@@ -38,6 +38,45 @@ const VIEWS = [
   { key: "export",   label: "Export",         hint: "Write .txt file"      },
 ];
 
+// Preview EDU column order — mirrors the EDUMatic spreadsheet's DATA
+// sheet layout. Compute may not produce every key here (sparse / conditional
+// fields) and may produce keys not in this list; both cases are handled in
+// PreviewScreen by intersecting with the actually-present keys.
+const PREVIEW_EDU_ORDER = [
+  "entryType", "Name / Comments", "type", "dictionary",
+  "category", "class", "voice_type", "voice_indexes",
+  "unit variation", "model", "No. of men", "No. of extras",
+  "mass", "radius", "height",
+  "model1", "model2", "model3", "model4", "model5", "model6", "model7",
+  "officer1", "officer2", "officer3", "officer4", "officer5",
+  "ship", "engine", "animal", "mount",
+  "vs_horse", "vs_elephant", "vs_chariot", "vs_camel",
+  "sea_faring", "can_swim", "hide_forest", "hide_l_grass", "can_sap",
+  "frighten_f", "frighten_m", "can_amok", "gen_unit",
+  "cant_circle/warcry/druid", "no_custom", "command", "merc_unit",
+  "hardy", "p_charge", "is_peas", "can_horde",
+  "h. cl. spacing", "v. cl. spacing", "h. l. spacing", "v. l. spacing", "ranks",
+  "formation1", "formation2",
+  "hp", "sec hp",
+  "attack", "charge", "msl type", "msl range", "msl ammo",
+  "wpn type", "wpn tech", "dmg type", "sound type",
+  "min delay", "lethality", "ap", "bp",
+  "spear-attr", "spear_bon", "pike", "prec", "thrown", "launch", "area",
+  "s attack", "s charge", "s msl type", "s msl range", "s msl ammo",
+  "s wpn type", "s wpn tech", "s dmg type", "s sound type",
+  "s min delay", "s lethality", "s ap", "s bp",
+  "s spear-att", "s spear_b", "s pike", "s prec", "s thrown", "s launch", "s area",
+  "armour", "defence", "shield", "hit sound",
+  "sec armour", "sec defence", "sec hit sound",
+  "heat", "scrub", "sand", "forest", "snow",
+  "morale", "discipline", "training", "charge dist", "fire delay",
+  "food1", "food2", "turns", "price", "upkeep", "wpn upg", "arm upg",
+  "recruit_priority_offset",
+  "ownership", "ownershipStrings",
+  "ethnicity",
+  "tattoo colour", "hair colour", "hair style",
+];
+
 // Embedded mode: when running inside the recruitment-tool, the parent owns the project
 // state, the import action, and which sub-view is shown. We become a thin renderer.
 //   - externalProject: parent-owned project (when set, overrides internal state)
@@ -843,7 +882,13 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   const addUnitFromTemplate = useCallback((tplKey) => {
     const tpl = UNIT_TEMPLATES.find(t => t.key === tplKey);
     if (!tpl) return null;
-    const seed = { kind: "unit", row: 0, name: `New ${tpl.label}`, ...tpl.seed };
+    // Slugify the template label for an immediate dictionary_tag /
+    // unit id default so the new row doesn't validate-fail with
+    // "Duplicate (empty)" right away. User can rewrite to taste.
+    const slug = String(`new ${tpl.label}`).toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    const seed = { kind: "unit", row: 0, name: `New ${tpl.label}`, "dictionary_tag": slug, "unit id": slug.replace(/_/g, " "), ...tpl.seed };
     setProject({ ...project, units: [seed, ...project.units] });
     return seed.name;
   }, [project, setProject]);
@@ -877,6 +922,32 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     const blank = { kind: "unit", row: 0, name: "" };
     const nextUnits = project.units.slice();
     nextUnits.splice(unitIdx, 0, blank);
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  const insertSectionHeader = useCallback((unitIdx, position /* "above" | "below" */) => {
+    const text = (window.prompt("Section header text:", "NEW SECTION") || "").trim();
+    if (!text) return;
+    const marker = { kind: "comment", text };
+    const nextUnits = project.units.slice();
+    if (typeof unitIdx === "number" && unitIdx >= 0) {
+      const at = position === "below" ? unitIdx + 1 : unitIdx;
+      nextUnits.splice(at, 0, marker);
+    } else {
+      nextUnits.unshift(marker);
+    }
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  // Replace a unit's record from a clipboard-pasted JSON. Preserves
+  // kind / row to avoid corrupting the project shape; everything else
+  // structural-replaces.
+  const onPasteUnit = useCallback((unitIdx, parsed) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    if (!parsed || typeof parsed !== "object") return;
+    const cur = project.units[unitIdx];
+    if (!cur) return;
+    const next = { ...parsed, kind: cur.kind || "unit", row: cur.row != null ? cur.row : 0 };
+    const nextUnits = project.units.slice();
+    nextUnits[unitIdx] = next;
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
   // Move a row up or down within project.units. Skips section/comment
@@ -1262,10 +1333,13 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         addRowLabel="+ New unit"
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
+        onPasteRow={onPasteUnit}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveUnit(idx, "up") },
           { label: "↓ Move row down", onClick: (idx) => moveUnit(idx, "down") },
           { label: "Insert blank above", onClick: (idx) => insertBlankUnitAbove(idx) },
+          { label: "Insert section header above…", onClick: (idx) => insertSectionHeader(idx, "above") },
+          { label: "Insert section header below…", onClick: (idx) => insertSectionHeader(idx, "below") },
           ...(modDataDir ? [{
             label: "Stub in export_units.txt",
             onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
@@ -1671,6 +1745,31 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     const next = rows.slice(); next.splice(idx, 0, blank);
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
+  const insertArmourSectionHeader = useCallback((idx, position) => {
+    const text = (window.prompt("Section header text:", "NEW SECTION") || "").trim();
+    if (!text) return;
+    // Section rows in the armour table are encoded as a row whose
+    // "Model Set Name" starts with "#". Mirrors the xlsm convention.
+    const marker = { row: 0, "Model Set Name": "#" + text };
+    const next = rows.slice();
+    if (typeof idx === "number" && idx >= 0) {
+      const at = position === "below" ? idx + 1 : idx;
+      next.splice(at, 0, marker);
+    } else {
+      next.unshift(marker);
+    }
+    setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+  const onPasteArmour = useCallback((idx, parsed) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    if (!parsed || typeof parsed !== "object") return;
+    const cur = rows[idx];
+    if (!cur) return;
+    const next = { ...parsed, row: cur.row != null ? cur.row : 0 };
+    const nextRows = rows.slice();
+    nextRows[idx] = next;
+    setProject({ ...project, armour: nextRows });
+  }, [rows, project, setProject]);
   const moveArmour = useCallback((idx, dir) => {
     if (typeof idx !== "number" || idx < 0) return;
     const target = dir === "up" ? idx - 1 : idx + 1;
@@ -1781,10 +1880,13 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         searchPersistKey="edu-armour"
         rowFlags={rowFlags}
         rowToJSON={(idx) => rows[idx] || null}
+        onPasteRow={onPasteArmour}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveArmour(idx, "up") },
           { label: "↓ Move row down", onClick: (idx) => moveArmour(idx, "down") },
           { label: "Insert blank above", onClick: (idx) => insertBlankArmourAbove(idx) },
+          { label: "Insert section header above…", onClick: (idx) => insertArmourSectionHeader(idx, "above") },
+          { label: "Insert section header below…", onClick: (idx) => insertArmourSectionHeader(idx, "below") },
         ]}
         bulkActions={[
           { label: "Set field on selected…", setField: { onApply: bulkSetArmour } },
@@ -2114,6 +2216,20 @@ function MercScreen({ project: rawProject, setProject, modDataDir }) {
         <button className="btn" onClick={runMercCrossCheck} disabled={!modDataDir} title={modDataDir ? "Compare project's pools / regions / unit cost against the on-disk descr_mercenaries.txt" : "Set the mod data folder first"}>
           Cross-check descr_mercenaries.txt
         </button>
+        <button
+          className="btn"
+          disabled={!modDataDir || !window.eduAPI?.writeDescrMercenaries}
+          title={modDataDir ? "Write the project's pools/regions/units to descr_mercenaries.txt (backs up the existing file to .bak)" : "Set the mod data folder first"}
+          onClick={async () => {
+            if (!window.confirm("Overwrite descr_mercenaries.txt with the project's merc data? A .bak backup is created the first time you do this in this session.")) return;
+            try {
+              const text = formatMerc(project);
+              const r = await window.eduAPI.writeDescrMercenaries(modDataDir, text);
+              if (r?.ok) (window.toast || alert)(`✓ Wrote ${r.path}`, "ok");
+              else (window.toast || alert)("Write failed: " + (r?.reason || "?"), "error");
+            } catch (e) { (window.toast || alert)("Write failed: " + e.message, "error"); }
+          }}
+        >Write to descr_mercenaries.txt…</button>
         {mercDiff && mercDiff.error && <span style={{ color: "#d66c6c", fontSize: 11 }}>{mercDiff.error}</span>}
         {mercDiff && mercDiff.ok && (
           <span style={{ fontSize: 11, color: (mercDiff.pools.length + mercDiff.regions.length + mercDiff.units.length) === 0 ? "#7c9" : "#dca64a" }}>
@@ -2308,9 +2424,18 @@ function PreviewScreen({ project }) {
   }, [project]);
   if (!project) return <EmptyScreen />;
   const dataRows = rows?.filter((r) => r.kind === "data") || [];
-  const cols = dataRows[0]
-    ? Object.keys(dataRows[0]).filter((k) => k !== "kind" && k !== "row" && k !== "name" && k !== "ownership")
-    : [];
+  // Preview column ordering follows the EDUMatic DATA sheet layout so
+  // the preview reads like the spreadsheet the modteam already knows.
+  // Anything we compute that isn't in the canonical list falls through
+  // to the end so we never silently hide a column.
+  const cols = (() => {
+    if (!dataRows[0]) return [];
+    const present = new Set(Object.keys(dataRows[0]).filter((k) => k !== "kind" && k !== "row" && k !== "name" && k !== "ownership"));
+    const ordered = [];
+    for (const k of PREVIEW_EDU_ORDER) if (present.has(k)) { ordered.push(k); present.delete(k); }
+    for (const k of present) ordered.push(k);
+    return ordered;
+  })();
   return (
     <div className="screen">
       <h2>Preview EDU <span className="dim">(auto · {dataRows.length} unit rows · {eduText ? Math.round(eduText.length / 1024) + "kb" : ""} text)</span></h2>

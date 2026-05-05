@@ -83,6 +83,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   appendExportUnitsStub: (modDataDir, unitKey, displayName) => ipcRenderer.invoke("append-export-units-stub", modDataDir, unitKey, displayName),
   syncExportUnitsOrder: (modDataDir, orderedKeys) => ipcRenderer.invoke("sync-export-units-order", modDataDir, orderedKeys),
   readDescrMercenaries: (modDataDir) => ipcRenderer.invoke("read-descr-mercenaries", modDataDir),
+  writeDescrMercenaries: (modDataDir, content) => ipcRenderer.invoke("write-descr-mercenaries", modDataDir, content),
   openPath: (p) => ipcRenderer.invoke("open-path", p),
   gitCommitAll: (dir, message) => ipcRenderer.invoke("git-commit-all", dir, message),
   logMessage: (level, text) => ipcRenderer.invoke("edm-log-message", level, text),

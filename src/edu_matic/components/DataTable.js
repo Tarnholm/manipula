@@ -72,6 +72,10 @@ export default function DataTable({
   // that reads the actual source record for that rowId and writes its
   // pretty-printed JSON to the system clipboard.
   rowToJSON = null,          // (rowId) => any | null
+  // Counterpart to rowToJSON: pastes the clipboard's JSON into the
+  // right-clicked row's record. The handler decides which fields to
+  // copy in (typically a structural merge) and calls setProject.
+  onPasteRow = null,         // (rowId, parsedJSON) => void
   // Per-row flag indicators for inline validation. Map keyed by ROWID
   // (not row index): { [rowId]: { error?: string, warn?: string } }.
   // First column gets a small dot showing the highest severity; the
@@ -194,6 +198,14 @@ export default function DataTable({
     () => visibleColIndices.map((i) => columns[i]),
     [columns, visibleColIndices]
   );
+  // Update the navigation snapshot for moveCell. Uses filteredEntries
+  // so search filtering also limits Tab navigation to visible rows.
+  useEffect(() => {
+    navRef.current.colKeys = visibleColumns;
+    navRef.current.dataRowIdxs = filteredEntries
+      .filter((e) => Array.isArray(e.row))
+      .map((e) => e.origIdx);
+  }, [visibleColumns, filteredEntries]);
   const toggleCol = (key) => {
     setHiddenCols((prev) => {
       const next = new Set(prev);
@@ -227,6 +239,26 @@ export default function DataTable({
   }, []);
 
   const scrollRef = useRef(null);
+  // Auto-enter target. Set by Tab/Shift-Tab/Enter from the active editor;
+  // the matching Cell sees it on its next render and re-enters edit mode
+  // automatically. Resolved through navRef so the callback always reads
+  // the freshest visible-cell layout (refs survive memoization).
+  const [autoEditTarget, setAutoEditTarget] = useState(null);
+  const navRef = useRef({ dataRowIdxs: [], colKeys: [] });
+  const moveCell = useCallback((fromRowIdx, fromCol, dir) => {
+    const { dataRowIdxs, colKeys } = navRef.current;
+    const r = dataRowIdxs.indexOf(fromRowIdx);
+    const c = colKeys.indexOf(fromCol);
+    if (r < 0 || c < 0) return;
+    let nr = r, nc = c;
+    if (dir === "right") nc = Math.min(colKeys.length - 1, c + 1);
+    else if (dir === "left") nc = Math.max(0, c - 1);
+    else if (dir === "down") nr = Math.min(dataRowIdxs.length - 1, r + 1);
+    else if (dir === "up") nr = Math.max(0, r - 1);
+    if (nr === r && nc === c) return;
+    setAutoEditTarget({ rowOrigIdx: dataRowIdxs[nr], columnKey: colKeys[nc] });
+  }, []);
+  const consumeAutoEdit = useCallback(() => setAutoEditTarget(null), []);
 
   // Multi-select state. Keys are rowIds (caller-domain), so selection
   // survives table re-renders / search filtering. Click a row to select
@@ -295,6 +327,26 @@ export default function DataTable({
   const onKeyDown = (e) => {
     const sc = scrollRef.current;
     if (!sc) return;
+    // Ctrl+D = duplicate selected rows. Only fires when no editor cell
+    // currently has focus (the document.activeElement is the scroll
+    // container itself or another scroll-bound element).
+    if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
+      if (isText) return;
+      if (selectedIds.size && bulkActions) {
+        const dup = bulkActions.find((b) => /duplicate/i.test(b.label || ""));
+        if (dup && dup.onClick) {
+          e.preventDefault();
+          dup.onClick([...selectedIds]);
+          return;
+        }
+      }
+    }
+    // Don't hijack the arrows while editing a cell.
+    const ae = document.activeElement;
+    if (ae && ae !== sc && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT")) return;
     if (e.key === "ArrowLeft")  { sc.scrollLeft -= 80; e.preventDefault(); }
     else if (e.key === "ArrowRight") { sc.scrollLeft += 80; e.preventDefault(); }
     else if (e.key === "Home")       { sc.scrollLeft = 0; e.preventDefault(); }
@@ -580,6 +632,7 @@ export default function DataTable({
                   >
                     {visibleColIndices.map((origColIdx, j) => {
                       const c = columns[origColIdx];
+                      const autoEnter = !!(autoEditTarget && autoEditTarget.rowOrigIdx === origIdx && autoEditTarget.columnKey === c);
                       return (
                         <Cell
                           key={c}
@@ -590,6 +643,9 @@ export default function DataTable({
                           editable={editable}
                           onCommit={commitCell}
                           flag={j === 0 ? flag : null}
+                          autoEnter={autoEnter}
+                          onAutoEnterConsumed={consumeAutoEdit}
+                          onMove={moveCell}
                         />
                       );
                     })}
@@ -700,8 +756,34 @@ export default function DataTable({
                 if (obj == null) return;
                 try { await navigator.clipboard.writeText(JSON.stringify(obj, null, 2)); } catch {}
                 setCtxMenu(null);
+                if (typeof window !== "undefined" && window.toast) window.toast("Row JSON copied to clipboard", "ok", 2000);
               }}
             >Copy row as JSON</div>
+          )}
+          {onPasteRow && (
+            <div
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#ddd" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={async () => {
+                const rowId = rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx;
+                setCtxMenu(null);
+                let txt = "";
+                try { txt = await navigator.clipboard.readText(); } catch {}
+                if (!txt || !txt.trim()) {
+                  if (window.toast) window.toast("Clipboard is empty.", "warn", 2500);
+                  return;
+                }
+                let parsed;
+                try { parsed = JSON.parse(txt); }
+                catch (e) {
+                  if (window.toast) window.toast("Clipboard isn't valid JSON: " + e.message, "error");
+                  return;
+                }
+                onPasteRow(rowId, parsed);
+                if (window.toast) window.toast("Row updated from clipboard JSON.", "ok", 2500);
+              }}
+            >Paste row from JSON</div>
           )}
           {rowMenuExtras && rowMenuExtras.map((item, i) => (
             <div
@@ -839,7 +921,7 @@ function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirs
 // Cell — owns its own editing state. Memoized so only the clicked cell (or a
 // cell whose underlying value just changed) re-renders. Without this, a click
 // on one cell would re-render the whole 25k-cell table.
-const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag }) {
+const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   // Ref alongside state so commit() reads the latest typed/picked value even
@@ -862,6 +944,19 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     touchedRef.current = false;
     setEditing(true);
   };
+  // Auto-enter edit mode when the parent flagged this cell as the
+  // navigation target (Tab/Shift-Tab/Enter from a sibling cell).
+  useEffect(() => {
+    if (autoEnter && editable && !editing) {
+      const isCombo = meta && meta.type === "select";
+      const initial = isCombo ? "" : text;
+      setDraft(initial);
+      draftRef.current = initial;
+      touchedRef.current = false;
+      setEditing(true);
+      onAutoEnterConsumed && onAutoEnterConsumed();
+    }
+  }, [autoEnter]);   // intentionally narrow deps — only fire on the pulse
   const commit = () => {
     if (!editing) return;
     setEditing(false);
@@ -956,6 +1051,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
             onChange={onDraftChange}
             onCommit={commit}
             onCancel={cancel}
+            onMove={(dir) => onMove && onMove(rowOrigIdx, columnKey, dir)}
           />
         </span>
       )}
@@ -964,17 +1060,21 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
 }, (prev, next) => {
   // Re-render only when something visible changes. editable/meta refs are
   // stable across DataTable renders, so this collapses click-elsewhere into a
-  // no-op for unaffected cells.
+  // no-op for unaffected cells. autoEnter must be in the equality check
+  // so the navigation pulse actually wakes the target cell up.
   return prev.value === next.value
       && prev.columnKey === next.columnKey
       && prev.rowOrigIdx === next.rowOrigIdx
       && prev.meta === next.meta
       && prev.editable === next.editable
       && prev.onCommit === next.onCommit
-      && prev.flag === next.flag;
+      && prev.flag === next.flag
+      && prev.autoEnter === next.autoEnter
+      && prev.onAutoEnterConsumed === next.onAutoEnterConsumed
+      && prev.onMove === next.onMove;
 });
 
-function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel }) {
+function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel, onMove }) {
   const ref = useRef(null);
   // Auto-focus + select-all so the user can immediately type to filter or
   // overwrite.
@@ -984,8 +1084,20 @@ function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCance
     if (ref.current.select) { try { ref.current.select(); } catch {} }
   }, []);
   const onKeyDown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); onCommit(); }
-    else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onCommit();
+      onMove && onMove("down");
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    } else if (e.key === "Tab") {
+      // Commit + move horizontally. preventDefault so focus doesn't
+      // jump to the next browser-tab-stop instead of our cell.
+      e.preventDefault();
+      onCommit();
+      onMove && onMove(e.shiftKey ? "left" : "right");
+    }
   };
   if (meta && meta.type === "select") {
     return (
@@ -996,6 +1108,7 @@ function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCance
         onChange={onChange}
         onCommit={onCommit}
         onCancel={onCancel}
+        onMove={onMove}
       />
     );
   }
@@ -1018,7 +1131,7 @@ function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCance
 // reach later options). The popover renders via createPortal into document.body
 // with position:fixed coords, so it can spill outside the table's scroll
 // container without being clipped.
-function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCancel }) {
+function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCancel, onMove }) {
   const inputRef = useRef(null);
   const popRef = useRef(null);
   const [pos, setPos] = useState(null);   // {left, top, width}
@@ -1081,13 +1194,14 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
       e.preventDefault();
       if (filtered[highlightIdx] != null) commitWith(filtered[highlightIdx]);
       else onCommit();
+      onMove && onMove("down");
     } else if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
     } else if (e.key === "Tab") {
-      // Don't preventDefault so focus moves naturally; commit the current
-      // typed value.
+      e.preventDefault();
       onCommit();
+      onMove && onMove(e.shiftKey ? "left" : "right");
     }
   };
 

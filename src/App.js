@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef, Component } from "react";
 import { createPortal } from "react-dom";
+import ShortcutOverlay from "./components/ShortcutOverlay";
 
 // Global error trap. The AppErrorBoundary only catches errors thrown
 // during render; this picks up everything else (uncaught exceptions
@@ -864,6 +865,12 @@ export default function App() {
     setToasts(t => [...t, { id, text, kind }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms);
   }, []);
+  // Expose to window so callbacks deep in the tree (and the merc /
+  // export-units IPC handlers) can surface failure as a sticky toast
+  // without prop-drilling.
+  useEffect(() => {
+    if (typeof window !== "undefined") window.toast = toast;
+  }, [toast]);
 
   // Shared "open this directory as a project" path — used by the Open
   // Project picker AND by the Clone-from-GitHub flow once the clone
@@ -970,9 +977,12 @@ export default function App() {
         aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" ||
         (ae && ae.isContentEditable);
       const k = e.key.toLowerCase();
-      if (k === "s" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='write-edb']")?.click(); }
+      // Ctrl+S / Ctrl+F always fire, even when typing — that's the
+      // standard browser convention. Ctrl+E and Ctrl+D respect the
+      // text-input gate so they don't interrupt an edit.
+      if (k === "s") { e.preventDefault(); document.querySelector("[data-rtshortcut='save-project']")?.click() || document.querySelector("[data-rtshortcut='write-edb']")?.click(); }
+      else if (k === "f") { e.preventDefault(); document.querySelector("[data-rtshortcut='quick-search']")?.focus(); }
       else if (k === "e" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='export-bundle']")?.click(); }
-      else if (k === "f" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='quick-search']")?.focus(); }
       else if (k === "1") { e.preventDefault(); setActiveTab("editor"); }
       else if (k === "2") { e.preventDefault(); setActiveTab("validation"); }
       else if (k === "3") { e.preventDefault(); setActiveTab("exportAll"); }
@@ -980,6 +990,42 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  // ? opens the keyboard cheatsheet. Skipped when typing so it doesn't
+  // intercept literal "?" in unit notes / search input.
+  const [shortcutOpen, setShortcutOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
+      if (e.key === "?" && !isText) { e.preventDefault(); setShortcutOpen((o) => !o); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Project-dirty tracking for the topbar pill + the beforeunload guard.
+  // Bumped on every mutating operation; cleared by Save project / Open
+  // project. See projectDirtyRef for the live value the unload listener
+  // reads (state would lag behind by one render).
+  const [projectDirty, setProjectDirty] = useState(false);
+  const projectDirtyRef = useRef(false);
+  useEffect(() => { projectDirtyRef.current = projectDirty; }, [projectDirty]);
+  useEffect(() => { setProjectDirty(true); }, [units]);
+  useEffect(() => { if (eduDirty) setProjectDirty(true); }, [eduDirty]);
+
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (!projectDirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = "You have unsaved changes — close anyway?";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, []);
 
   const applyFindReplace = useCallback(({ find, replace }) => {
@@ -1196,6 +1242,7 @@ export default function App() {
   return (
     <AppErrorBoundary>
     <LightboxProvider>
+    <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
     {/* Toast queue — fixed top-right, stacks bottom-down. */}
     {toasts.length > 0 && (
       <div style={{ position: "fixed", top: 16, right: 16, zIndex: 7000, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
@@ -1294,6 +1341,8 @@ export default function App() {
         setEduView={setEduView}
         setActiveTab={setActiveTab}
         projectDir={projectDir}
+        projectDirty={projectDirty}
+        onShowShortcuts={() => setShortcutOpen(true)}
         unitsCount={units.length}
         units={units}
         theme={theme}
@@ -1345,6 +1394,7 @@ export default function App() {
             const { saveProject } = await import("./projectStore");
             await saveProject(dir, { eduProject, units, exports: projectExports });
             setEduDirty(false);
+            setProjectDirty(false);
             // Bump so the SyncButton refreshes its dot the moment the
             // user hits save, instead of waiting up to 5s for the poll.
             setProjectSaveTick(t => t + 1);
@@ -1612,7 +1662,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1644,7 +1694,9 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onReload} disabled={loading} style={tbtn("#446")}>{loading ? "Loading…" : "Reload"}</button>
       <button onClick={onImport} style={tbtn("#665")}>Import from EDB</button>
       <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
-      <button onClick={onSaveProject} style={tbtn("#465")} title="Save project — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)">Save project</button>
+      <button data-rtshortcut="save-project" onClick={onSaveProject} style={tbtn(projectDirty ? "#dca64a" : "#465")} title={`Save project (Ctrl+S) — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)${projectDirty ? "\n— You have unsaved changes —" : ""}`}>
+        {projectDirty ? "● Save project" : "Save project"}
+      </button>
       <button onClick={onOpenProject} style={tbtn("#465")} title="Open a Manipula project folder">Open project</button>
       {onCloneProject && (
         <button onClick={onCloneProject} style={tbtn("#465")} title="Clone a Manipula project from a GitHub URL into a local folder">Clone from GitHub…</button>
@@ -1682,6 +1734,7 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onSaveText} style={tbtn("#446")}>Save preview…</button>
       <button data-rtshortcut="write-edb" onClick={onWriteBack} title="Write to EDB (Ctrl+S)" style={{ ...tbtn(ACCENT), color: "#1a1a1a", fontWeight: 700 }}>Write to EDB</button>
       <button data-rtshortcut="export-bundle" onClick={onExportBundle} title="Export both EDB and EDU together (Ctrl+E)" style={{ ...tbtn("#5a4a36"), color: "#dca64a", fontWeight: 700, border: "1px solid rgba(220,166,74,0.4)" }}>Export all</button>
+      <button onClick={onShowShortcuts} title="Keyboard shortcuts (?)" style={{ ...tbtn("rgba(255,255,255,0.05)"), color: "#bbb", padding: "4px 9px", fontSize: 12, fontWeight: 700 }}>?</button>
       <button onClick={onThemeToggle} title={`Theme: ${theme} — click to switch`} style={{ ...tbtn("rgba(255,255,255,0.05)"), color: "#bbb", padding: "4px 7px", fontSize: 12 }}>{theme === "sepia" ? "🌒" : "🜂"}</button>
       <span style={{ color: "#bbb", fontSize: 11, marginLeft: 8, flexBasis: "100%" }}>{status}</span>
     </div>
@@ -1919,16 +1972,16 @@ function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
 // Disabled until a project is loaded (matches EDU-matic's own sidebar logic).
 function EduSubTabs({ view, onView, project }) {
   const VIEWS = [
-    { key: "project",  label: "Project" },
-    { key: "modinfo",  label: "Mod Info" },
-    { key: "coredata", label: "Core Data" },
-    { key: "units",    label: "Units" },
-    { key: "bulk",     label: "Bulk Edit" },
-    { key: "armour",   label: "Armour" },
-    { key: "merc",     label: "Mercenaries" },
-    { key: "validate", label: "Validate" },
-    { key: "preview",  label: "Preview EDU" },
-    { key: "export",   label: "Export EDU" },
+    { key: "project",  label: "Project",     hint: "Import / re-import xlsm and see project totals." },
+    { key: "modinfo",  label: "Mod Info",    hint: "Mod name, platform, era, Discord webhook URL." },
+    { key: "coredata", label: "Core Data",   hint: "Lookup tables (categories, qualities, weapons, armour materials…). Password-locked." },
+    { key: "units",    label: "Units",       hint: "Edit every EDU unit: stats, ownership, recruitment. Drag rows to reorder." },
+    { key: "bulk",     label: "Bulk Edit",   hint: "Apply a column change across many units at once." },
+    { key: "armour",   label: "Armour",      hint: "Per-model armour set: # Instances, Type, Material per body slot. Drives EDU armour value." },
+    { key: "merc",     label: "Mercenaries", hint: "Pools, regions, per-unit cost / max / replenish. Cross-check vs descr_mercenaries." },
+    { key: "validate", label: "Validate",    hint: "Errors and warnings across the project." },
+    { key: "preview",  label: "Preview EDU", hint: "Computed DATA + formatted EDU text — read-only preview of the export." },
+    { key: "export",   label: "Export EDU",  hint: "Write export_descr_unit.txt; sync export_units.txt order." },
   ];
   return (
     <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(20,22,23,0.4)", padding: "0 8px", flexWrap: "wrap" }}>
@@ -1939,6 +1992,7 @@ function EduSubTabs({ view, onView, project }) {
           <div
             key={v.key}
             onClick={() => !disabled && onView(v.key)}
+            title={v.hint}
             style={{
               padding: "6px 14px",
               borderBottom: active ? "2px solid #dca64a" : "2px solid transparent",

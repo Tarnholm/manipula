@@ -1543,6 +1543,34 @@ ipcMain.handle("sync-export-units-order", async (_e, modDataDir, orderedKeys) =>
   } catch (e) { return { ok: false, reason: e.message }; }
 });
 
+// Write-back companion to read-descr-mercenaries: takes the project's
+// formatted merc text and overwrites descr_mercenaries.txt. Backs up
+// to .bak on first call per session. Encoding follows the existing
+// file's BOM (UTF-16 LE if BOM present, otherwise UTF-8).
+ipcMain.handle("write-descr-mercenaries", async (_e, modDataDir, content) => {
+  if (!modDataDir || typeof content !== "string") return { ok: false, reason: "missing args" };
+  const candidates = [
+    path.join(modDataDir, "descr_mercenaries.txt"),
+    path.join(modDataDir, "data", "descr_mercenaries.txt"),
+  ];
+  let target = candidates.find(p => fs.existsSync(p));
+  if (!target) target = candidates[0];   // create at top-level if neither exists
+  try {
+    let originalRaw = null;
+    if (fs.existsSync(target)) originalRaw = fs.readFileSync(target);
+    const isUTF16 = originalRaw && originalRaw.length >= 2 && originalRaw[0] === 0xFF && originalRaw[1] === 0xFE;
+    const bak = target + ".bak";
+    if (originalRaw && !fs.existsSync(bak)) fs.writeFileSync(bak, originalRaw, { encoding: "binary" });
+    if (isUTF16) {
+      const bomChar = "﻿";
+      fs.writeFileSync(target, bomChar + content, { encoding: "utf16le" });
+    } else {
+      fs.writeFileSync(target, content, "utf8");
+    }
+    return { ok: true, path: target };
+  } catch (e) { return { ok: false, reason: e.message }; }
+});
+
 ipcMain.handle("git-commit-all", async (_e, dir, message) => {
   const add = await runGit(dir, ["add", "."]);
   if (!add.ok) return add;
