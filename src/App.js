@@ -1651,6 +1651,12 @@ function SyncButton({ projectDir, saveTick = 0 }) {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState("");
+  // Inline commit-message prompt — Electron 6+ disables window.prompt() and
+  // it returns "" without showing UI, so the previous version of "Commit +
+  // Push" appeared to do nothing on click. State machine:
+  //   commitPrompt = null      → no prompt active
+  //                  string    → prompt is showing with that as the draft
+  const [commitPrompt, setCommitPrompt] = useState(null);
   // Anchor coordinates for the portal-rendered popover. The popover
   // can't live inside the topbar's DOM tree because the tabs row below
   // has its own stacking context (backdrop-filter / sticky) that clips
@@ -1823,20 +1829,55 @@ function SyncButton({ projectDir, saveTick = 0 }) {
                 </button>
                 <button
                   disabled={busy || !dirty}
-                  onClick={async () => {
-                    const msg = window.prompt("Commit message:", "Manipula update");
-                    if (!msg) return;
-                    await run("Commit + push", async () => {
-                      const c = await api.gitCommitAll(projectDir, msg);
-                      if (!c.ok) return c;
-                      return await api.gitPush(projectDir);
-                    });
-                  }}
+                  onClick={() => setCommitPrompt("Manipula update")}
                   style={syncBtn("#7c9", dirty)}
                   title="git add . && git commit -m && git push"
                 >
                   Commit + Push {dirty ? `(${status.dirtyCount})` : ""}
                 </button>
+                {commitPrompt !== null && (
+                  <div style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ color: "#dca64a", fontSize: 11 }}>Commit message</div>
+                    <input
+                      autoFocus
+                      type="text"
+                      value={commitPrompt}
+                      onChange={(e) => setCommitPrompt(e.target.value)}
+                      onKeyDown={async (e) => {
+                        if (e.key === "Escape") { setCommitPrompt(null); }
+                        else if (e.key === "Enter" && commitPrompt.trim()) {
+                          const msg = commitPrompt;
+                          setCommitPrompt(null);
+                          await run("Commit + push", async () => {
+                            const c = await api.gitCommitAll(projectDir, msg);
+                            if (!c.ok) return c;
+                            return await api.gitPush(projectDir);
+                          });
+                        }
+                      }}
+                      style={{ background: "#1c1c1c", color: "#fff", border: "1px solid #3a3a3a", borderRadius: 4, padding: "5px 8px", fontFamily: "Consolas, monospace", fontSize: 12, outline: "none" }}
+                    />
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button
+                        onClick={() => setCommitPrompt(null)}
+                        style={{ background: "#2a2a2a", color: "#999", border: "1px solid #333", padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer" }}
+                      >Cancel</button>
+                      <button
+                        disabled={!commitPrompt.trim()}
+                        onClick={async () => {
+                          const msg = commitPrompt;
+                          setCommitPrompt(null);
+                          await run("Commit + push", async () => {
+                            const c = await api.gitCommitAll(projectDir, msg);
+                            if (!c.ok) return c;
+                            return await api.gitPush(projectDir);
+                          });
+                        }}
+                        style={{ background: "#7c9", color: "#fff", border: "none", padding: "4px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                      >Commit + Push</button>
+                    </div>
+                  </div>
+                )}
                 <button
                   disabled={busy || (ahead || 0) === 0}
                   onClick={() => run("Push", () => api.gitPush(projectDir))}
