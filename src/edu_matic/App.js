@@ -1365,12 +1365,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         onReplaceAll={onReplaceAll}
         columnsToggleable
         rowFlags={rowFlags}
-        onAddRow={addBlankUnit}
         onDuplicateRow={duplicateUnit}
-        onInsertRowBelow={insertBlankUnitBelow}
         onDeleteRow={deleteUnit}
         onMoveRows={onMoveRowsUnits}
-        addRowLabel="+ New unit"
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
         onPasteRow={onPasteUnit}
@@ -1379,6 +1376,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
           { label: "↑ Move row up", onClick: (idx) => moveUnit(idx, "up") },
           { label: "↓ Move row down", onClick: (idx) => moveUnit(idx, "down") },
           { label: "Insert blank above", onClick: (idx) => insertBlankUnitAbove(idx) },
+          { label: "Insert blank below", onClick: (idx) => insertBlankUnitBelow(idx) },
           { label: "Insert section header above…", onClick: (idx) => insertSectionHeader(idx, "above") },
           { label: "Insert section header below…", onClick: (idx) => insertSectionHeader(idx, "below") },
           ...(modDataDir ? [{
@@ -1971,12 +1969,9 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         pinFirstColumn
         searchable
         columnsToggleable
-        onAddRow={addBlankArmour}
         onDuplicateRow={duplicateArmour}
-        onInsertRowBelow={insertBlankArmourBelow}
         onDeleteRow={deleteArmour}
         onMoveRows={onMoveRowsArmour}
-        addRowLabel="+ New armour set"
         searchPersistKey="edu-armour"
         rowFlags={rowFlags}
         rowToJSON={(idx) => rows[idx] || null}
@@ -1985,6 +1980,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
           { label: "↑ Move row up", onClick: (idx) => moveArmour(idx, "up") },
           { label: "↓ Move row down", onClick: (idx) => moveArmour(idx, "down") },
           { label: "Insert blank above", onClick: (idx) => insertBlankArmourAbove(idx) },
+          { label: "Insert blank below", onClick: (idx) => insertBlankArmourBelow(idx) },
           { label: "Insert section header above…", onClick: (idx) => insertArmourSectionHeader(idx, "above") },
           { label: "Insert section header below…", onClick: (idx) => insertArmourSectionHeader(idx, "below") },
         ]}

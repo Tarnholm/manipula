@@ -132,10 +132,16 @@ export default function DataTable({
     if (!needle) return all;
     const kept = [];
     for (const e of all) {
-      if (isNonData(e.row)) {
-        // Replace any trailing run of non-data rows (sections / separators) with
-        // the latest one, so we never get two stacked decorations and we drop
-        // them entirely if no following data row matches.
+      // Drop separator rows entirely while searching — they were meant
+      // to mark group transitions in the FULL list, but after filtering
+      // they often sit between matching same-name variants and read as
+      // false group boundaries. Section headers stay so the user keeps
+      // their bearings.
+      if (isSeparator(e.row)) continue;
+      if (isSection(e.row)) {
+        // Replace any trailing run of section rows with the latest, so
+        // we never get two stacked headers when intermediate sections
+        // had no matching rows.
         if (kept.length && isNonData(kept[kept.length - 1].row)) kept[kept.length - 1] = e;
         else kept.push(e);
         continue;
