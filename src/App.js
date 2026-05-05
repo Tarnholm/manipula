@@ -1165,7 +1165,9 @@ export default function App() {
         eduProject={eduProject}
         eduProjectSource={eduProjectSource}
         eduDirty={eduDirty}
-        eduValidationErrorCount={eduValidationErrorCount}
+        eduValidationErrors={eduValidationErrors}
+        setEduView={setEduView}
+        setActiveTab={setActiveTab}
         projectDir={projectDir}
         unitsCount={units.length}
         units={units}
@@ -1492,7 +1494,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrorCount = 0, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, projectDir, projectSaveTick, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
