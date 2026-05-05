@@ -147,6 +147,7 @@ export default function DataTable({
   commitRef.current.rowIds = rowIds;
   const commitCell = useCallback((rowOrigIdx, columnKey, newValue) => {
     const { onEdit: f, rowIds: ids } = commitRef.current;
+    console.log("[dtable] commitCell", { rowOrigIdx, columnKey, newValue, hasOnEdit: !!f, hasRowIds: !!ids, rowId: ids ? ids[rowOrigIdx] : rowOrigIdx });
     if (!f) return;
     const rowId = ids ? ids[rowOrigIdx] : rowOrigIdx;
     f(rowId, columnKey, newValue);
@@ -399,6 +400,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     setEditing(false);
     if (!touchedRef.current) return;
     const final = draftRef.current;
+    console.log("[cell] commit", { columnKey, rowOrigIdx, text, final, willFire: final !== text });
     if (final !== text) onCommit(rowOrigIdx, columnKey, final);
   };
   const cancel = () => setEditing(false);
