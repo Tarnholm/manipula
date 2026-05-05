@@ -1483,14 +1483,20 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     return out;
   }, [rows, projectBlame]);
 
-  // Column order: Model Set Name (pinned), then for each body slot a Type
-  // and Material column, then Shield Size + Shield Material at the end.
+  // Column order: Model Set Name (pinned), then for each body slot a
+  // # Instances + Type + Material column, then Shield columns. The
+  // Instances cell defines how many of the model's variants wear that
+  // type/material combo; the EDU armour-value calc averages across
+  // variants weighted by these instance counts (see armour.js — the
+  // formula is already wired through as cell.instances).
   const cols = useMemo(() => {
     const out = ["Model Set Name"];
     for (const s of ARMOUR_BODY_SLOTS) {
+      out.push(`${ARM_PREFIX}${s}:instances`);
       out.push(`${ARM_PREFIX}${s}:type`);
       out.push(`${ARM_PREFIX}${s}:material`);
     }
+    out.push(`${ARM_PREFIX}Shield:instances`);
     out.push(`${ARM_PREFIX}Shield:size`);
     out.push(`${ARM_PREFIX}Shield:material`);
     return out;
@@ -1499,9 +1505,11 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
   const columnLabels = useMemo(() => {
     const out = {};
     for (const s of ARMOUR_BODY_SLOTS) {
+      out[`${ARM_PREFIX}${s}:instances`] = `${s} # Inst`;
       out[`${ARM_PREFIX}${s}:type`] = `${s} Type`;
       out[`${ARM_PREFIX}${s}:material`] = `${s} Material`;
     }
+    out[`${ARM_PREFIX}Shield:instances`] = "Shield # Inst";
     out[`${ARM_PREFIX}Shield:size`] = "Shield Size";
     out[`${ARM_PREFIX}Shield:material`] = "Shield Material";
     return out;
@@ -1509,7 +1517,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
 
   // Edit metadata: dropdown options gathered from the actual data so users
   // pick from existing types/materials/sizes (mirrors how UnitsScreen
-  // sources options from coreData tables).
+  // sources options from coreData tables). Instances are plain numbers.
   const columnMeta = useMemo(() => {
     const meta = {};
     const collect = (slot, field) => {
@@ -1521,11 +1529,13 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
       return [...seen].sort();
     };
     for (const s of ARMOUR_BODY_SLOTS) {
+      meta[`${ARM_PREFIX}${s}:instances`] = { type: "number" };
       const types = collect(s, "type");
       const mats  = collect(s, "material");
       if (types.length) meta[`${ARM_PREFIX}${s}:type`] = { type: "select", options: ["", ...types] };
       if (mats.length)  meta[`${ARM_PREFIX}${s}:material`] = { type: "select", options: ["", ...mats] };
     }
+    meta[`${ARM_PREFIX}Shield:instances`] = { type: "number" };
     const sizes = collect("Shield", "size");
     const sMats = collect("Shield", "material");
     if (sizes.length) meta[`${ARM_PREFIX}Shield:size`] = { type: "select", options: ["", ...sizes] };
@@ -1595,8 +1605,17 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
       const slotObj = cur[slot] || { instances: 1 };
       if (String(slotObj[field] ?? "") === String(newValue ?? "")) return;
       const nextSlot = { ...slotObj };
-      if (newValue === "" || newValue == null) nextSlot[field] = null;
-      else nextSlot[field] = newValue;
+      if (newValue === "" || newValue == null) {
+        // For instances, leaving blank means "default to 1" (the VBA
+        // fallback). Persist as 1 explicitly so the JSON round-trips
+        // cleanly instead of storing null and surprising the formula.
+        nextSlot[field] = field === "instances" ? 1 : null;
+      } else if (field === "instances") {
+        const n = Number(newValue);
+        nextSlot[field] = Number.isFinite(n) ? n : 1;
+      } else {
+        nextSlot[field] = newValue;
+      }
       const nextRow = { ...cur, [slot]: nextSlot };
       const nextRows = rows.slice(); nextRows[rowIdx] = nextRow;
       setProject({ ...project, armour: nextRows });
