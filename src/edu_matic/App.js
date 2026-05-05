@@ -47,7 +47,7 @@ export default function App({ externalProject = null, onProjectChange, controlle
   const [internalProject, setInternalProject] = useState(null);
   const project = externalProject !== null ? externalProject : internalProject;
   const setProject = (p) => {
-    console.log("[edu] setProject", { embedded: externalProject !== null, hasOnChange: !!onProjectChange, units: p?.units?.length });
+    if (window.eduAPI?.logMessage) window.eduAPI.logMessage("trace", "edu.setProject " + JSON.stringify({ embedded: externalProject !== null, hasOnChange: !!onProjectChange, units: p?.units?.length }));
     if (onProjectChange) onProjectChange(p);
     if (externalProject === null) setInternalProject(p);
   };
@@ -379,17 +379,18 @@ function UnitsScreen({ project, setProject }) {
   }, [project.units, allKeys]);
 
   const onEdit = useCallback((unitIdx, columnKey, newValue) => {
-    console.log("[edu] onEdit fired", { unitIdx, columnKey, newValue });
-    if (typeof unitIdx !== "number" || unitIdx < 0) { console.log("[edu] onEdit bailed: bad unitIdx"); return; }
+    const log = (tag, data) => window.eduAPI?.logMessage?.("trace", tag + " " + JSON.stringify(data));
+    log("edu.onEdit.fired", { unitIdx, columnKey, newValue });
+    if (typeof unitIdx !== "number" || unitIdx < 0) { log("edu.onEdit.bail", "bad unitIdx"); return; }
     const cur = project.units[unitIdx];
-    if (!cur || cur.kind !== "unit") { console.log("[edu] onEdit bailed: not a unit", cur); return; }
-    if (String(cur[columnKey] ?? "") === String(newValue ?? "")) { console.log("[edu] onEdit bailed: same value"); return; }
+    if (!cur || cur.kind !== "unit") { log("edu.onEdit.bail", { reason: "not a unit", cur: cur ? cur.kind : null }); return; }
+    if (String(cur[columnKey] ?? "") === String(newValue ?? "")) { log("edu.onEdit.bail", "same value"); return; }
     const next = { ...cur };
     if (newValue === "" || newValue == null) delete next[columnKey];
     else next[columnKey] = newValue;
     const nextUnits = project.units.slice();
     nextUnits[unitIdx] = next;
-    console.log("[edu] onEdit committing", { unitIdx, oldValue: cur[columnKey], newValue, columnKey });
+    log("edu.onEdit.commit", { unitIdx, oldValue: cur[columnKey], newValue, columnKey });
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
 

@@ -33,6 +33,18 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 
+// DLOG — writes diagnostics to %APPDATA%/recruitment-tool/edu-matic.log
+// via the existing eduAPI bridge. Used while we chase intermittent edit-
+// commit issues whose console output the user can't easily capture.
+// Falls back to console.log if the API is missing.
+function DLOG(tag, data) {
+  try {
+    const line = `${tag} ${typeof data === "object" ? JSON.stringify(data) : String(data)}`;
+    if (window.eduAPI && window.eduAPI.logMessage) window.eduAPI.logMessage("trace", line);
+    else console.log("[" + tag + "]", data);
+  } catch (e) { /* don't let logging break the app */ }
+}
+
 // Wide-table scrolling: relies on native overflow-x:auto on .dtable-scroll.
 // The min-width:0 chain on the parent containers (App.js: flex children below
 // the row-flex level) lets the scroll container constrain its width to the
@@ -147,7 +159,7 @@ export default function DataTable({
   commitRef.current.rowIds = rowIds;
   const commitCell = useCallback((rowOrigIdx, columnKey, newValue) => {
     const { onEdit: f, rowIds: ids } = commitRef.current;
-    console.log("[dtable] commitCell", { rowOrigIdx, columnKey, newValue, hasOnEdit: !!f, hasRowIds: !!ids, rowId: ids ? ids[rowOrigIdx] : rowOrigIdx });
+    DLOG("dtable.commitCell", { rowOrigIdx, columnKey, newValue, hasOnEdit: !!f, hasRowIds: !!ids, rowId: ids ? ids[rowOrigIdx] : rowOrigIdx });
     if (!f) return;
     const rowId = ids ? ids[rowOrigIdx] : rowOrigIdx;
     f(rowId, columnKey, newValue);
@@ -400,7 +412,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     setEditing(false);
     if (!touchedRef.current) return;
     const final = draftRef.current;
-    console.log("[cell] commit", { columnKey, rowOrigIdx, text, final, willFire: final !== text });
+    DLOG("cell.commit", { columnKey, rowOrigIdx, text, final, willFire: final !== text });
     if (final !== text) onCommit(rowOrigIdx, columnKey, final);
   };
   const cancel = () => setEditing(false);
@@ -527,10 +539,11 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
   }, []);
 
   const commitWith = (val) => {
+    DLOG("combo.commitWith", { val });
     onChange(val);
     // Defer commit to after the parent applies the new value, so the editor's
     // touched flag captures the intent before the cell tears down.
-    setTimeout(onCommit, 0);
+    setTimeout(() => { DLOG("combo.deferredCommit"); onCommit(); }, 0);
   };
 
   const onKeyDown = (e) => {
@@ -591,7 +604,7 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
           // ever needing an internal horizontal scrollbar. minWidth keeps
           // it at least as wide as the input it anchors to.
           style={{ left: pos.left, top: pos.top, minWidth: pos.minWidth }}
-          onMouseDown={(e) => e.preventDefault() /* prevent input blur */}
+          onMouseDown={(e) => { DLOG("combo.popoverMouseDown", { target: e.target.tagName, className: e.target.className }); e.preventDefault(); /* prevent input blur */ }}
         >
           {filtered.length === 0 && (
             <div className="dtable-combo-empty">no match — Enter to keep "{value}"</div>
@@ -602,7 +615,7 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
               data-combo-idx={i}
               className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "")}
               onMouseEnter={() => setHighlightIdx(i)}
-              onClick={() => commitWith(opt)}
+              onClick={(e) => { DLOG("combo.optionClick", { opt }); commitWith(opt); }}
             >
               {opt}
             </div>
