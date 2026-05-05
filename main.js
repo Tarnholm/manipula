@@ -1075,6 +1075,88 @@ ipcMain.handle("edm-delete-project-file", async (_e, dir, name) => {
     return true;
   } catch (e) { console.error("[edm] delete-project-file:", e.message); return false; }
 });
+// Batch project save — writes every file in one IPC round-trip and prunes
+// orphans in named subdirs in the same pass. The per-file write/delete
+// handlers above were fine for small projects, but a real mod project has
+// ~800 units + ~200 factions + ~1000 armour rows + ~800 recruit-lines, and
+// 2000+ sequential renderer→main IPC calls in a row can freeze the
+// renderer long enough that Chromium blanks the window. This handler
+// takes the whole batch as one payload and does all the I/O in the main
+// process where a fs.writeFileSync loop runs in a few hundred ms instead
+// of tens of seconds.
+//
+// Payload:
+//   { writes: [{ relPath, content }, ...],
+//     pruneSubdirs: [string, ...] }   // subdirs whose .json files not
+//                                     // listed in `writes` get deleted
+ipcMain.handle("edm-write-project-batch", async (_e, dir, payload) => {
+  try {
+    if (!dir) return { ok: false, reason: "no dir" };
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const writes = (payload && payload.writes) || [];
+    const pruneSubdirs = (payload && payload.pruneSubdirs) || [];
+
+    // Track every file we wrote, by absolute path, so the prune step can
+    // tell new-and-listed from previously-existing-and-orphaned.
+    const writtenAbs = new Set();
+    for (const w of writes) {
+      const target = path.join(dir, w.relPath);
+      const parent = path.dirname(target);
+      if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+      fs.writeFileSync(target, w.content, "utf8");
+      writtenAbs.add(path.resolve(target).toLowerCase());
+    }
+
+    // Prune. For each managed subdir, walk its .json files and delete any
+    // that wasn't in the writes list — these are records the user removed
+    // (or whose key changed) since the previous save. Without this, the
+    // on-disk tree would accumulate ghost units forever.
+    let pruned = 0;
+    for (const sub of pruneSubdirs) {
+      const subAbs = path.join(dir, sub);
+      if (!fs.existsSync(subAbs)) continue;
+      for (const name of fs.readdirSync(subAbs)) {
+        if (!name.endsWith(".json")) continue;
+        const f = path.join(subAbs, name);
+        if (!fs.statSync(f).isFile()) continue;
+        if (!writtenAbs.has(path.resolve(f).toLowerCase())) {
+          try { fs.unlinkSync(f); pruned++; } catch (e) { console.warn("[edm] prune fail:", f, e.message); }
+        }
+      }
+    }
+    return { ok: true, written: writes.length, pruned };
+  } catch (e) {
+    console.error("[edm] write-project-batch:", e.message);
+    return { ok: false, reason: e.message };
+  }
+});
+// Batch project load — counterpart to write-batch. Walks the project dir
+// recursively (within sane subdir limits) and returns every .json file's
+// contents in one IPC call, instead of the renderer firing N round-trips
+// to read N files.
+ipcMain.handle("edm-read-project-batch", async (_e, dir) => {
+  try {
+    if (!dir || !fs.existsSync(dir)) return { ok: false, reason: "dir missing" };
+    const files = [];
+    const SUBDIRS = ["", "edu", "edu/coreData", "edu/factions", "edu/units", "edu/armour", "recruits"];
+    for (const sub of SUBDIRS) {
+      const subAbs = sub ? path.join(dir, sub) : dir;
+      if (!fs.existsSync(subAbs)) continue;
+      for (const name of fs.readdirSync(subAbs)) {
+        if (!name.endsWith(".json")) continue;
+        const f = path.join(subAbs, name);
+        if (!fs.statSync(f).isFile()) continue;
+        const relPath = sub ? `${sub}/${name}` : name;
+        try { files.push({ relPath, content: fs.readFileSync(f, "utf8") }); }
+        catch (e) { console.warn("[edm] read fail:", relPath, e.message); }
+      }
+    }
+    return { ok: true, files };
+  } catch (e) {
+    console.error("[edm] read-project-batch:", e.message);
+    return { ok: false, reason: e.message };
+  }
+});
 ipcMain.handle("edm-log-message", async (_e, level, text) => {
   console.log(`[edm-${level}]`, text);
   // Also write to userData/edu-matic.log so we can inspect renderer-side

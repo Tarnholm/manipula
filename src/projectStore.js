@@ -105,86 +105,79 @@ async function saveProject(dir, bundle) {
   if (!bundle || typeof bundle !== "object") throw new Error("saveProject: bundle must be an object");
   const project = bundle.eduProject || {};
 
-  // 1) Sentinel + meta. Always written first so a partial save still
-  //    leaves a recognisable project dir behind. The exports block tracks
-  //    the hash of the EDB / EDU files at the time of last write-out so
-  //    the next export can warn before overwriting external edits.
-  await api.writeProjectFile(dir, SENTINEL, stable({
+  // Build the entire write-list in renderer memory (cheap), then send it
+  // to the main process as one batched IPC call. The previous version
+  // did one IPC per file — fine for tens of files, fatal for thousands
+  // (the renderer froze long enough that Chromium blanked the window).
+  const writes = [];
+  const pruneSubdirs = [];
+
+  // 1) Sentinel + meta.
+  writes.push({ relPath: SENTINEL, content: stable({
     schemaVersion: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
     name: (project.modInfo && project.modInfo.name) || "",
     exports: bundle.exports || {},
-  }));
+  })});
 
   // 2) Singleton EDU files.
   for (const key of SINGLE_FILE_KEYS) {
-    await api.writeProjectFile(dir, `edu/${key}.json`, stable(project[key] ?? null));
+    writes.push({ relPath: `edu/${key}.json`, content: stable(project[key] ?? null) });
   }
 
-  // 3) coreData — one file per lookup table.
-  await writeKeyed(api, dir, "edu/coreData", project.coreData || {}, /* fromObject */ true);
+  // 3) coreData — one file per lookup table (object → keyed files).
+  collectKeyed(writes, "edu/coreData", project.coreData || {});
+  pruneSubdirs.push("edu/coreData");
 
-  // 4) factions — one file per faction (array → keyed files).
-  await writeArray(api, dir, "edu/factions", project.factions || [], "faction");
+  // 4) factions, units, armour — one file per record (array → keyed files).
+  collectArray(writes, "edu/factions", project.factions || [], "faction");
+  pruneSubdirs.push("edu/factions");
 
-  // 5) units — one file per unit (EDU compute inputs).
-  await writeArray(api, dir, "edu/units", project.units || [], "unit");
+  collectArray(writes, "edu/units", project.units || [], "unit");
+  pruneSubdirs.push("edu/units");
 
-  // 6) armour — one file per record.
-  await writeArray(api, dir, "edu/armour", project.armour || [], "armour");
+  collectArray(writes, "edu/armour", project.armour || [], "armour");
+  pruneSubdirs.push("edu/armour");
 
-  // 7) recruits — one file per EDB recruit-line authoring entry. This is
-  //    the data that previously lived in <userData>/profiles/<profile>.json
-  //    and was therefore unshareable; with it under the project dir,
-  //    teammates can pull the same authoring state via git.
-  await writeArray(api, dir, "recruits", bundle.units || [], "recruit");
+  // 5) recruit-line authoring (EDB side).
+  collectArray(writes, "recruits", bundle.units || [], "recruit");
+  pruneSubdirs.push("recruits");
 
-  // 8) outputRows is a transient cache (byte-exact reproduction of the VBA
-  //    Output sheet) — store it separately so it can be skipped from git
-  //    by users who don't want generated content tracked.
+  // 6) outputRows — transient cache, single file. Not pruned because
+  //    it's the only file in its slot.
   if (project.outputRows) {
-    await api.writeProjectFile(dir, "edu/outputRows.json", stable(project.outputRows));
+    writes.push({ relPath: "edu/outputRows.json", content: stable(project.outputRows) });
+  }
+
+  // Fast path: one IPC, main process writes everything synchronously.
+  if (api.writeProjectBatch) {
+    const r = await api.writeProjectBatch(dir, { writes, pruneSubdirs });
+    if (!r || !r.ok) throw new Error("writeProjectBatch failed: " + (r && r.reason));
+    return;
+  }
+
+  // Fallback for older builds — sequential per-file. Slow but works.
+  for (const w of writes) {
+    await api.writeProjectFile(dir, w.relPath, w.content);
   }
 }
 
-async function writeKeyed(api, dir, subdir, obj, fromObject) {
-  if (!fromObject) throw new Error("writeKeyed: only object form supported");
-  const writtenNames = new Set();
+function collectKeyed(writes, subdir, obj) {
   for (const [k, v] of Object.entries(obj)) {
     const fname = `${sanitiseKey(k)}.json`;
-    await api.writeProjectFile(dir, `${subdir}/${fname}`, stable({ _key: k, value: v }));
-    writtenNames.add(fname);
+    writes.push({ relPath: `${subdir}/${fname}`, content: stable({ _key: k, value: v }) });
   }
-  await pruneOrphans(api, dir, subdir, writtenNames);
 }
 
-async function writeArray(api, dir, subdir, arr, fallbackKind) {
-  const writtenNames = new Set();
-  const seen = new Map();   // key -> count, to disambiguate duplicates
+function collectArray(writes, subdir, arr, fallbackKind) {
+  const seen = new Map();
   for (const rec of arr) {
     let key = recordKey(rec, fallbackKind);
-    // Collisions: append _2, _3, ... so two records with the same Type
-    // don't clobber each other. Records' original key is preserved in
-    // the file under _key, so the loader still reconstructs the array.
     const base = key;
     const n = (seen.get(base) || 0) + 1;
     seen.set(base, n);
     if (n > 1) key = `${base}_${n}`;
-    const fname = `${key}.json`;
-    await api.writeProjectFile(dir, `${subdir}/${fname}`, stable(rec));
-    writtenNames.add(fname);
-  }
-  await pruneOrphans(api, dir, subdir, writtenNames);
-}
-
-// Delete files that are in the on-disk subdir but not in the freshly
-// written set — i.e. records that were removed from the project. Without
-// this, deleting a unit in the UI would leave its file behind and
-// re-loading the project would resurrect it.
-async function pruneOrphans(api, dir, subdir, keepNames) {
-  const existing = await api.listProjectFiles(dir, subdir);
-  for (const name of existing) {
-    if (!keepNames.has(name)) await api.deleteProjectFile(dir, `${subdir}/${name}`);
+    writes.push({ relPath: `${subdir}/${key}.json`, content: stable(rec) });
   }
 }
 
@@ -193,8 +186,27 @@ async function pruneOrphans(api, dir, subdir, keepNames) {
 async function loadProject(dir) {
   const api = ensureApi();
 
-  // Read + validate sentinel.
-  const metaRaw = await api.readProjectFile(dir, SENTINEL);
+  // Fast path: one IPC, main process slurps every .json file in the
+  // managed subdirs and returns them as { relPath, content } pairs.
+  // Renderer parses + sorts in memory.
+  let allFiles = null;
+  if (api.readProjectBatch) {
+    const r = await api.readProjectBatch(dir);
+    if (!r || !r.ok) throw new Error("readProjectBatch failed: " + (r && r.reason));
+    allFiles = r.files;
+  } else {
+    // Fallback (older builds without batch IPC) — fall through to the
+    // per-file load below by setting allFiles to null.
+  }
+
+  // Validate sentinel.
+  let metaRaw = null;
+  if (allFiles) {
+    const sentinel = allFiles.find(f => f.relPath === SENTINEL);
+    metaRaw = sentinel ? sentinel.content : null;
+  } else {
+    metaRaw = await api.readProjectFile(dir, SENTINEL);
+  }
   if (metaRaw == null) {
     throw new Error(`Not a Manipula project: ${SENTINEL} missing in ${dir}`);
   }
@@ -205,66 +217,71 @@ async function loadProject(dir) {
     throw new Error(`Project schema version ${meta.schemaVersion} is newer than this build supports (${SCHEMA_VERSION}). Update Manipula.`);
   }
 
+  // Group files by subdir for the parsers below.
+  const indexed = new Map(); // subdir -> [{name, content}]
+  if (allFiles) {
+    for (const f of allFiles) {
+      const slash = f.relPath.lastIndexOf("/");
+      const sub = slash >= 0 ? f.relPath.slice(0, slash) : "";
+      const name = slash >= 0 ? f.relPath.slice(slash + 1) : f.relPath;
+      if (!indexed.has(sub)) indexed.set(sub, []);
+      indexed.get(sub).push({ name, content: f.content });
+    }
+    for (const list of indexed.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   const project = {};
 
   // Singleton EDU files.
   for (const key of SINGLE_FILE_KEYS) {
-    const raw = await api.readProjectFile(dir, `edu/${key}.json`);
+    const raw = pickFile(indexed, "edu", `${key}.json`)
+      ?? (allFiles ? null : await api.readProjectFile(dir, `edu/${key}.json`));
     project[key] = raw ? JSON.parse(raw) : (key === "modInfo" ? { name: "", platform: "", era: "" } : (key === "globals" ? {} : []));
   }
 
-  // coreData — collect each table from its own file.
-  project.coreData = await readKeyed(api, dir, "edu/coreData");
+  project.coreData = parseKeyedFromIndex(indexed, "edu/coreData");
+  project.factions = parseArrayFromIndex(indexed, "edu/factions");
+  project.units    = parseArrayFromIndex(indexed, "edu/units");
+  project.armour   = parseArrayFromIndex(indexed, "edu/armour");
 
-  // Arrays — read every JSON file in the subdir into an array.
-  project.factions = await readArray(api, dir, "edu/factions");
-  project.units    = await readArray(api, dir, "edu/units");
-  project.armour   = await readArray(api, dir, "edu/armour");
-
-  // Optional cached output (may be absent).
-  const outputRaw = await api.readProjectFile(dir, "edu/outputRows.json");
+  const outputRaw = pickFile(indexed, "edu", "outputRows.json")
+    ?? (allFiles ? null : await api.readProjectFile(dir, "edu/outputRows.json"));
   project.outputRows = outputRaw ? JSON.parse(outputRaw) : null;
 
-  // Recruit-line authoring units (EDB side).
-  const units = await readArray(api, dir, "recruits");
+  const units = parseArrayFromIndex(indexed, "recruits");
 
   return { meta, eduProject: project, units, exports: meta.exports || {} };
 }
 
-async function readKeyed(api, dir, subdir) {
+function pickFile(indexed, subdir, name) {
+  const list = indexed.get(subdir);
+  if (!list) return null;
+  const f = list.find(x => x.name === name);
+  return f ? f.content : null;
+}
+
+function parseKeyedFromIndex(indexed, subdir) {
   const out = {};
-  const files = await api.listProjectFiles(dir, subdir);
-  for (const name of files) {
-    const raw = await api.readProjectFile(dir, `${subdir}/${name}`);
-    if (!raw) continue;
+  const list = indexed.get(subdir) || [];
+  for (const f of list) {
     try {
-      const parsed = JSON.parse(raw);
-      // Files written by writeKeyed have shape { _key, value }; older or
-      // hand-edited files might just have the raw value at top level.
+      const parsed = JSON.parse(f.content);
       if (parsed && typeof parsed === "object" && "_key" in parsed && "value" in parsed) {
         out[parsed._key] = parsed.value;
       } else {
-        // Fall back to the filename-without-extension as the key.
-        out[name.replace(/\.json$/, "")] = parsed;
+        out[f.name.replace(/\.json$/, "")] = parsed;
       }
-    } catch (e) {
-      console.warn(`[projectStore] skip ${subdir}/${name}: ${e.message}`);
-    }
+    } catch (e) { console.warn(`[projectStore] skip ${subdir}/${f.name}: ${e.message}`); }
   }
   return out;
 }
 
-async function readArray(api, dir, subdir) {
+function parseArrayFromIndex(indexed, subdir) {
   const out = [];
-  const files = await api.listProjectFiles(dir, subdir);
-  // Sort for stable order across runs — git would otherwise see noise
-  // every time the OS reordered directory entries.
-  files.sort();
-  for (const name of files) {
-    const raw = await api.readProjectFile(dir, `${subdir}/${name}`);
-    if (!raw) continue;
-    try { out.push(JSON.parse(raw)); }
-    catch (e) { console.warn(`[projectStore] skip ${subdir}/${name}: ${e.message}`); }
+  const list = indexed.get(subdir) || [];
+  for (const f of list) {
+    try { out.push(JSON.parse(f.content)); }
+    catch (e) { console.warn(`[projectStore] skip ${subdir}/${f.name}: ${e.message}`); }
   }
   return out;
 }

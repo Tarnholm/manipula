@@ -68,6 +68,8 @@ contextBridge.exposeInMainWorld("eduAPI", {
   writeProjectFile: (dir, name, content) => ipcRenderer.invoke("edm-write-project-file", dir, name, content),
   listProjectFiles: (dir, subdir) => ipcRenderer.invoke("edm-list-project-files", dir, subdir),
   deleteProjectFile: (dir, name) => ipcRenderer.invoke("edm-delete-project-file", dir, name),
+  writeProjectBatch: (dir, payload) => ipcRenderer.invoke("edm-write-project-batch", dir, payload),
+  readProjectBatch: (dir) => ipcRenderer.invoke("edm-read-project-batch", dir),
   gitAvailable: () => ipcRenderer.invoke("git-available"),
   gitStatus: (dir) => ipcRenderer.invoke("git-status", dir),
   gitPull: (dir) => ipcRenderer.invoke("git-pull", dir),
