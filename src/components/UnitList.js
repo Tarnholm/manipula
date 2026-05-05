@@ -277,10 +277,22 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             Authored — {filtered.length}
           </div>
         )}
-        {filtered.map(u => {
+        {/* Variant index per unit name — counts each successive entry of
+         *  the same unit so a "Lyttian Archers (2/3)" badge can disambiguate
+         *  five identically-named cards. Computed in render order so it
+         *  matches the visual sequence the user sees. */}
+        {filtered.map((u, idx) => {
           const display = modIndex.unitDisplayName ? modIndex.unitDisplayName(u.unit) : null;
           const isPrimary = u.id === selectedId;
           const isMulti = selectedIds.has(u.id);
+          // Position-among-same-name for the "(N/M)" badge.
+          const totalSame = variantCounts.get(u.unit) || 1;
+          let variantPos = 0;
+          if (totalSame > 1) {
+            for (let i = 0, n = 0; i <= idx; i++) {
+              if (filtered[i].unit === u.unit) { n++; if (i === idx) variantPos = n; }
+            }
+          }
           // EDU is keyed by the base unit type. AOR recruit names (like "aor dravidian warriors")
           // don't have their own EDU entry — they alias the base unit ("dravidian warriors") —
           // so try both. Same fallback for "merc " prefixed names.
@@ -327,11 +339,29 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, color: u.enabled === false ? "#888" : "#ddd", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                  {u.writeBack === false && (
-                    <span title="Reference-only — won't write to EDB" style={{ color: "#666", fontSize: 11, marginRight: 6 }}>📖</span>
-                  )}
                   <span>{display || u.unit}</span>
                   {display && <span style={{ color: "#666", fontWeight: 400, fontSize: 11 }}>({u.unit})</span>}
+                  {/* Variant index — shows which of N same-named cards
+                   *  this is. Without it, five "Lyttian Archers" cards
+                   *  with identical grade / faction layouts are
+                   *  indistinguishable while clicking through them. */}
+                  {totalSame > 1 && (
+                    <span style={{ background: "rgba(220,166,74,0.18)", color: "#dca64a", fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>
+                      {variantPos}/{totalSame}
+                    </span>
+                  )}
+                  {/* writeBack indicator — surfaces what the unit will
+                   *  actually do on Write-to-EDB. Imported units default
+                   *  to ref-only (won't write); user-authored default to
+                   *  writeBack=true. The previous tiny 📖 emoji wasn't
+                   *  obvious enough — users were deleting variants and
+                   *  finding "nothing changed" because none of the
+                   *  remaining units had writeBack on. */}
+                  {u.writeBack === false ? (
+                    <span title="Reference-only — won't write to EDB. Toggle 'Writes to EDB' in the editor on the right to make changes here actually write." style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
+                  ) : (
+                    <span title="Will write back to EDB on next Write-to-EDB" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
+                  )}
                   {eduMap && eduMap.has(u.unit) && (() => {
                     const tip = summarizeEdu(eduMap.get(u.unit));
                     return (
@@ -348,12 +378,21 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                   {/* Variant disambiguator — only shown when the same EDU unit id is authored
                    *  more than once. Without this, the two `roman hastati early` cards (one
                    *  AOR-only, one Factional-only) look identical in the list. */}
-                  {variantCounts.get(u.unit) > 1 && (
+                  {totalSame > 1 && (
                     u.aor && u.aor.enabled ? (
                       <span title="AOR variant — recruits via hidden_resource regions, not the main faction MIC pool" style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>AOR</span>
                     ) : (
                       <span title="Factional variant — main MIC-chain recruitment for the unit's faction list" style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>FACTIONAL</span>
                     )
+                  )}
+                  {/* Faction list as text (first three) — much easier to
+                   *  tell which "Lyttian Archers" applies to which factions
+                   *  without parsing tiny icons. */}
+                  {(u.factions || []).filter(f => f && f !== "all").length > 0 && (
+                    <span style={{ color: "#aaa", fontFamily: "Consolas, monospace", fontSize: 10 }}>
+                      {(u.factions || []).filter(f => f && f !== "all").slice(0, 3).join(", ")}
+                      {(u.factions || []).filter(f => f && f !== "all").length > 3 && ` +${(u.factions || []).filter(f => f && f !== "all").length - 3}`}
+                    </span>
                   )}
                   {(u.factions || []).slice(0, 6).map(fid => (
                     fid === "all" ? null : (
@@ -366,7 +405,6 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                       />
                     )
                   ))}
-                  {(u.factions || []).length > 6 && <span style={{ color: "#666" }}>+{u.factions.length - 6}</span>}
                 </div>
               </div>
             </div>
