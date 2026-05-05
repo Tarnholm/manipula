@@ -641,8 +641,14 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [eduDirty]);
-  // Welcome panel — first-launch onboarding. Dismissible forever via the "don't show again" checkbox.
+  // Welcome panel — first-launch onboarding. Dismissible forever via the
+  // "don't show again" checkbox. The checkbox state is tracked here (not
+  // via defaultChecked on the <input>) so that the dismissed flag is
+  // persisted whenever the user clicks Get Started — including the
+  // common case where they never interact with the checkbox at all and
+  // just expect "yes, please don't show this again" to be the default.
   const [showWelcome, setShowWelcome] = useState(() => localStorage.getItem("rt:welcomeDismissed") !== "1");
+  const [welcomeDontShow, setWelcomeDontShow] = useState(true);
   // Toast notifications — small queue with auto-expiry so action feedback (writes, exports,
   // imports) is visible at a glance instead of buried in the status bar.
   const [toasts, setToasts] = useState([]);
@@ -916,13 +922,21 @@ export default function App() {
           </div>
           <div style={{ marginTop: 22, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <label style={{ fontSize: 11, color: "#888", display: "flex", alignItems: "center", gap: 6 }}>
-              <input type="checkbox" defaultChecked onChange={(e) => {
-                if (e.target.checked) localStorage.setItem("rt:welcomeDismissed", "1");
-                else localStorage.removeItem("rt:welcomeDismissed");
-              }} />
+              <input
+                type="checkbox"
+                checked={welcomeDontShow}
+                onChange={(e) => setWelcomeDontShow(e.target.checked)}
+              />
               Don't show again
             </label>
-            <button onClick={() => setShowWelcome(false)} style={{ background: "#dca64a", color: "#1a1a1a", border: "none", padding: "8px 18px", borderRadius: 6, fontWeight: 700, cursor: "pointer" }}>Get started</button>
+            <button
+              onClick={() => {
+                if (welcomeDontShow) localStorage.setItem("rt:welcomeDismissed", "1");
+                else localStorage.removeItem("rt:welcomeDismissed");
+                setShowWelcome(false);
+              }}
+              style={{ background: "#dca64a", color: "#1a1a1a", border: "none", padding: "8px 18px", borderRadius: 6, fontWeight: 700, cursor: "pointer" }}
+            >Get started</button>
           </div>
         </div>
       </div>
