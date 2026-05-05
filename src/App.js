@@ -622,9 +622,10 @@ export default function App() {
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
   // Capture an EDU import snapshot — keyed by canonical unit key, value
-  // is the JSON-serialized unit at import time. A small dollop of work
-  // here pays off in the Units screen's "modified since import" inline
-  // diff markers without needing a full diff pass at every render.
+  // is a djb2 *hash* of the JSON at import time (not the JSON itself).
+  // The Units screen compares hashes to flag "modified since import" in
+  // O(1) per unit; storing full JSON would be ~500KB-1MB and force a
+  // full string-compare per row on every render under bulk edit.
   const captureEduSnapshot = useCallback((eduProj) => {
     if (!eduProj || !Array.isArray(eduProj.units)) { setEduImportSnapshot(null); return; }
     const out = {};
@@ -632,7 +633,12 @@ export default function App() {
       if (!u || u.kind !== "unit") continue;
       const key = String(u["unit id"] || u.dictionary_tag || u.name || "").trim();
       if (!key) continue;
-      try { out[key] = JSON.stringify(u); } catch {}
+      try {
+        const s = JSON.stringify(u);
+        let h = 5381;
+        for (let j = 0; j < s.length; j++) h = ((h << 5) + h + s.charCodeAt(j)) | 0;
+        out[key] = (h >>> 0).toString(16);
+      } catch {}
     }
     setEduImportSnapshot(out);
   }, []);
@@ -927,20 +933,23 @@ export default function App() {
   const exportAllText = useMemo(() => renderAllPreview(units), [units]);
   // EDU-side validation count for the Sync gate. Lazy-imported because
   // validate.js lives in the EDU subtree and we don't want it loaded on
-  // launch unless an EDU project is open. Recomputed on project change;
-  // throws are swallowed so a bad data shape doesn't block a save.
+  // launch unless an EDU project is open. *Debounced 800ms* because
+  // validate() walks the whole project (200-500ms on a real one) and
+  // running it on every keystroke / bulk-edit step pinned the renderer
+  // to the point where Task Manager wouldn't open.
   const [eduValidationErrorCount, setEduValidationErrorCount] = useState(0);
   useEffect(() => {
     if (!eduProject) { setEduValidationErrorCount(0); return; }
     let cancelled = false;
-    (async () => {
+    const id = setTimeout(async () => {
+      if (cancelled) return;
       try {
         const { validate } = await import("./edu_matic/validate");
         const errs = validate(eduProject);
         if (!cancelled) setEduValidationErrorCount(Array.isArray(errs) ? errs.length : 0);
       } catch (e) { if (!cancelled) setEduValidationErrorCount(0); }
-    })();
-    return () => { cancelled = true; };
+    }, 800);
+    return () => { cancelled = true; clearTimeout(id); };
   }, [eduProject]);
 
   const validationSummary = useMemo(() => {

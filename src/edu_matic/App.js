@@ -778,25 +778,33 @@ function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImport
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
 
-  // Per-row validation flags. validate(project) returns an array of
-  // ErrorEntry { unit, row, message }; diagnose(project) returns warnings
-  // with the same shape. We bucket both by unit name so the per-row flag
-  // computation below is O(1) per row instead of scanning the array.
-  const validationByName = useMemo(() => {
-    const out = new Map();
-    try {
-      for (const e of validate(project)) {
-        if (!e.unit || e.unit.startsWith("<")) continue;
-        if (!out.has(e.unit)) out.set(e.unit, { error: e.message, warn: null });
-        else if (!out.get(e.unit).error) out.get(e.unit).error = e.message;
-      }
-      for (const e of diagnose(project)) {
-        if (!e.unit || e.unit.startsWith("<")) continue;
-        if (!out.has(e.unit)) out.set(e.unit, { error: null, warn: e.message });
-        else if (!out.get(e.unit).warn) out.get(e.unit).warn = e.message;
-      }
-    } catch (err) { console.warn("[edu] validate failed:", err && err.message); }
-    return out;
+  // Per-row validation flags. validate(project) walks 800+ units and
+  // takes ~200-500ms on a real project — too expensive to run on every
+  // keystroke. Debounce to 600ms after the last project change so the
+  // user can edit / bulk-modify without the UI thread freezing. The
+  // stale flags between edits are acceptable; once they stop typing
+  // for half a second the dots refresh.
+  const [validationByName, setValidationByName] = useState(() => new Map());
+  useEffect(() => {
+    let cancelled = false;
+    const id = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        const out = new Map();
+        for (const e of validate(project)) {
+          if (!e.unit || e.unit.startsWith("<")) continue;
+          if (!out.has(e.unit)) out.set(e.unit, { error: e.message, warn: null });
+          else if (!out.get(e.unit).error) out.get(e.unit).error = e.message;
+        }
+        for (const e of diagnose(project)) {
+          if (!e.unit || e.unit.startsWith("<")) continue;
+          if (!out.has(e.unit)) out.set(e.unit, { error: null, warn: e.message });
+          else if (!out.get(e.unit).warn) out.get(e.unit).warn = e.message;
+        }
+        if (!cancelled) setValidationByName(out);
+      } catch (err) { console.warn("[edu] validate failed:", err && err.message); }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(id); };
   }, [project]);
 
   // Recruit-line index — quick lookup from EDU "unit id" / dictionary
@@ -816,27 +824,38 @@ function UnitsScreen({ project, setProject, modDataDir, recruitUnits, lastImport
     return out;
   }, [recruitUnits]);
 
-  // Re-import diff. lastImportedSnapshot is a Map of canonical-unit-key
-  // → JSON-stringified unit, captured at the last xlsm import. Anything
-  // that hashes differently now is "modified since last import" — we
-  // surface that as a third rowFlag tier (info/blue) so the user can
-  // see which units have drifted from the spreadsheet's source of
-  // truth without leaving Manipula.
-  const importDiffByIdx = useMemo(() => {
-    const out = new Map();
-    if (!lastImportedSnapshot) return out;
-    for (let i = 0; i < project.units.length; i++) {
-      const u = project.units[i];
-      if (!u || u.kind !== "unit") continue;
-      const key = String(u["unit id"] || u.dictionary_tag || u.name || "").trim();
-      if (!key) continue;
-      const prev = lastImportedSnapshot[key];
-      if (prev == null) continue;            // new unit since import
-      try {
-        if (JSON.stringify(u) !== prev) out.set(i, "modified since last xlsm import");
-      } catch {}
-    }
-    return out;
+  // Re-import diff. lastImportedSnapshot maps canonical-unit-key → a
+  // *djb2 hash* of the unit at import time (not the full JSON). Compare
+  // the current unit's hash against the stored one to detect drift in
+  // O(1) per unit instead of O(N) for a JSON.stringify each render.
+  // Also debounced — comparing 800 units' hashes still adds up under
+  // bulk-edit fire, and the result only feeds an inline visual hint.
+  const [importDiffByIdx, setImportDiffByIdx] = useState(() => new Map());
+  useEffect(() => {
+    if (!lastImportedSnapshot) { setImportDiffByIdx(new Map()); return; }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      if (cancelled) return;
+      const out = new Map();
+      for (let i = 0; i < project.units.length; i++) {
+        const u = project.units[i];
+        if (!u || u.kind !== "unit") continue;
+        const key = String(u["unit id"] || u.dictionary_tag || u.name || "").trim();
+        if (!key) continue;
+        const prev = lastImportedSnapshot[key];
+        if (prev == null) continue;            // new unit since import
+        // Cheap djb2 hash inlined here so the loop body stays tight.
+        let h = 5381;
+        try {
+          const s = JSON.stringify(u);
+          for (let j = 0; j < s.length; j++) h = ((h << 5) + h + s.charCodeAt(j)) | 0;
+        } catch { continue; }
+        const hex = (h >>> 0).toString(16);
+        if (hex !== prev) out.set(i, "modified since last xlsm import");
+      }
+      if (!cancelled) setImportDiffByIdx(out);
+    }, 600);
+    return () => { cancelled = true; clearTimeout(id); };
   }, [project.units, lastImportedSnapshot]);
 
   // rowFlags keyed by rowId (= original index in project.units, per
