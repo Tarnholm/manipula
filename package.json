@@ -1,6 +1,6 @@
 {
   "name": "recruitment-tool",
-  "version": "0.30.0",
+  "version": "0.30.1",
   "description": "Electron tool for editing RTW mod recruitment in export_descr_buildings.txt",
   "author": "Tarnholm",
   "license": "MIT",

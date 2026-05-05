@@ -1745,6 +1745,15 @@ function BackupsModal({ backups, onClose, onRestore, onDelete }) {
 function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  // Anchor for the portal-rendered dropdown. The sidebar wraps with
+  // backdrop-filter:blur which creates its own stacking context, so a
+  // plain absolute-positioned dropdown loses the z-index fight against
+  // the unit-list controls right below the topbar (the user reported
+  // the search results being hidden behind the +New unit / Duplicate /
+  // Delete row). Same fix as the Sync popover — render via portal to
+  // document.body with position:fixed coords.
+  const inputRef = useRef(null);
+  const [pos, setPos] = useState(null);
   const [history, setHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem("rt:searchHistory") || "[]"); } catch { return []; }
   });
@@ -1784,9 +1793,32 @@ function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
     }
     return out.slice(0, 12);
   }, [q, units, eduProject]);
+  // Reposition popover relative to the input on open / scroll / resize.
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => {
+      const el = inputRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPos({ left: r.left, top: r.bottom + 4, width: Math.max(r.width, 280) });
+    };
+    reposition();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open]);
+
+  const popStyle = pos
+    ? { position: "fixed", top: pos.top, left: pos.left, minWidth: pos.width, background: "rgba(20,22,23,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, maxHeight: 360, overflowY: "auto", zIndex: 11000, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }
+    : null;
+
   return (
-    <div style={{ position: "relative" }}>
+    <div>
       <input
+        ref={inputRef}
         data-rtshortcut="quick-search"
         type="text"
         value={q}
@@ -1796,8 +1828,8 @@ function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
         placeholder="Find unit (Ctrl+F)…"
         style={{ background: "#252525", border: "1px solid #333", color: "#ddd", padding: "5px 8px", borderRadius: 4, fontSize: 11.5, width: 200, fontFamily: "Consolas, monospace" }}
       />
-      {open && q.length < 2 && history.length > 0 && (
-        <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, background: "rgba(20,22,23,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, minWidth: 280, maxHeight: 360, overflowY: "auto", zIndex: 800, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+      {open && pos && q.length < 2 && history.length > 0 && createPortal(
+        <div style={popStyle}>
           <div style={{ padding: "4px 8px", fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: 0.6 }}>Recent</div>
           {history.map((h, i) => (
             <div key={i} onMouseDown={(e) => { e.preventDefault(); setQ(h); }}
@@ -1807,10 +1839,11 @@ function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
               {h}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
-      {open && matches.length > 0 && (
-        <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, background: "rgba(20,22,23,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, minWidth: 280, maxHeight: 360, overflowY: "auto", zIndex: 800, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+      {open && pos && matches.length > 0 && createPortal(
+        <div style={popStyle}>
           {matches.map((m, i) => (
             <div
               key={i}
@@ -1830,7 +1863,8 @@ function QuickSearch({ units, eduProject, onJumpToUnit, onJumpToEdu }) {
               {m.edu && <span style={{ fontSize: 9, color: "#dca64a", border: "1px solid rgba(220,166,74,0.4)", padding: "0 4px", borderRadius: 2, fontWeight: 700 }}>EDU</span>}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
