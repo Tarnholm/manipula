@@ -251,10 +251,20 @@ export default function DataTable({
     };
   }, [ctxMenu]);
 
-  // Reset to leftmost on dataset change so the user sees the first column.
+  // Reset to leftmost only when the dataset *identity* changes — i.e.
+  // the row count differs (load / add / delete) OR the search query
+  // changed (different filter result). Cell EDITS produce a new `rows`
+  // reference too but length stays the same; resetting on every edit
+  // snapped the user back to column 1 every time they committed a cell
+  // on the right side of a wide table, which is exactly what the user
+  // hit in the Units screen on the Turns column.
+  const lastResetKeyRef = useRef("");
   useEffect(() => {
+    const key = `${rows.length}|${q}`;
+    if (key === lastResetKeyRef.current) return;
+    lastResetKeyRef.current = key;
     if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-  }, [rows]);
+  }, [rows, q]);
 
 
   // Wheel: shift+wheel scrolls horizontally; plain wheel scrolls vertically
