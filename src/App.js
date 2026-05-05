@@ -917,8 +917,15 @@ export default function App() {
   useEffect(() => {
     const handler = (e) => {
       if (!(e.ctrlKey || e.metaKey)) return;
-      const tag = (e.target && e.target.tagName) || "";
-      const isText = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      // Drive the "is the user typing?" gate off the focused element
+      // rather than the keystroke target — e.target can be the body
+      // after focus drifts, which previously caused Ctrl+F to override
+      // text input it should have left alone (and vice versa).
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      const isText =
+        aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" ||
+        (ae && ae.isContentEditable);
       const k = e.key.toLowerCase();
       if (k === "s" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='write-edb']")?.click(); }
       else if (k === "e" && !isText) { e.preventDefault(); document.querySelector("[data-rtshortcut='export-bundle']")?.click(); }

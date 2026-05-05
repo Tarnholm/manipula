@@ -67,11 +67,20 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
   useEffect(() => {
     const onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const tag = (e.target && e.target.tagName) || "";
-      const isText = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      // Decide intercept based on the *focused* element, not the keystroke
+      // target. e.target is the body when focus has drifted (which can
+      // happen after various React re-renders), and the previous logic
+      // would then swallow j/k as navigation even though the user was
+      // trying to type into the search input — exactly the "search bar
+      // not working until I minimize and come back" symptom.
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      const isText =
+        aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" ||
+        (ae && ae.isContentEditable);
       const k = e.key;
       if (k === "/" && !isText) { e.preventDefault(); searchRef.current && searchRef.current.focus(); return; }
-      if (k === "Escape" && isText && e.target === searchRef.current) { setQ(""); return; }
+      if (k === "Escape" && isText && ae === searchRef.current) { setQ(""); return; }
       if ((k === "j" || k === "k") && !isText) {
         const list = filteredRef.current;
         if (!list || list.length === 0) return;
