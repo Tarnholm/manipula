@@ -662,42 +662,12 @@ export default function App() {
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
-  // Bulk-blame fetch + parse. One git log --name-only call returns every
-  // touched file in the recent 500 commits; we walk it once and remember
-  // the FIRST commit each file appears in (which by git log's reverse-
-  // chronological default is the most recent commit). 800 lookups for
-  // tooltips become O(1) Map.get instead of 800 IPC calls.
-  useEffect(() => {
-    if (!projectDir || !window.eduAPI?.gitLogBulk) { setProjectBlame(new Map()); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await window.eduAPI.gitLogBulk(projectDir);
-        if (cancelled || !r || !r.ok) { setProjectBlame(new Map()); return; }
-        const map = new Map();
-        const commits = (r.stdout || "").split("!!!COMMIT!!!").filter(Boolean);
-        for (const block of commits) {
-          const lines = block.split(/\r?\n/);
-          const meta = lines[0] || "";
-          const [hash, author, age] = meta.split("|");
-          if (!hash) continue;
-          for (let i = 1; i < lines.length; i++) {
-            const path = lines[i].trim();
-            if (!path) continue;
-            const key = path.toLowerCase();
-            // First time we see a file is the most recent commit (git log
-            // is reverse-chrono by default). Skip if already mapped.
-            if (!map.has(key)) map.set(key, { hash, author, age });
-          }
-        }
-        setProjectBlame(map);
-      } catch (e) {
-        console.warn("[blame] bulk fetch failed:", e && e.message);
-        setProjectBlame(new Map());
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [projectDir, projectSaveTick]);
+  // (Bulk-blame useEffect moved further down — its deps array reads
+  // `projectDir` and `projectSaveTick`, which are declared after this
+  // point in the file. JS deps-array evaluation at the original location
+  // hit those constants in TDZ and threw ReferenceError ("Cannot access
+  // 'Ee' before initialization") — the marble-window crash. Effect now
+  // sits after both state declarations so deps eval is safe.)
 
   // Capture an EDU import snapshot — keyed by canonical unit key, value
   // is a djb2 *hash* of the JSON at import time (not the JSON itself).
@@ -757,6 +727,47 @@ export default function App() {
   // dot stays stale on green for up to 5s (the polling cadence) after
   // touching disk.
   const [projectSaveTick, setProjectSaveTick] = useState(0);
+
+  // Bulk-blame fetch + parse. One git log --name-only call returns every
+  // touched file in the recent 500 commits; we walk it once and remember
+  // the FIRST commit each file appears in (which by git log's reverse-
+  // chronological default is the most recent commit). 800 lookups for
+  // tooltips become O(1) Map.get instead of 800 IPC calls.
+  // *Must live after projectDir / projectSaveTick declarations* — its
+  // deps array reads those bindings, and they're TDZ-protected
+  // until the const lines above complete.
+  useEffect(() => {
+    if (!projectDir || !window.eduAPI?.gitLogBulk) { setProjectBlame(new Map()); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await window.eduAPI.gitLogBulk(projectDir);
+        if (cancelled || !r || !r.ok) { setProjectBlame(new Map()); return; }
+        const map = new Map();
+        const commits = (r.stdout || "").split("!!!COMMIT!!!").filter(Boolean);
+        for (const block of commits) {
+          const lines = block.split(/\r?\n/);
+          const meta = lines[0] || "";
+          const [hash, author, age] = meta.split("|");
+          if (!hash) continue;
+          for (let i = 1; i < lines.length; i++) {
+            const path = lines[i].trim();
+            if (!path) continue;
+            const key = path.toLowerCase();
+            // First time we see a file is the most recent commit (git log
+            // is reverse-chrono by default). Skip if already mapped.
+            if (!map.has(key)) map.set(key, { hash, author, age });
+          }
+        }
+        setProjectBlame(map);
+      } catch (e) {
+        console.warn("[blame] bulk fetch failed:", e && e.message);
+        setProjectBlame(new Map());
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectDir, projectSaveTick]);
+
   // Export hashes per file kind ("edb" / "edu") captured at last write-out.
   // Used to detect "the game file changed under us since we last exported"
   // and warn before clobbering external edits — the missing piece between
