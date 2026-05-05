@@ -13,7 +13,9 @@
     "electron-dev": "cross-env DEV_USE_SERVER=1 electron .",
     "import-xlsm": "node scripts/import-from-xlsm.js",
     "dist": "node scripts/clean-dist.js && electron-builder",
-    "dist:win": "node scripts/clean-dist.js && electron-builder --win nsis"
+    "dist:win": "node scripts/clean-dist.js && electron-builder --win nsis",
+    "prune-releases": "node scripts/prune-old-releases.js",
+    "publish:win": "node scripts/clean-dist.js && electron-builder --win nsis -p always && node scripts/prune-old-releases.js"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
