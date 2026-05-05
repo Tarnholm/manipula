@@ -460,7 +460,9 @@ body {
 }
 .dtable-cell-input {
   width: 100%;
-  min-width: 80px;
+  /* Editor floats over the read-state span so column width is set by the
+   * span (not the input). The input itself fills the overlay's space —
+   * no min-width here, otherwise the editor would push past the cell. */
   background: var(--bg-elev2);
   color: var(--fg);
   border: 1px solid var(--accent, #dca64a);

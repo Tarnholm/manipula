@@ -762,14 +762,14 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
 
   // Display labels:
   //   - "name" header reads "Unit Name" (matches the EDU spreadsheet).
-  //   - avail:<faction> columns are numbered "faction 1 .. N" by canonical
-  //     position, plus "slave" for the last availability key. Numbered
-  //     labels avoid the visual noise of long faction-key names in a table
-  //     that's already 50+ columns wide.
+  //   - avail:<faction> columns are labelled with the faction's name from
+  //     project.factions (the same list the Mod Info pulls from). The
+  //     index-only "faction 1..N" labels were unreadable when the user
+  //     just wanted to know which column is `romans_julii`.
   //   - own:<i> columns labeled "ownership_1 .. ownership_4".
   const columnLabels = useMemo(() => {
     const out = { name: "Unit Name" };
-    factionKeys.forEach((f, i) => { out[AVAIL_PREFIX + f] = `faction ${i + 1}`; });
+    factionKeys.forEach((f) => { out[AVAIL_PREFIX + f] = f; });
     out[AVAIL_PREFIX + "slave"] = "slave";
     for (let i = 0; i < 4; i++) out[OWN_PREFIX + i] = `ownership_${i + 1}`;
     return out;
@@ -821,7 +821,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // the unit key, so re-firing for an existing key is a safe no-op.
   const stubInExportUnits = useCallback(async (unit) => {
     if (!modDataDir || !window.eduAPI?.appendExportUnitsStub) return;
-    const key = unit && (unit["unit id"] || unit["dictionary_tag"] || unit.name);
+    // Prefer dictionary_tag — RTW reads display strings from export_units
+    // keyed by dictionary tag (with underscores), not by the unit id.
+    const key = unit && (unit["dictionary_tag"] || unit["unit id"] || unit.name);
     if (!key) return;
     const display = unit && (unit.name || key);
     try {
@@ -891,7 +893,12 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       const nextAvail = { ...(cur.availability || {}) };
       if (newValue === "" || newValue == null) delete nextAvail[f];
       else nextAvail[f] = newValue;
-      const next = { ...cur, availability: nextAvail };
+      // Re-derive factionalOwnership from the Y cells. Order follows
+      // factionKeys (i.e. project.factions order) with slave at the end
+      // — matches the order the EDU spreadsheet exported.
+      const ownList = factionKeys.filter((k) => nextAvail[k] === "Y");
+      if (nextAvail.slave === "Y") ownList.push("slave");
+      const next = { ...cur, availability: nextAvail, factionalOwnership: ownList.join(", ") };
       const nextUnits = project.units.slice();
       nextUnits[unitIdx] = next;
       setProject({ ...project, units: nextUnits });

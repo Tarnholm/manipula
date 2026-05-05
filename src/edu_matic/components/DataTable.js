@@ -845,23 +845,64 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       }}
     />
   ) : null;
+  // Render the read-state value INSIDE every cell at all times, even while
+  // editing. Editor floats absolutely over it. Two reasons:
+  //   1. Column width is set by table-auto layout based on each cell's
+  //      content. When the editor was rendered alone the cell briefly
+  //      reported the editor's intrinsic width (different from the text)
+  //      and the column shifted on every open/close. Keeping the text in
+  //      the flow (visibility:hidden) freezes the column at its read-state
+  //      width.
+  //   2. Empty rows had zero-height cells — nothing inside them. nbsp
+  //      placeholder gives the row a baseline line-height so a freshly
+  //      inserted blank row is the same height as the populated rows
+  //      around it.
+  const display = renderCell(value);
+  const placeholderText = display === "" ? " " : display;
   return (
     <td
       title={flagTitle || text}
       className={editable ? "dtable-editable" : ""}
+      style={{ position: "relative" }}
       onClick={startEdit}
     >
-      {editing ? (
-        <CellEditor
-          value={draft}
-          placeholder={text}
-          meta={meta}
-          onChange={onDraftChange}
-          onCommit={commit}
-          onCancel={cancel}
-        />
-      ) : (
-        <>{flagDot}{renderCell(value)}</>
+      <span
+        className="dtable-cell-text"
+        style={{
+          visibility: editing ? "hidden" : "visible",
+          display: "inline-block",
+          whiteSpace: "nowrap",
+          maxWidth: "100%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          verticalAlign: "middle",
+        }}
+      >
+        {flagDot}{placeholderText}
+      </span>
+      {editing && (
+        <span
+          className="dtable-cell-edit-overlay"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 4,
+            right: 4,
+            display: "flex",
+            alignItems: "stretch",
+          }}
+        >
+          <CellEditor
+            value={draft}
+            placeholder={text}
+            meta={meta}
+            onChange={onDraftChange}
+            onCommit={commit}
+            onCancel={cancel}
+          />
+        </span>
       )}
     </td>
   );
