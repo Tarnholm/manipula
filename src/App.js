@@ -1007,7 +1007,7 @@ export default function App() {
     if (newOnly.length === 0) return;
     persistUnits([...newOnly, ...units]);
     setStatus(`Auto-imported ${newOnly.length} unit${newOnly.length === 1 ? "" : "s"} from EDB — had recruit lines but no project entry.`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line
   }, [modIndex?.recruits]);
 
   const [diff, setDiff] = useState(null); // { added, removed, kept } | null
