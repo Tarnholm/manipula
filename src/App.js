@@ -578,6 +578,86 @@ export default function App() {
     return groups;
   }, [units]);
 
+  // Walk the parsed EDB recruit lines and auto-set u.aor.enabled +
+  // u.ai.enabled on every authored unit whose existing recruit clauses
+  // ALREADY look like an AOR pair / AI sibling. Saves the user from
+  // hand-checking each unit's editor — they import a 5000-line EDB and
+  // the toggles snap to the right state in one click.
+  //
+  // Detection rules:
+  //   - AOR-paired: the EDB has BOTH `recruit "X"` and `recruit "aor X"`
+  //     lines for unit X.
+  //   - AOR-only: the EDB has only `recruit "aor X"` lines.
+  //   - AI sibling: the EDB has lines with `not is_player` whose lowest
+  //     mic_tier differs from the lowest tier in the player lines.
+  //     (Same-tier player+AI lines = standard "not is_player" wrap, no
+  //     AI sibling needed.)
+  const detectAiAorPairing = useCallback(() => {
+    if (!modIndex.recruits) { toast("Load the mod files first.", "error"); return; }
+    // Index recruit lines by name for O(1) lookup. Captures both the
+    // bare and the aor-prefixed names.
+    const linesByName = new Map();
+    for (const r of modIndex.recruits) {
+      const list = linesByName.get(r.unit) || [];
+      list.push(r);
+      linesByName.set(r.unit, list);
+    }
+    const tierOf = (lvl) => {
+      const m = String(lvl || "").match(/^mic_(\d)$/);
+      return m ? parseInt(m[1], 10) : null;
+    };
+    let aorEnabled = 0, aorOnly = 0, aiEnabled = 0, untouched = 0;
+    const next = units.map((u) => {
+      const factional = linesByName.get(u.unit) || [];
+      const aor = linesByName.get("aor " + u.unit) || [];
+      const hasFactional = factional.some(e => /\bis_player\b/.test(e.requires) && !/\bnot is_player\b/.test(e.requires));
+      const hasAor = aor.length > 0;
+      const aiLines = factional.filter(e => /\bnot is_player\b/.test(e.requires));
+      const playerLines = factional.filter(e => /\bis_player\b/.test(e.requires) && !/\bnot is_player\b/.test(e.requires));
+      // AOR pairing.
+      let nextAor = u.aor;
+      if (hasAor && hasFactional) {
+        if (!u.aor || !u.aor.enabled) {
+          nextAor = { enabled: true, govTier: (u.aor && u.aor.govTier) || 1, aorOnly: false, recruitName: "aor " + u.unit };
+          aorEnabled++;
+        }
+      } else if (hasAor && !hasFactional) {
+        if (!u.aor || !u.aor.enabled || !u.aor.aorOnly) {
+          nextAor = { enabled: true, govTier: (u.aor && u.aor.govTier) || 1, aorOnly: true, recruitName: "aor " + u.unit };
+          aorOnly++;
+        }
+      }
+      // AI sibling.
+      let nextAi = u.ai;
+      if (aiLines.length && playerLines.length) {
+        const aiTiers = aiLines.map(e => tierOf(e.level)).filter(t => t != null);
+        const playerTiers = playerLines.map(e => tierOf(e.level)).filter(t => t != null);
+        if (aiTiers.length && playerTiers.length) {
+          const aiMin = Math.min(...aiTiers);
+          const playerMin = Math.min(...playerTiers);
+          if (aiMin !== playerMin) {
+            if (!u.ai || !u.ai.enabled || u.ai.canonicalMicTier !== aiMin) {
+              nextAi = { enabled: true, canonicalMicTier: aiMin };
+              aiEnabled++;
+            }
+          }
+        }
+      }
+      if (nextAor === u.aor && nextAi === u.ai) { untouched++; return u; }
+      return { ...u, aor: nextAor, ai: nextAi };
+    });
+    if (aorEnabled + aorOnly + aiEnabled === 0) {
+      toast("No new pairings detected — every unit already matches what's in the EDB.", "info");
+      return;
+    }
+    persistUnits(next);
+    toast(
+      `Detected: ${aorEnabled} AOR-paired, ${aorOnly} AOR-only, ${aiEnabled} AI sibling. ${untouched} unit${untouched === 1 ? "" : "s"} unchanged.`,
+      "success",
+      6000
+    );
+  }, [modIndex, units, persistUnits]);
+
   const mergeIdenticalVariants = useCallback(() => {
     const groups = findMergeCandidates();
     if (!groups.length) {
@@ -1526,6 +1606,7 @@ export default function App() {
         projectDirty={projectDirty}
         onShowShortcuts={() => setShortcutOpen(true)}
         onMergeIdenticalVariants={mergeIdenticalVariants}
+        onDetectAiAorPairing={detectAiAorPairing}
         unitsCount={units.length}
         units={units}
         theme={theme}
@@ -1852,7 +1933,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onMergeIdenticalVariants, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onMergeIdenticalVariants, onDetectAiAorPairing, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1911,6 +1992,13 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
           title="Find variants of the same unit that share every recruit-line setting except their faction list, and merge them into one entry with a unioned factions array. The user's rule: unless a unit has DIFFERENT recruitment requirements per faction, it should be one entry — splitting identical variants is noise."
           style={tbtn("#553")}
         >↻ Merge identical variants</button>
+      )}
+      {onDetectAiAorPairing && (
+        <button
+          onClick={onDetectAiAorPairing}
+          title={'Walk the parsed EDB recruit lines and auto-tick the "Pair with AOR variant" / "Pair with AI variant" toggles for every unit whose existing clauses already look like one. AOR-paired = both recruit "X" and recruit "aor X" exist. AI sibling = AI lines (not is_player) emit at a different mic_tier than the player lines.'}
+          style={tbtn("#553")}
+        >↻ Detect AI / AOR pairing</button>
       )}
       <span style={{ color: "#666", margin: "0 4px" }}>|</span>
       <button onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" style={tbtn("rgba(255,255,255,0.06)")}>↶</button>
