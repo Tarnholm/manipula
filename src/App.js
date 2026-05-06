@@ -979,6 +979,37 @@ export default function App() {
     setStatus(`Added ${newOnly.length} new authored entries from EDB.`);
   };
 
+  // Auto-reconcile: any EDB recruit-line whose unit has no project JSON
+  // gets one auto-created on load. The EDB is the in-game source of truth
+  // — if a unit has recruit lines there, the tool should treat it as
+  // "authored" without waiting for the user to remember to click Import
+  // new from EDB. Idempotent: re-running can't duplicate because we
+  // filter by existing unit names. Fires every time modIndex.recruits
+  // changes (initial mod load + manual Reload), so EDB edits made
+  // outside Manipula get picked up on the next refresh.
+  //
+  // The auto-imported entries land as reference-only (writeBack: false),
+  // matching the manual import flow — they won't get re-emitted on Write
+  // to EDB until the user opens them in the editor and flips writeBack.
+  const autoImportFiredRef = React.useRef(false);
+  useEffect(() => {
+    const recruits = modIndex && modIndex.recruits;
+    if (!recruits || recruits.length === 0) return;
+    // Wait one extra tick on the very first run so a project load
+    // happening in parallel can settle its `units` first; otherwise the
+    // race would have us "import" everything, then immediately get
+    // overwritten by the project's saved entries.
+    if (!autoImportFiredRef.current && projectDir && units.length === 0) return;
+    autoImportFiredRef.current = true;
+    const all = parseRecruitsFromEDB();
+    const existing = new Set(units.map(u => u.unit));
+    const newOnly = all.filter(u => !existing.has(u.unit));
+    if (newOnly.length === 0) return;
+    persistUnits([...newOnly, ...units]);
+    setStatus(`Auto-imported ${newOnly.length} unit${newOnly.length === 1 ? "" : "s"} from EDB — had recruit lines but no project entry.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modIndex?.recruits]);
+
   const [diff, setDiff] = useState(null); // { added, removed, kept } | null
   // Conflict resolver state — populated when previewWriteBack detects
   // that the on-disk EDB has changed since Manipula's last export.
