@@ -393,46 +393,43 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
         )}
       </Section>
 
-      {/* AI-SPECIFIC REQUIRES — only visible when an AI sibling is enabled */}
-      {u.ai && u.ai.enabled && (
-        <Section title="AI-only requires (apply only to the AI sibling's lines)">
-          <Picker
-            label="Hidden resources"
-            options={opts.hr}
-            value={parseExtras(u.aiRequires || []).hr}
-            onChange={(v) => {
-              const ar = parseExtras(u.aiRequires || []);
-              const merged = serializeExtras({ ...ar, hr: v });
-              set({ aiRequires: merged });
-            }}
-            placeholder="hidden_resource X — added to AI clauses only"
-          />
-          <Picker
-            label="Required regions"
-            options={opts.regions}
-            value={parseExtras(u.aiRequires || []).regions}
-            onChange={(v) => {
-              const ar = parseExtras(u.aiRequires || []);
-              const merged = serializeExtras({ ...ar, regions: v });
-              set({ aiRequires: merged });
-            }}
-            placeholder="region X — added to AI clauses only"
-          />
-          <Field label="Custom extras (one per line — verbatim)">
-            <textarea
-              value={(parseExtras(u.aiRequires || []).custom || []).join("\n")}
-              onChange={(e) => {
-                const ar = parseExtras(u.aiRequires || []);
-                const list = e.target.value.split("\n").map(s => s.trim()).filter(Boolean);
-                const merged = serializeExtras({ ...ar, custom: list });
-                set({ aiRequires: merged });
-              }}
-              style={{ ...input(420), height: 60, fontFamily: "Consolas, monospace", fontSize: 11 }}
-              placeholder="e.g. event_counter ai_buff_1 1"
+      {/* AI-SPECIFIC REQUIRES — only visible when an AI sibling is enabled.
+       * Mirrors the AOR-only requires structure right above so the user
+       * gets the same set of pickers (hidden_resource / not hidden_resource
+       * / custom extras) for AI-side clauses. */}
+      {u.ai && u.ai.enabled && (() => {
+        const aiR = parseExtras(u.aiRequires || []);
+        const updateAiRequires = (kind, list) => {
+          const merged = serializeExtras({ ...aiR, [kind]: list });
+          set({ aiRequires: merged });
+        };
+        return (
+          <Section title="AI-only requires (apply only to the AI sibling's lines)">
+            <Picker
+              label="Hidden resources"
+              options={opts.hiddenResources}
+              value={aiR.hidden_resource || []}
+              onChange={(v) => updateAiRequires("hidden_resource", v)}
+              placeholder="add hidden_resource (only on AI variant)"
             />
-          </Field>
-        </Section>
-      )}
+            <Picker
+              label="Excluded hidden_resources"
+              options={opts.hiddenResources}
+              value={aiR.not_hidden_resource || []}
+              onChange={(v) => updateAiRequires("not_hidden_resource", v)}
+              placeholder="add not hidden_resource"
+            />
+            <Field label="Custom extras (one per line — verbatim)">
+              <textarea
+                value={(aiR.custom || []).join("\n")}
+                onChange={(e) => updateAiRequires("custom", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
+                style={{ ...input(420), height: 60, fontFamily: "Consolas, monospace", fontSize: 11 }}
+                placeholder="e.g. event_counter ai_buff_1 1"
+              />
+            </Field>
+          </Section>
+        );
+      })()}
 
       {/* AI fine-tuning — bonus XP at higher tiers stays visible always */}
       <Section title="AI fine-tuning">
