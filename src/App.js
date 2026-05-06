@@ -507,6 +507,21 @@ export default function App() {
     if (selectedId === id) setSelectedId(null);
   };
 
+  // Mark / unmark a unit for removal. The next Write to EDB strips
+  // its existing recruit lines from the EDB AND skips emitting any
+  // new ones — see generator.js applyUnitsToEDB for the writeBack /
+  // pendingRemoval interaction. Once the write completes successfully,
+  // the unit is auto-deleted from the project (handled in
+  // previewWriteBack's success path).
+  const onMarkForRemoval = useCallback((id, mark = true) => {
+    persistUnits(units.map(u => u.id === id ? { ...u, pendingRemoval: !!mark } : u));
+  }, [units, persistUnits]);
+
+  // Sidebar view mode — split ref-only units off from the active editor
+  // pool so the writable list isn't cluttered. Persisted across launches.
+  const [sidebarMode, setSidebarMode] = useState(() => localStorage.getItem("rt:sidebarMode") || "edit");
+  useEffect(() => { localStorage.setItem("rt:sidebarMode", sidebarMode); }, [sidebarMode]);
+
   const onDuplicate = (id) => {
     const src = units.find(u => u.id === id);
     if (!src) return;
@@ -1260,6 +1275,16 @@ export default function App() {
         const { hashOfText } = await import("./projectStore");
         setProjectExports(e => ({ ...e, edb: { hashAtExport: hashOfText(out), exportedAt: new Date().toISOString() } }));
       } catch {}
+      // Auto-prune units that were marked for removal — their lines are
+      // now scrubbed from the EDB, so the project no longer needs to
+      // carry them. Hands the user a clean slate.
+      const pending = units.filter(u => u.pendingRemoval);
+      if (pending.length) {
+        const remaining = units.filter(u => !u.pendingRemoval);
+        if (selectedId && pending.some(u => u.id === selectedId)) setSelectedId(null);
+        persistUnits(remaining);
+        toast(`Removed ${pending.length} unit${pending.length === 1 ? "" : "s"} from the project (EDB lines stripped on this write).`, "success");
+      }
     }
     else setStatus("Write failed: " + r.reason);
     setDiff(null);
@@ -1602,6 +1627,9 @@ export default function App() {
                 onCreateFromEDU={onCreateFromEDU}
                 onReorder={onReorder}
                 onInsertNear={onInsertNear}
+                onMarkForRemoval={onMarkForRemoval}
+                viewMode={sidebarMode}
+                onViewModeChange={setSidebarMode}
                 modIndex={modIndex}
                 filter={listFilter}
                 onFilterChange={setListFilter}

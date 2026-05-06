@@ -311,7 +311,10 @@ export function renderAllPreview(units) {
 // Only units with writeBack !== false are written to / removed from the EDB. Imported reference
 // units (writeBack === false) are excluded — the tool ignores their existing EDB lines entirely.
 export function diffEDB(originalEDB, units) {
-  const writableUnits = units.filter(u => u.writeBack !== false);
+  // Mirror applyUnitsToEDB: pendingRemoval units are in scope (so the
+  // diff captures their existing lines as "to be removed"), even when
+  // they were previously ref-only.
+  const writableUnits = units.filter(u => u.writeBack !== false || u.pendingRemoval);
   const ownedUnits = new Set();
   for (const u of writableUnits) {
     if (!(u.aor && u.aor.enabled && u.aor.aorOnly)) ownedUnits.add(u.unit);
@@ -352,6 +355,7 @@ export function diffEDB(originalEDB, units) {
   const newLines = [];
   for (const u of writableUnits) {
     if (!u.enabled) continue;
+    if (u.pendingRemoval) continue;   // strip-only — emit nothing
     const player = generatePlayerLines(u);
     const aor = generateAORPlayerLines(u);
     const ai = generateAILines(u);
@@ -383,7 +387,11 @@ export function applyUnitsToEDB(originalEDB, units) {
   const useCRLF = /\r\n/.test(originalEDB) || !/\n/.test(originalEDB);
   const eol = useCRLF ? "\r\n" : "\n";
   const lines = originalEDB.split(/\r?\n/);
-  const writableUnits = units.filter(u => u.writeBack !== false);
+  // Units in the strip set: anything Manipula will rewrite this pass.
+  // Includes pendingRemoval units regardless of writeBack so their
+  // existing recruit lines are scrubbed from the EDB even when the
+  // unit was previously ref-only. Emit phase skips them (see below).
+  const writableUnits = units.filter(u => u.writeBack !== false || u.pendingRemoval);
   const ownedRecruitNames = new Set();
   for (const u of writableUnits) {
     if (!(u.aor && u.aor.enabled && u.aor.aorOnly)) ownedRecruitNames.add(u.unit);
@@ -598,6 +606,10 @@ export function applyUnitsToEDB(originalEDB, units) {
   const bucketSeen = new Map();
   for (const u of writableDedup) {
     if (!u.enabled) continue;
+    // pendingRemoval units are included in writableUnits so their
+    // existing lines get stripped above, but we deliberately emit
+    // nothing here — they're being removed from the EDB.
+    if (u.pendingRemoval) continue;
     const all = [...generatePlayerLines(u), ...generateAORPlayerLines(u), ...generateAILines(u)];
     const newBucket = bucketOf(u);
     const newTier = u.canonicalMicTier ?? u.minTier ?? 1;
@@ -682,7 +694,9 @@ export { GRADE_DEFAULTS };
 // expected (building, level). Catches anchor-heuristic drift and silent corruption that
 // the diff modal wouldn't otherwise surface.
 export function verifyRoundTrip(newEdbText, units) {
-  const writableUnits = units.filter(u => u.writeBack !== false && u.enabled);
+  // pendingRemoval units emit nothing, so they don't show up in the
+  // expected set — same as ref-only or disabled.
+  const writableUnits = units.filter(u => u.writeBack !== false && u.enabled && !u.pendingRemoval);
   const expected = []; // { unit, building, level }
   for (const u of writableUnits) {
     for (const ln of [...generatePlayerLines(u), ...generateAORPlayerLines(u), ...generateAILines(u)]) {

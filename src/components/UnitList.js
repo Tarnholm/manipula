@@ -8,7 +8,7 @@ const GRADE_ORDER = { Levy: 1, Standard: 2, Professional: 3, Elite: 4, Veteran: 
 // Map role string → bucket number (mirrors generator.js bucketOf, derived from ROSTER_ROLES).
 const BUCKET_OF_ROLE = Object.fromEntries(ROSTER_ROLES.map((r, i) => [r, i + 1]));
 
-export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, modIndex, filter, onFilterChange, eduProject }) {
+export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
   // Build a Map of unit name → EDU row, so the badge can show a stat-preview tooltip.
   const eduMap = useMemo(() => {
     if (!eduProject || !Array.isArray(eduProject.units)) return null;
@@ -165,6 +165,12 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
       if (isNonRecruitable(u)) return false;
       const eduEntry = modIndex.eduByType ? modIndex.eduByType.get(u.unit) : null;
       if (eduEntry && isNonRecruitable(eduEntry)) return false;
+      // Sidebar view mode: "edit" = writable + pending-removal only,
+      // "ref" = ref-only units (writeBack === false), "all" = no filter.
+      // Pending-removal stays visible in edit so the user can spot
+      // items queued for deletion.
+      if (viewMode === "edit" && u.writeBack === false && !u.pendingRemoval) return false;
+      if (viewMode === "ref" && u.writeBack !== false) return false;
       if (ql && !matchesUnitText(u, ql)) return false;
       if (filterMode === "faction" && filterValue) {
         if (!(u.factions || []).includes(filterValue)) return false;
@@ -198,7 +204,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
     });
     return list;
     // eslint-disable-next-line
-  }, [units, q, filterMode, filterValue, modIndex]);
+  }, [units, q, filterMode, filterValue, modIndex, viewMode]);
 
   // Group same-name units into one card. Per the user's "these 3 should
   // all be in 1 card" feedback — five identically-named Lyttian Archers
@@ -252,6 +258,41 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
         {selectedIds.size > 1 && (
           <div style={{ marginBottom: 8, padding: "4px 8px", background: "rgba(220,166,74,0.15)", borderRadius: 4, fontSize: 11, color: "#dca64a", fontWeight: 600 }}>
             {selectedIds.size} units selected — bulk-edit pane is active
+          </div>
+        )}
+        {onViewModeChange && (() => {
+          // View-mode pills. Counts let the user see the split between
+          // "actively authored" (Editor) and "imported, hands-off"
+          // (Reference) without flipping each toggle to find out.
+          const editCount = units.filter(u => !isNonRecruitable(u) && u.writeBack !== false).length;
+          const refCount  = units.filter(u => !isNonRecruitable(u) && u.writeBack === false).length;
+          const totalCount = editCount + refCount;
+          const pendingCount = units.filter(u => u.pendingRemoval).length;
+          const pill = (mode, label, count, tip) => (
+            <button
+              key={mode}
+              onClick={() => onViewModeChange(mode)}
+              title={tip}
+              style={{
+                flex: 1, padding: "5px 4px", fontSize: 11, fontWeight: 600,
+                background: viewMode === mode ? "#dca64a" : "rgba(255,255,255,0.05)",
+                color: viewMode === mode ? "#1a1a1a" : "#bbb",
+                border: "1px solid " + (viewMode === mode ? "rgba(220,166,74,0.6)" : "rgba(255,255,255,0.08)"),
+                borderRadius: 4, cursor: "pointer",
+              }}
+            >{label} <span style={{ opacity: 0.7 }}>· {count}</span></button>
+          );
+          return (
+            <div style={{ display: "flex", gap: 3, marginBottom: 8 }}>
+              {pill("edit", "Editor", editCount, "Units you actively author (writeBack:true). Pending-removal units stay visible here so you can see what's queued for the next Write to EDB.")}
+              {pill("ref",  "Ref-only", refCount, "Reference-only units (writeBack:false). Manipula doesn't write recruit lines for these — typically xlsm imports.")}
+              {pill("all",  "All", totalCount, "Show every recruitable unit regardless of writeBack flag.")}
+            </div>
+          );
+        })()}
+        {(units.filter(u => u.pendingRemoval).length > 0) && (
+          <div style={{ marginBottom: 8, padding: "4px 8px", background: "rgba(214,108,108,0.12)", border: "1px solid rgba(214,108,108,0.4)", borderRadius: 4, fontSize: 11, color: "#e88", fontWeight: 600 }}>
+            🗑 {units.filter(u => u.pendingRemoval).length} pending removal · Write to EDB strips them
           </div>
         )}
         <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
@@ -438,6 +479,9 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                       <span title={tip ? `EDU stats — ${tip}` : "Has matching row in the loaded EDU project"} style={{ background: "rgba(220,166,74,0.15)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.3)", fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>EDU ✓</span>
                     );
                   })()}
+                  {variants.some(v => v.pendingRemoval) && (
+                    <span title="Marked for removal — Write to EDB strips this unit's recruit lines and deletes it from the project." style={{ background: "rgba(214,108,108,0.18)", color: "#e88", border: "1px solid rgba(214,108,108,0.45)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>🗑 REMOVING</span>
+                  )}
                 </div>
                 {/* One row per variant — its own kind (FACTIONAL / AOR),
                  *  WRITE/REF status, tier, and faction list. The user
@@ -598,7 +642,11 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
               }
             },
             { label: "Copy unit name", onClick: () => navigator.clipboard?.writeText(ctxMenu.unit.unit) },
-            { label: "Delete…", onClick: () => window.confirm(`Delete "${ctxMenu.unit.unit}"?`) && onDelete(ctxMenu.unit.id), color: "#e88" },
+            onMarkForRemoval && (ctxMenu.unit.pendingRemoval
+              ? { label: "Cancel removal", onClick: () => onMarkForRemoval(ctxMenu.unit.id, false), color: "#dca64a" }
+              : { label: "Mark for removal (strips EDB lines on next write)", onClick: () => onMarkForRemoval(ctxMenu.unit.id, true), color: "#e88" }
+            ),
+            { label: "Delete now (leaves stale EDB lines)", onClick: () => window.confirm(`Delete "${ctxMenu.unit.unit}"?\n\nThis removes the unit from the project IMMEDIATELY but leaves any existing recruit lines in the EDB. Use "Mark for removal" if you want them stripped on next Write to EDB.`) && onDelete(ctxMenu.unit.id), color: "#e88" },
           ].filter(Boolean).map((it, i) => (
             <div key={i}
               onClick={() => { it.onClick(); setCtxMenu(null); }}
