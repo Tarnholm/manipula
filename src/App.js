@@ -979,34 +979,60 @@ export default function App() {
     setStatus(`Added ${newOnly.length} new authored entries from EDB.`);
   };
 
-  // Auto-reconcile: any EDB recruit-line whose unit has no project JSON
-  // gets one auto-created on load. The EDB is the in-game source of truth
-  // — if a unit has recruit lines there, the tool should treat it as
-  // "authored" without waiting for the user to remember to click Import
-  // new from EDB. Idempotent: re-running can't duplicate because we
-  // filter by existing unit names. Fires every time modIndex.recruits
-  // changes (initial mod load + manual Reload), so EDB edits made
-  // outside Manipula get picked up on the next refresh.
+  // Auto-reconcile project entries against the live EDB on load. The EDB
+  // is the in-game source of truth, so reference-only project entries
+  // (writeBack: false) are always re-derived from the current EDB. This
+  // catches both:
+  //   • new recruit lines added since the last load (creates entries)
+  //   • factions / tier / requires changed since the last load (refreshes
+  //     the stale entry to match what's actually in the EDB now)
+  // and silently dedupes stale duplicate variants that arose from earlier
+  // parser revisions (a unit that appears N times in `units` because old
+  // imports split it into N variants gets collapsed into the count of
+  // variants the current EDB actually has).
   //
-  // The auto-imported entries land as reference-only (writeBack: false),
-  // matching the manual import flow — they won't get re-emitted on Write
-  // to EDB until the user opens them in the editor and flips writeBack.
+  // writeBack: true entries are sacrosanct — those are units the user is
+  // actively authoring through Manipula's editor, and Write to EDB will
+  // regenerate the EDB lines from them. Refreshing them from EDB would
+  // overwrite the user's in-progress edits. Leave them alone.
+  //
+  // Fires every time modIndex.recruits changes (initial mod load + manual
+  // Reload), so any EDB edit made outside Manipula gets reflected on the
+  // next refresh.
   const autoImportFiredRef = React.useRef(false);
   useEffect(() => {
     const recruits = modIndex && modIndex.recruits;
     if (!recruits || recruits.length === 0) return;
     // Wait one extra tick on the very first run so a project load
     // happening in parallel can settle its `units` first; otherwise the
-    // race would have us "import" everything, then immediately get
-    // overwritten by the project's saved entries.
+    // race would have us refresh everything against an empty `units` and
+    // immediately get overwritten by the project's saved entries.
     if (!autoImportFiredRef.current && projectDir && units.length === 0) return;
     autoImportFiredRef.current = true;
-    const all = parseRecruitsFromEDB();
-    const existing = new Set(units.map(u => u.unit));
-    const newOnly = all.filter(u => !existing.has(u.unit));
-    if (newOnly.length === 0) return;
-    persistUnits([...newOnly, ...units]);
-    setStatus(`Auto-imported ${newOnly.length} unit${newOnly.length === 1 ? "" : "s"} from EDB — had recruit lines but no project entry.`);
+    const fresh = parseRecruitsFromEDB();
+    // Keep every writeBack: true entry verbatim (active authoring).
+    const writable = units.filter(u => u.writeBack);
+    const writableNames = new Set(writable.map(u => u.unit));
+    // Refresh ref-only entries from the EDB. parseRecruitsFromEDB returns
+    // entries already with writeBack: false, so this is a clean swap.
+    const refreshed = fresh.filter(u => !writableNames.has(u.unit));
+    const next = [...writable, ...refreshed];
+    // Idempotency check — only fire setUnits when something actually
+    // differs, so a clean reload doesn't mark the project dirty for no
+    // reason. Compare a normalized signature: unit name + a few key
+    // fields. If those are stable, treat as unchanged.
+    const sig = (arr) => arr
+      .map(u => `${u.unit}|${(u.factions || []).join(",")}|${(u.excludeFactions || []).join(",")}|${u.canonicalMicTier ?? ""}|${u.writeBack ? 1 : 0}`)
+      .sort()
+      .join("\n");
+    if (sig(next) === sig(units)) return;
+    const created = refreshed.filter(r => !units.some(u => u.unit === r.unit));
+    const updated = refreshed.length - created.length;
+    persistUnits(next);
+    const parts = [];
+    if (created.length) parts.push(`${created.length} new`);
+    if (updated) parts.push(`${updated} refreshed`);
+    setStatus(`Reconciled with EDB — ${parts.join(", ")} (writable entries preserved).`);
     // eslint-disable-next-line
   }, [modIndex?.recruits]);
 
