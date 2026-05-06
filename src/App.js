@@ -1015,7 +1015,29 @@ export default function App() {
     const writableNames = new Set(writable.map(u => u.unit));
     // Refresh ref-only entries from the EDB. parseRecruitsFromEDB returns
     // entries already with writeBack: false, so this is a clean swap.
-    const refreshed = fresh.filter(u => !writableNames.has(u.unit));
+    let refreshed = fresh.filter(u => !writableNames.has(u.unit));
+    // Enrich qualityClass from the EDU project's "Quality" column when
+    // we have an eduProject loaded. parseRecruitsFromEDB only sees recruit
+    // lines, which carry no quality info — without this lookup every
+    // refreshed entry comes back with qualityClass=null and the editor
+    // shows "— none —" even when EDUMatic has a perfectly good value.
+    const eduByUnitId = (eduProject && Array.isArray(eduProject.units))
+      ? new Map(eduProject.units
+          .filter(eu => eu && (eu["unit id"] || eu.name))
+          .map(eu => [String(eu["unit id"] || eu.name).trim(), eu]))
+      : null;
+    if (eduByUnitId) {
+      refreshed = refreshed.map(u => {
+        // Match factional name and AOR-prefixed siblings to the same EDU row
+        // (the EDU only has one entry per unit; AOR siblings share it).
+        const lookupName = String(u.unit || "").replace(/^aor\s+/i, "").trim();
+        const eu = eduByUnitId.get(lookupName);
+        if (!eu) return u;
+        const q = eu.Quality || eu.quality;
+        if (!q || u.qualityClass === q) return u;
+        return { ...u, qualityClass: q };
+      });
+    }
     const next = [...writable, ...refreshed];
     // Idempotency check — only fire setUnits when something actually
     // differs, so a clean reload doesn't mark the project dirty for no

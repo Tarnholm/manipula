@@ -5,11 +5,10 @@ import EDBOccurrences from "./EDBOccurrences";
 import FactionIcon from "./FactionIcon";
 import RegionMap from "./RegionMap";
 import { renderUnitPreview, generatePlayerLines, generateAORPlayerLines, generateAILines } from "../generator";
-import { GRADE_DEFAULTS, GRADES } from "../grades";
 import { QUALITY_CLASSES, findQualityClass } from "../qualityClasses";
 
 // Unit family editor — grade-driven authoring.
-// Layout: Identity → Grade → Player section → AOR sibling → AI section → Common requires → Stats + Preview.
+// Layout: Identity → Quality Class → Player section → AOR sibling → AI section → Common requires → Stats + Preview.
 export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilterFaction, onSelectUnit, onShowVariantDiff, eduProject, onJumpToEdu, onCreateEduStub }) {
   const opts = useMemo(() => buildOptions(modIndex), [modIndex]);
 
@@ -49,21 +48,6 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
 
   const u = unit;
   const set = (patch) => onChange({ ...u, ...patch });
-
-  // Apply grade defaults to a unit, but only the fields the user hasn't explicitly overridden.
-  const applyGrade = (newGrade) => {
-    const def = GRADE_DEFAULTS[newGrade] || GRADE_DEFAULTS.Standard;
-    onChange({
-      ...u,
-      grade: newGrade,
-      canonicalMicTier: def.canonicalMicTier,
-      homelandMicTier: def.homelandMicTier,
-      colonyTier: def.colonyTier,
-      emitGovB: def.emitGovB,
-      emitGovC: def.emitGovC,
-      emitGovD: def.emitGovD,
-    });
-  };
 
   const ex = parseExtras(u.outsideExtras || []);
   const updateOutsideExtras = (kind, list) => {
@@ -107,7 +91,7 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
               <button
                 key={s.id}
                 onClick={() => { if (!active && onSelectUnit) onSelectUnit(s.id); }}
-                title={`${tabKind} — ${facLabel}\nGrade: ${s.grade || "?"} · t${s.canonicalMicTier ?? s.minTier ?? "?"}\n${s.writeBack === false ? "REF ONLY" : "WRITE"}`}
+                title={`${tabKind} — ${facLabel}\n${s.qualityClass || "(no QC)"} · t${s.canonicalMicTier ?? s.minTier ?? "?"}\n${s.writeBack === false ? "REF ONLY" : "WRITE"}`}
                 style={{
                   background: active ? "rgba(220,166,74,0.22)" : "rgba(255,255,255,0.04)",
                   color: active ? "#dca64a" : "#aaa",
@@ -188,38 +172,37 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
         )}
       </Section>
 
-      {/* GRADE + QUALITY CLASS */}
-      <Section title="Grade & Quality Class">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <Field label="Grade (Class column in EDUMatic)">
-            <select value={u.grade || "Standard"} onChange={(e) => applyGrade(e.target.value)} style={input("100%")}>
-              {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
-            </select>
-          </Field>
-          <Field label="Quality Class (EDUMatic detail)">
-            <select
-              value={u.qualityClass || ""}
-              onChange={(e) => {
-                const v = e.target.value;
-                const q = findQualityClass(v);
-                // If the user picks a Quality Class, suggest tier from its hint — but only update tier if the
-                // user hasn't already overridden (we apply naively here; they can re-edit if needed).
-                if (q) {
-                  set({ qualityClass: v, canonicalMicTier: q.tierHint, homelandMicTier: q.tierHint });
-                } else {
-                  set({ qualityClass: v });
-                }
-              }}
-              style={input("100%")}
-            >
-              <option value="">— none —</option>
-              {QUALITY_CLASSES.map(q => <option key={q.id} value={q.id}>{q.id}</option>)}
-            </select>
-          </Field>
-        </div>
-        <GradeChips current={u.grade || "Standard"} qualityClass={u.qualityClass} />
+      {/* QUALITY CLASS — Grade was removed; EDUMatic's Quality column is the
+          single class field. Tier hint from the picked QC pre-fills the
+          mic_tier dials below (still overridable per-unit). */}
+      <Section title="Quality Class">
+        <Field label="Quality Class (from EDUMatic)">
+          <select
+            value={u.qualityClass || ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              const q = findQualityClass(v);
+              if (q) {
+                set({ qualityClass: v, canonicalMicTier: q.tierHint, homelandMicTier: q.tierHint });
+              } else {
+                set({ qualityClass: v });
+              }
+            }}
+            style={input("100%")}
+          >
+            <option value="">— none —</option>
+            {QUALITY_CLASSES.map(q => <option key={q.id} value={q.id}>{q.id}</option>)}
+          </select>
+        </Field>
+        {u.qualityClass && findQualityClass(u.qualityClass) && (
+          <div style={{ display: "flex", gap: 6, marginTop: 6, fontSize: 11, color: "#999", flexWrap: "wrap" }}>
+            <span style={{ padding: "2px 8px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10 }}>
+              {findQualityClass(u.qualityClass).role} · tier hint {findQualityClass(u.qualityClass).tierHint}
+            </span>
+          </div>
+        )}
         <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>
-          Picking a grade fills in defaults; picking a Quality Class also suggests the tier hint. Both are overridable.
+          Auto-populated from the EDU project's Quality column. Picking one suggests the canonical/homeland mic_tier — still overridable below.
         </div>
       </Section>
 
@@ -635,21 +618,6 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
     </div>
   );
 }
-
-function GradeChips({ current, qualityClass }) {
-  const def = GRADE_DEFAULTS[current] || GRADE_DEFAULTS.Standard;
-  const q = findQualityClass(qualityClass);
-  return (
-    <div style={{ display: "flex", gap: 6, marginTop: 6, fontSize: 11, color: "#999", flexWrap: "wrap" }}>
-      <Chip>canonical mic_tier {def.canonicalMicTier}</Chip>
-      <Chip>homeland mic_tier {def.homelandMicTier}</Chip>
-      <Chip>colony tier {def.colonyTier || "none"}</Chip>
-      <Chip>{def.emitGovB && def.emitGovC && def.emitGovD ? "GovB+C+D" : (def.emitGovC && def.emitGovD ? "GovC+D only" : "custom")}</Chip>
-      {q && <Chip>{q.role} · QC tier hint {q.tierHint}</Chip>}
-    </div>
-  );
-}
-const Chip = ({ children }) => <span style={{ padding: "2px 8px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10 }}>{children}</span>;
 
 function Section({ title, children }) {
   // Per-section collapse state, keyed by title and persisted across launches. Lets the
