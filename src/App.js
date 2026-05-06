@@ -2530,10 +2530,17 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
     const reposition = () => {
       if (!btnRef.current) return;
       const r = btnRef.current.getBoundingClientRect();
-      // Anchor to the right edge of the button so the popover never
-      // pokes outside the right side of the window. Width 320 is fixed
-      // below in the popover style.
-      setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+      // Default: right-align with the button (so the popover doesn't poke
+      // out past the right edge). Width 320 is fixed below in the style.
+      // Then clamp left so the popover never spills past either window
+      // edge — needed because the Sync button can sit close to the left
+      // when the topbar wraps onto a narrow window.
+      const POP_WIDTH = 320;
+      const MARGIN = 8;
+      const desiredLeft = r.right - POP_WIDTH;
+      const maxLeft = Math.max(MARGIN, window.innerWidth - POP_WIDTH - MARGIN);
+      const left = Math.max(MARGIN, Math.min(desiredLeft, maxLeft));
+      setPos({ top: r.bottom + 6, left });
     };
     reposition();
     const onDocMouseDown = (e) => {
@@ -2612,7 +2619,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
         <div
           data-sync-popover
           style={{
-            position: "fixed", top: pos.top, right: pos.right,
+            position: "fixed", top: pos.top, left: pos.left,
             background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 8,
             padding: 14, width: 320, zIndex: 10000,
             fontFamily: "Consolas, monospace", fontSize: 12, color: "#bbb",
