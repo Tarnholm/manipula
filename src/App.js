@@ -522,6 +522,83 @@ export default function App() {
   const [sidebarMode, setSidebarMode] = useState(() => localStorage.getItem("rt:sidebarMode") || "edit");
   useEffect(() => { localStorage.setItem("rt:sidebarMode", sidebarMode); }, [sidebarMode]);
 
+  // Merge variants of the same unit that share every recruit-line-
+  // affecting field except their faction list. Per the user's rule:
+  // unless a unit has DIFFERENT recruitment requirements per faction,
+  // it should be one entry with a unioned faction list — splitting
+  // identical variants is just noise. Returns a list of merge groups
+  // ready to confirm + apply.
+  const findMergeCandidates = useCallback((arr = units) => {
+    // Fields that are identity / cosmetic / per-instance and should
+    // NOT count as differences when comparing variants. `factions` and
+    // `excludeFactions` are the explicit merge axis.
+    const OMIT = new Set([
+      "id", "unit", "factions", "excludeFactions",
+      "notes", "manualOrder", "pendingRemoval",
+    ]);
+    const recruitSig = (u) => {
+      const keys = Object.keys(u).filter((k) => !OMIT.has(k)).sort();
+      const out = {};
+      for (const k of keys) out[k] = u[k];
+      return JSON.stringify(out);
+    };
+    const buckets = new Map();   // `${unit}|${sig}` → unit[]
+    for (const u of arr) {
+      if (!u || typeof u !== "object") continue;
+      const key = String(u.unit || "") + "|" + recruitSig(u);
+      const list = buckets.get(key);
+      if (list) list.push(u); else buckets.set(key, [u]);
+    }
+    const groups = [];
+    for (const list of buckets.values()) {
+      if (list.length > 1) groups.push(list);
+    }
+    return groups;
+  }, [units]);
+
+  const mergeIdenticalVariants = useCallback(() => {
+    const groups = findMergeCandidates();
+    if (!groups.length) {
+      toast("No merge candidates — every variant already differs in something more than its faction list.", "info");
+      return;
+    }
+    const totalIn = groups.reduce((n, g) => n + g.length, 0);
+    const willCollapse = totalIn - groups.length;
+    const ok = window.confirm(
+      `Found ${groups.length} unit${groups.length === 1 ? "" : "s"} with ${totalIn} variants that share every recruit-line setting except their faction list.\n\n` +
+      `Merge them? ${willCollapse} variant${willCollapse === 1 ? "" : "s"} will be collapsed into ${groups.length} (the faction lists are unioned, all other settings are kept).\n\n` +
+      `This is recoverable via Ctrl+Z.`
+    );
+    if (!ok) return;
+    // Build the new units array. For each merge group: keep the first
+    // entry, union the factions, drop the others. Preserve original
+    // order so the sidebar doesn't shuffle.
+    const drop = new Set();
+    const update = new Map();   // id → patched unit
+    for (const list of groups) {
+      const keeper = list[0];
+      const factions = new Set(keeper.factions || []);
+      const excludeFactions = new Set(keeper.excludeFactions || []);
+      for (let i = 1; i < list.length; i++) {
+        for (const f of (list[i].factions || [])) factions.add(f);
+        for (const f of (list[i].excludeFactions || [])) excludeFactions.add(f);
+        drop.add(list[i].id);
+      }
+      update.set(keeper.id, {
+        ...keeper,
+        factions: [...factions],
+        excludeFactions: [...excludeFactions],
+      });
+    }
+    const next = [];
+    for (const u of units) {
+      if (drop.has(u.id)) continue;
+      next.push(update.get(u.id) || u);
+    }
+    persistUnits(next);
+    toast(`Merged ${willCollapse} variant${willCollapse === 1 ? "" : "s"} into ${groups.length} unit${groups.length === 1 ? "" : "s"}. Faction lists unioned.`, "success");
+  }, [findMergeCandidates, units, persistUnits]);
+
   const onDuplicate = (id) => {
     const src = units.find(u => u.id === id);
     if (!src) return;
@@ -1426,6 +1503,7 @@ export default function App() {
         projectDir={projectDir}
         projectDirty={projectDirty}
         onShowShortcuts={() => setShortcutOpen(true)}
+        onMergeIdenticalVariants={mergeIdenticalVariants}
         unitsCount={units.length}
         units={units}
         theme={theme}
@@ -1748,7 +1826,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onMergeIdenticalVariants, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -1801,6 +1879,13 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
         title="Set every imported unit to reference-only (writeBack: false). Manually authored units are untouched."
         style={tbtn("#553")}
       >Imports → reference</button>
+      {onMergeIdenticalVariants && (
+        <button
+          onClick={onMergeIdenticalVariants}
+          title="Find variants of the same unit that share every recruit-line setting except their faction list, and merge them into one entry with a unioned factions array. The user's rule: unless a unit has DIFFERENT recruitment requirements per faction, it should be one entry — splitting identical variants is noise."
+          style={tbtn("#553")}
+        >↻ Merge identical variants</button>
+      )}
       <span style={{ color: "#666", margin: "0 4px" }}>|</span>
       <button onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" style={tbtn("rgba(255,255,255,0.06)")}>↶</button>
       <button onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" style={tbtn("rgba(255,255,255,0.06)")}>↷</button>
