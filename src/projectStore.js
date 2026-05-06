@@ -130,13 +130,24 @@ async function saveProject(dir, bundle) {
   pruneSubdirs.push("edu/coreData");
 
   // 4) factions, units, armour — one file per record (array → keyed files).
+  // Re-stamp `row` on each EDU unit / armour entry to its current array
+  // position before writing. The xlsm import seeds `row` to the source
+  // sheet's row number, but drag-reorder / row-up-down / insert-blank
+  // operations only re-splice the array — they don't touch `row`. Once
+  // written and reloaded, files come back filename-alphabetical and
+  // we sort by `row` to restore order. So `row` MUST reflect the
+  // current array position by the time we save, otherwise the user's
+  // reorder is lost on load.
+  const restamp = (arr) => arr.map((rec, i) => (rec && typeof rec === "object") ? { ...rec, row: i } : rec);
+  const eduUnitsToWrite = restamp(project.units || []);
+  const eduArmourToWrite = restamp(project.armour || []);
   collectArray(writes, "edu/factions", project.factions || [], "faction");
   pruneSubdirs.push("edu/factions");
 
-  collectArray(writes, "edu/units", project.units || [], "unit");
+  collectArray(writes, "edu/units", eduUnitsToWrite, "unit");
   pruneSubdirs.push("edu/units");
 
-  collectArray(writes, "edu/armour", project.armour || [], "armour");
+  collectArray(writes, "edu/armour", eduArmourToWrite, "armour");
   pruneSubdirs.push("edu/armour");
 
   // 5) recruit-line authoring (EDB side).
@@ -260,6 +271,20 @@ async function loadProject(dir) {
   project.factions = parseArrayFromIndex(indexed, "edu/factions");
   project.units    = parseArrayFromIndex(indexed, "edu/units");
   project.armour   = parseArrayFromIndex(indexed, "edu/armour");
+  // Restore EDU project ordering. Each unit / armour record carries
+  // a `row` field captured at xlsm import (and updated on row-move
+  // operations). saveProject writes one JSON file per record and the
+  // IPC list returns them filename-alphabetical, which scrambled the
+  // user's authored order on every load. Sort by `row` ascending,
+  // preserving the original sequence the user dragged into place.
+  // Falls back to filename-alphabetical for records without `row`.
+  const sortByRow = (arr) => arr.sort((a, b) => {
+    const ra = (typeof a?.row === "number") ? a.row : Infinity;
+    const rb = (typeof b?.row === "number") ? b.row : Infinity;
+    return ra - rb;
+  });
+  sortByRow(project.units);
+  sortByRow(project.armour);
 
   const outputRaw = pickFile(indexed, "edu", "outputRows.json")
     ?? (allFiles ? null : await api.readProjectFile(dir, "edu/outputRows.json"));
