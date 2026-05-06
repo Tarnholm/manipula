@@ -266,6 +266,20 @@ async function loadProject(dir) {
   project.outputRows = outputRaw ? JSON.parse(outputRaw) : null;
 
   const units = parseArrayFromIndex(indexed, "recruits");
+  // Restore manualOrder ranking. saveProject writes one file per unit
+  // and IPC returns them sorted alphabetically by filename — so without
+  // this step, loading a project pushes the user's drag-reordered
+  // sidebar back to alphabetical. Sort by manualOrder when ANY unit
+  // carries it; otherwise preserve the alphabetical order (still
+  // deterministic, matches the v0.30 default).
+  if (units.some(u => typeof u.manualOrder === "number")) {
+    units.sort((a, b) => {
+      const ma = (typeof a.manualOrder === "number") ? a.manualOrder : Infinity;
+      const mb = (typeof b.manualOrder === "number") ? b.manualOrder : Infinity;
+      if (ma !== mb) return ma - mb;
+      return String(a.unit || "").localeCompare(String(b.unit || ""));
+    });
+  }
 
   return { meta, eduProject: project, units, exports: meta.exports || {} };
 }

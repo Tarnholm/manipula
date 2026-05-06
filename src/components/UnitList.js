@@ -52,10 +52,24 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
   const [q, setQ] = useState("");
   const searchRef = React.useRef(null);
   const scrollRef = React.useRef(null);
-  // Compact mode toggle — when on, rows shrink to ~40px (no portrait, just name + tier).
-  // Useful for scrolling 4000-unit profiles. Persisted across launches.
-  const [compact, setCompact] = useState(() => localStorage.getItem("rt:compactList") === "1");
-  useEffect(() => { localStorage.setItem("rt:compactList", compact ? "1" : "0"); }, [compact]);
+  // Sidebar density — three states cycled by the ≡ button:
+  //   "comfortable": full card, portrait, every variant gets its own row.
+  //   "compact":     tight rows, no portrait, no per-variant breakdown.
+  //   "unitsOnly":   one card per unit name. Hides every variant row
+  //                  AND the badge strip — just name + × N tag. The
+  //                  user asked for a way to see ONLY units, not
+  //                  recruitment variants of any sort.
+  const [density, setDensity] = useState(() => {
+    const v = localStorage.getItem("rt:listDensity");
+    if (v === "comfortable" || v === "compact" || v === "unitsOnly") return v;
+    // Migrate the legacy boolean compact flag.
+    return localStorage.getItem("rt:compactList") === "1" ? "compact" : "comfortable";
+  });
+  useEffect(() => { localStorage.setItem("rt:listDensity", density); }, [density]);
+  const compact = density === "compact" || density === "unitsOnly";
+  const unitsOnly = density === "unitsOnly";
+  const cycleDensity = () => setDensity(d => d === "comfortable" ? "compact" : d === "compact" ? "unitsOnly" : "comfortable");
+  const densityLabel = density === "comfortable" ? "Comfortable" : density === "compact" ? "Compact" : "Units only";
   // Drag-and-drop reorder state. dragGroupIdx is the visible-group index
   // currently being dragged; dropTargetIdx is the visible-group index
   // hovered over (with side="above"/"below" determining where the item
@@ -326,10 +340,10 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             style={btn("#733", !selectedId)}
           >Delete</button>
           <button
-            onClick={() => setCompact(c => !c)}
-            title={compact ? "Switch to comfortable list" : "Switch to compact list"}
-            style={{ background: compact ? "#dca64a" : "rgba(255,255,255,0.08)", color: compact ? "#1a1a1a" : "#bbb", border: "none", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-          >≡</button>
+            onClick={cycleDensity}
+            title={`Density: ${densityLabel} — click to cycle (Comfortable → Compact → Units only)`}
+            style={{ background: density === "comfortable" ? "rgba(255,255,255,0.08)" : "#dca64a", color: density === "comfortable" ? "#bbb" : "#1a1a1a", border: "none", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", minWidth: 28 }}
+          >{density === "unitsOnly" ? "○" : density === "compact" ? "≡" : "▤"}</button>
         </div>
         <input
           ref={searchRef}
@@ -504,8 +518,10 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                 {/* One row per variant — its own kind (FACTIONAL / AOR),
                  *  WRITE/REF status, tier, and faction list. The user
                  *  asked to see all variants individually inside the
-                 *  same card instead of one collapsed summary. */}
-                {!compact && variants.map((v, vIdx) => {
+                 *  same card instead of one collapsed summary.
+                 *  Skipped in compact + unitsOnly densities — those
+                 *  modes deliberately hide per-variant detail. */}
+                {!compact && !unitsOnly && variants.map((v, vIdx) => {
                   const vIsAor = !!(v.aor && v.aor.enabled);
                   const vWrites = v.writeBack !== false;
                   const vSel = v.id === selectedId;
