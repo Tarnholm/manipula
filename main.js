@@ -1398,7 +1398,27 @@ ipcMain.handle("git-status", async (_e, dir) => {
   };
 });
 
-ipcMain.handle("git-pull", async (_e, dir) => runGit(dir, ["pull", "--ff-only"]));
+// git-pull — rebase strategy. Manipula's per-file JSON layout makes
+// rebase succeed silently in the >99% case: different files don't
+// conflict at all, and same-file edits to different keys auto-merge.
+// On the rare real conflict (two teammates editing the same field of
+// the same record between syncs), the rebase aborts mid-flight and
+// would leave the working tree in a half-rebased state — so we run
+// `git rebase --abort` to clean up and surface the original error to
+// the user, who can then resolve in their tool of choice. Switching
+// from --ff-only means Pull works through Manipula even when the
+// teammate has local commits AND the remote has new ones — the case
+// that previously forced them to a terminal.
+ipcMain.handle("git-pull", async (_e, dir) => {
+  const r = await runGit(dir, ["pull", "--rebase"]);
+  if (!r.ok) {
+    // If a rebase is in progress (interrupted by a conflict), abort it
+    // so the working tree returns to the pre-pull state. Best-effort —
+    // ignore failures since the user may have already aborted manually.
+    try { await runGit(dir, ["rebase", "--abort"]); } catch {}
+  }
+  return r;
+});
 ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
 // Clone a repo into a destination folder. The destination's PARENT must
 // exist; git will create the leaf folder. Used by the in-app "Clone

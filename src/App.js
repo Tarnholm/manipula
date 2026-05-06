@@ -2708,7 +2708,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                   disabled={busy || (behind || 0) === 0}
                   onClick={() => run("Pull", () => api.gitPull(projectDir))}
                   style={syncBtn("#4f8fd6", (behind || 0) > 0)}
-                  title="git pull --ff-only"
+                  title="git pull --rebase  (per-file JSON layout makes this silent in nearly all cases — your local commits replay cleanly on top of the remote)"
                 >
                   Pull {behind ? `(${behind})` : ""}
                 </button>
