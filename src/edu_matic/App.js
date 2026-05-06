@@ -949,7 +949,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         const t = String(u.text || "").trim();
         if (!t) continue;
         rows.push({ section: t });
-        ids.push(-1);
+        // Preserve the project.units idx for sections so the inline
+        // rename callback can locate the comment record.
+        ids.push(idx);
       } else if (u.kind === "unit") {
         rows.push(allKeys.map((k) => {
           if (k.startsWith(AVAIL_PREFIX)) {
@@ -1047,9 +1049,12 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
   const insertSectionHeader = useCallback((unitIdx, position /* "above" | "below" */) => {
-    const text = (window.prompt("Section header text:", "NEW SECTION") || "").trim();
-    if (!text) return;
-    const marker = { kind: "comment", text };
+    // Skip window.prompt — Electron silently returns "" with no UI
+    // (see reference_electron_quirks.md). Insert with a default text
+    // and let the user rename via the in-place section editor in the
+    // table. The default is intentionally distinctive so it's easy to
+    // spot and click.
+    const marker = { kind: "comment", text: "NEW SECTION — click to rename" };
     const nextUnits = project.units.slice();
     if (typeof unitIdx === "number" && unitIdx >= 0) {
       const at = position === "below" ? unitIdx + 1 : unitIdx;
@@ -1057,6 +1062,15 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     } else {
       nextUnits.unshift(marker);
     }
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  const renameSectionHeader = useCallback((unitIdx, newText) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const cur = project.units[unitIdx];
+    if (!cur || cur.kind !== "comment") return;
+    const next = { ...cur, text: String(newText || "").trim() };
+    const nextUnits = project.units.slice();
+    nextUnits[unitIdx] = next;
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
   // Linked-variant model — set / clear the linkedTo pointer on a unit
@@ -1540,6 +1554,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
         onPasteRow={onPasteUnit}
+        onEditSection={renameSectionHeader}
         onSelectionChange={setSelectedRowIdxs}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveUnit(idx, "up") },
@@ -1920,7 +1935,9 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
       if (name.startsWith("#")) {
         if (/^#?actual edu starts here\s*$/i.test(name)) { prevName = null; continue; }
         out.push({ section: name.replace(/^#/, "") });
-        ids.push(-1);
+        // Preserve the project.armour idx for sections so the inline
+        // rename callback can locate the row.
+        ids.push(idx);
         prevName = null;
         lastWasDecoration = true;
         continue;
@@ -2022,11 +2039,10 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     setProject({ ...project, armour: next });
   }, [rows, project, setProject]);
   const insertArmourSectionHeader = useCallback((idx, position) => {
-    const text = (window.prompt("Section header text:", "NEW SECTION") || "").trim();
-    if (!text) return;
-    // Section rows in the armour table are encoded as a row whose
-    // "Model Set Name" starts with "#". Mirrors the xlsm convention.
-    const marker = { row: 0, "Model Set Name": "#" + text };
+    // Same window.prompt-is-broken-in-Electron quirk as the Units
+    // section-header path. Insert a default-named marker and let the
+    // user rename inline via the section banner in the table.
+    const marker = { row: 0, "Model Set Name": "#NEW SECTION — click to rename" };
     const next = rows.slice();
     if (typeof idx === "number" && idx >= 0) {
       const at = position === "below" ? idx + 1 : idx;
@@ -2035,6 +2051,15 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
       next.unshift(marker);
     }
     setProject({ ...project, armour: next });
+  }, [rows, project, setProject]);
+  const renameArmourSection = useCallback((idx, newText) => {
+    if (typeof idx !== "number" || idx < 0) return;
+    const cur = rows[idx];
+    if (!cur || !String(cur["Model Set Name"] || "").startsWith("#")) return;
+    const next = { ...cur, "Model Set Name": "#" + String(newText || "").replace(/^#/, "").trim() };
+    const nextRows = rows.slice();
+    nextRows[idx] = next;
+    setProject({ ...project, armour: nextRows });
   }, [rows, project, setProject]);
   const onPasteArmour = useCallback((idx, parsed) => {
     if (typeof idx !== "number" || idx < 0) return;
@@ -2194,6 +2219,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         rowFlags={rowFlags}
         rowToJSON={(idx) => rows[idx] || null}
         onPasteRow={onPasteArmour}
+        onEditSection={renameArmourSection}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveArmour(idx, "up") },
           { label: "↓ Move row down", onClick: (idx) => moveArmour(idx, "down") },

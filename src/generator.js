@@ -227,16 +227,22 @@ function pushAILinesFor(out, u, isAor) {
       "not is_player",
       fmtExcludeFactions(exclude),
       ...(u.commonRequires || []),
-      ...(isAor ? (u.aorRequires || []) : []),  // AOR-only extras only on AOR-side AI lines
+      ...(u.aiRequires || []),                 // AI-only extras (regardless of faction / AOR side)
+      ...(isAor ? (u.aorRequires || []) : []), // AOR-only extras only on AOR-side AI lines
       "noisland",
       u.aiHomeland ? "homeland" : "",
     ]);
   };
 
   // MIC mic_<canonicalMicTier> .. mic_4
-  // For AI, we use canonicalMicTier as the floor (matching the player's GovC tier).
-  // The "homeland discount" is player-side only.
-  const minTier = u.canonicalMicTier;
+  // For AI, we use canonicalMicTier as the floor — but the AI sibling
+  // feature lets the user override it so the AI recruits the unit
+  // earlier than the player. Falls back to the unit's own tier when
+  // no override is set.
+  const aiTierOverride = (u.ai && u.ai.enabled && typeof u.ai.canonicalMicTier === "number")
+    ? u.ai.canonicalMicTier
+    : null;
+  const minTier = aiTierOverride != null ? aiTierOverride : u.canonicalMicTier;
   for (let t = minTier; t <= 4; t++) {
     const lvl = MIC_LEVELS[t - 1];
     out.push({

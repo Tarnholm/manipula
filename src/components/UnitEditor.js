@@ -351,34 +351,110 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
         )}
       </Section>
 
-      {/* AI RECRUITMENT */}
-      <Section title="AI recruitment">
-        <div style={{ display: "flex", gap: 18, alignItems: "baseline", flexWrap: "wrap" }}>
+      {/* AI SIBLING — structurally mirrors AOR Sibling above. Lets the
+       * user emit AI recruit lines (gated by `not is_player`) at a
+       * DIFFERENT MIC tier than the player's, so the AI can recruit a
+       * lower-cost / lower-tier version while the player gets the full
+       * unit. Common pattern: player at Professional t2, AI at
+       * Standard t1. Without this section the user had to author two
+       * separate variants of the same unit. */}
+      <Section title={`AI sibling${u.ai && u.ai.enabled ? " — enabled" : ""}`}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <Toggle
-            label='AI homeland gate (adds "and homeland")'
-            checked={!!u.aiHomeland}
-            onChange={(v) => set({ aiHomeland: v })}
+            label="Pair with an AI variant"
+            checked={!!(u.ai && u.ai.enabled)}
+            onChange={(v) => set({ ai: v ? { enabled: true, canonicalMicTier: Math.max(1, (u.canonicalMicTier || 2) - 1) } : null })}
           />
-          <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+          {u.ai && u.ai.enabled && (
             <Toggle
-              label="Bonus XP at higher tiers"
-              checked={!!u.xp}
-              onChange={(v) => set({ xp: v ? { startTier: 4, value: 1 } : null })}
+              label="AI homeland gate (adds 'and homeland')"
+              checked={!!u.aiHomeland}
+              onChange={(v) => set({ aiHomeland: v })}
             />
-            {u.xp && (
-              <>
-                <span style={{ color: "#aaa", fontSize: 12 }}>+</span>
-                <input type="number" min={1} max={9}
-                  value={u.xp.value}
-                  onChange={(e) => set({ xp: { ...u.xp, value: Math.max(1, parseInt(e.target.value || "1", 10)) } })}
-                  style={input(60)} />
-                <span style={{ color: "#aaa", fontSize: 12 }}>at tier ≥</span>
-                <select value={u.xp.startTier} onChange={(e) => set({ xp: { ...u.xp, startTier: parseInt(e.target.value, 10) } })} style={input(70)}>
+          )}
+        </div>
+        {u.ai && u.ai.enabled && (
+          <div style={{ marginTop: 10, padding: 10, background: "rgba(255,255,255,0.03)", borderRadius: 6 }}>
+            <div style={{ display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
+              <Field label="AI canonical_mic_tier">
+                <select
+                  value={u.ai.canonicalMicTier ?? 1}
+                  onChange={(e) => set({ ai: { ...u.ai, canonicalMicTier: parseInt(e.target.value, 10) } })}
+                  style={input(70)}
+                >
                   {[1, 2, 3, 4].map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
-              </>
-            )}
+              </Field>
+              <span style={{ color: "#7a9", fontSize: 11 }}>
+                Player recruits at <code style={{ color: "#dca64a" }}>mic_{u.canonicalMicTier ?? "?"}</code>; AI gets the unit at <code style={{ color: "#dca64a" }}>mic_{u.ai.canonicalMicTier ?? 1}</code> instead. Useful when the AI needs the unit earlier (or a downgraded variant) for balance.
+              </span>
+            </div>
           </div>
+        )}
+      </Section>
+
+      {/* AI-SPECIFIC REQUIRES — only visible when an AI sibling is enabled */}
+      {u.ai && u.ai.enabled && (
+        <Section title="AI-only requires (apply only to the AI sibling's lines)">
+          <Picker
+            label="Hidden resources"
+            options={opts.hr}
+            value={parseExtras(u.aiRequires || []).hr}
+            onChange={(v) => {
+              const ar = parseExtras(u.aiRequires || []);
+              const merged = serializeExtras({ ...ar, hr: v });
+              set({ aiRequires: merged });
+            }}
+            placeholder="hidden_resource X — added to AI clauses only"
+          />
+          <Picker
+            label="Required regions"
+            options={opts.regions}
+            value={parseExtras(u.aiRequires || []).regions}
+            onChange={(v) => {
+              const ar = parseExtras(u.aiRequires || []);
+              const merged = serializeExtras({ ...ar, regions: v });
+              set({ aiRequires: merged });
+            }}
+            placeholder="region X — added to AI clauses only"
+          />
+          <Field label="Custom extras (one per line — verbatim)">
+            <textarea
+              value={(parseExtras(u.aiRequires || []).custom || []).join("\n")}
+              onChange={(e) => {
+                const ar = parseExtras(u.aiRequires || []);
+                const list = e.target.value.split("\n").map(s => s.trim()).filter(Boolean);
+                const merged = serializeExtras({ ...ar, custom: list });
+                set({ aiRequires: merged });
+              }}
+              style={{ ...input(420), height: 60, fontFamily: "Consolas, monospace", fontSize: 11 }}
+              placeholder="e.g. event_counter ai_buff_1 1"
+            />
+          </Field>
+        </Section>
+      )}
+
+      {/* AI fine-tuning — bonus XP at higher tiers stays visible always */}
+      <Section title="AI fine-tuning">
+        <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+          <Toggle
+            label="Bonus XP at higher tiers"
+            checked={!!u.xp}
+            onChange={(v) => set({ xp: v ? { startTier: 4, value: 1 } : null })}
+          />
+          {u.xp && (
+            <>
+              <span style={{ color: "#aaa", fontSize: 12 }}>+</span>
+              <input type="number" min={1} max={9}
+                value={u.xp.value}
+                onChange={(e) => set({ xp: { ...u.xp, value: Math.max(1, parseInt(e.target.value || "1", 10)) } })}
+                style={input(60)} />
+              <span style={{ color: "#aaa", fontSize: 12 }}>at tier ≥</span>
+              <select value={u.xp.startTier} onChange={(e) => set({ xp: { ...u.xp, startTier: parseInt(e.target.value, 10) } })} style={input(70)}>
+                {[1, 2, 3, 4].map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </>
+          )}
         </div>
       </Section>
 

@@ -112,6 +112,11 @@ export default function DataTable({
   // row from the multi-select set (Ctrl/Shift-click). UnitsScreen reads
   // this to drive its computed-stat preview pane.
   onSelectionChange = null,
+  // Inline rename for section banner rows. When provided, clicking a
+  // section row swaps it to an input; commit on Enter or blur fires
+  // onEditSection(rowOrigIdx, newText). Skipped when null (legacy
+  // behaviour — section is read-only).
+  onEditSection = null,
 }) {
   const [q, setQ] = useState(() => {
     if (!searchPersistKey) return "";
@@ -693,7 +698,13 @@ export default function DataTable({
             <tbody key={`g${gi}`}>
               {g.section && (
                 <tr key={`s${g.section.origIdx}`} className="dtable-section">
-                  <td colSpan={visibleColumns.length} title={g.section.row.section}>{g.section.row.section}</td>
+                  <td colSpan={visibleColumns.length}>
+                    <SectionLabel
+                      text={g.section.row.section}
+                      editable={!!onEditSection}
+                      onCommit={(t) => onEditSection && onEditSection(rowIds ? rowIds[g.section.origIdx] : g.section.origIdx, t)}
+                    />
+                  </td>
                 </tr>
               )}
               {g.entries.map(({ row, origIdx }) => {
@@ -1125,6 +1136,50 @@ function ColumnsPicker({ columns, columnLabels, hiddenCols, hiddenCount, pinFirs
         document.body
       )}
     </>
+  );
+}
+
+// Inline-editable section banner. Click → swaps to an input. Enter or
+// blur commits, Esc cancels. Falls back to plain read-only when the
+// host doesn't pass an onCommit handler (Validate's tables, etc.).
+function SectionLabel({ text, editable, onCommit }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+  const inputRef = useRef(null);
+  useEffect(() => { setDraft(text); }, [text]);
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      try { inputRef.current.select(); } catch {}
+    }
+  }, [editing]);
+  if (!editable) return <span title={text}>{text}</span>;
+  if (!editing) {
+    return (
+      <span
+        title={`${text}  · click to rename`}
+        onClick={(e) => { e.stopPropagation(); setDraft(text); setEditing(true); }}
+        style={{ cursor: "text", padding: "2px 4px", borderRadius: 3 }}
+      >
+        {text}
+      </span>
+    );
+  }
+  const commit = () => { setEditing(false); if (onCommit && draft !== text) onCommit(draft); };
+  const cancel = () => { setEditing(false); setDraft(text); };
+  return (
+    <input
+      ref={inputRef}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      style={{ background: "rgba(28,30,32,0.95)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.5)", borderRadius: 3, padding: "2px 6px", font: "inherit", minWidth: 240, outline: "none" }}
+    />
   );
 }
 

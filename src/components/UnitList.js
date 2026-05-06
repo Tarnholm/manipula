@@ -66,7 +66,11 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
     return localStorage.getItem("rt:compactList") === "1" ? "compact" : "comfortable";
   });
   useEffect(() => { localStorage.setItem("rt:listDensity", density); }, [density]);
-  const compact = density === "compact" || density === "unitsOnly";
+  // `compact` = no portrait + tight rows. `unitsOnly` keeps the
+  // portrait so the user can still recognise units at a glance, but
+  // hides the per-variant breakdown so the list is one card per
+  // unit name.
+  const compact = density === "compact";
   const unitsOnly = density === "unitsOnly";
   const cycleDensity = () => setDensity(d => d === "comfortable" ? "compact" : d === "compact" ? "unitsOnly" : "comfortable");
   const densityLabel = density === "comfortable" ? "Comfortable" : density === "compact" ? "Compact" : "Units only";
@@ -581,7 +585,7 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                     </div>
                   );
                 })}
-                {compact && (
+                {(compact || unitsOnly) && (
                   <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#888", flexWrap: "wrap" }}>
                     <span>
                       {u.grade || "?"} · t{u.canonicalMicTier ?? u.minTier ?? "?"}
