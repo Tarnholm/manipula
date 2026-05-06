@@ -1139,6 +1139,32 @@ export default function App() {
   // and warn before clobbering external edits — the missing piece between
   // round-trip and clean-break for hand-authored EDB tweaks.
   const [projectExports, setProjectExports] = useState({});
+  // EDB-on-disk drift detection. After every successful Write to EDB, we
+  // record a hash of the file we just wrote. On load (and on every mod
+  // reload), we hash the live EDB and compare. A mismatch means the EDB
+  // has been touched outside Manipula since the last write — either
+  // hand-edited or a teammate wrote it via a different Manipula clone
+  // without committing the project's manipula.project.json. Banner shown
+  // until the user dismisses it for the session OR runs Write to EDB
+  // (which updates the recorded hash). null = "can't tell yet" (no
+  // hashAtExport on file, e.g. brand-new project) — no banner.
+  const [edbDrift, setEdbDrift] = useState(null);
+  const [edbDriftDismissed, setEdbDriftDismissed] = useState(false);
+  useEffect(() => {
+    if (!edbText || !projectExports?.edb?.hashAtExport) { setEdbDrift(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { hashOfText } = await import("./projectStore");
+        const liveHash = hashOfText(edbText);
+        if (!cancelled) setEdbDrift(liveHash !== projectExports.edb.hashAtExport);
+      } catch { /* projectStore unavailable — leave drift null */ }
+    })();
+    return () => { cancelled = true; };
+  }, [edbText, projectExports]);
+  // Reset the dismissal whenever the EDB content itself changes — a fresh
+  // Reload should re-prompt if the file is still drifted.
+  useEffect(() => { setEdbDriftDismissed(false); }, [edbText]);
   // EDU dirty state — flips on whenever the eduProject is mutated post-import (bulk
   // edit, stub creation, etc.). Cleared when the user exports or re-imports.
   const [eduDirty, setEduDirty] = useState(false);
@@ -1832,6 +1858,27 @@ export default function App() {
         }}
         info={info}
       />
+      {edbDrift && !edbDriftDismissed && (
+        <div style={{ background: "rgba(184,115,51,0.15)", borderBottom: "1px solid rgba(220,166,74,0.4)", padding: "8px 14px", display: "flex", alignItems: "center", gap: 12, color: "#dca64a", fontSize: 12 }}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠</span>
+          <div style={{ flex: 1, color: "#ddd" }}>
+            <strong style={{ color: "#dca64a" }}>EDB on disk has been edited outside Manipula since the last Write to EDB.</strong>
+            <span style={{ marginLeft: 8, color: "#bbb" }}>
+              Hand edits to <code style={{ background: "rgba(0,0,0,0.3)", padding: "1px 4px", borderRadius: 3 }}>export_descr_buildings.txt</code> won't round-trip — Write to EDB regenerates from the project, so any manual changes to recruit lines will be lost. Verify before writing.
+            </span>
+          </div>
+          <button
+            onClick={async () => { if (api?.openPath) await api.openPath(`${dataDir}\\export_descr_buildings.txt`); }}
+            style={{ background: "rgba(220,166,74,0.15)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.4)", padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer" }}
+            title="Open the EDB file in your default text editor to inspect the changes"
+          >Open EDB</button>
+          <button
+            onClick={() => setEdbDriftDismissed(true)}
+            style={{ background: "transparent", color: "#999", border: "1px solid #444", padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer" }}
+            title="Hide the warning for this session — re-appears on next Reload"
+          >Dismiss</button>
+        </div>
+      )}
       {diff && (
         <DiffModal diff={diff} onCancel={() => setDiff(null)} onConfirm={confirmWriteBack} />
       )}
