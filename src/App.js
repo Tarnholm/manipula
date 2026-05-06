@@ -578,85 +578,131 @@ export default function App() {
     return groups;
   }, [units]);
 
-  // Walk the parsed EDB recruit lines and auto-set u.aor.enabled +
-  // u.ai.enabled on every authored unit whose existing recruit clauses
-  // ALREADY look like an AOR pair / AI sibling. Saves the user from
-  // hand-checking each unit's editor — they import a 5000-line EDB and
-  // the toggles snap to the right state in one click.
-  //
-  // Detection rules:
-  //   - AOR-paired: the EDB has BOTH `recruit "X"` and `recruit "aor X"`
-  //     lines for unit X.
-  //   - AOR-only: the EDB has only `recruit "aor X"` lines.
-  //   - AI sibling: the EDB has lines with `not is_player` whose lowest
-  //     mic_tier differs from the lowest tier in the player lines.
-  //     (Same-tier player+AI lines = standard "not is_player" wrap, no
-  //     AI sibling needed.)
+  // Detect + collapse AI / AOR pairing. Two-pass:
+  //   1. Project-side collapse — when two project variants share the
+  //      same recruit name AND the same faction list but differ in
+  //      canonicalMicTier (e.g. one Professional t2 and one Standard t1
+  //      from the same import), the higher-tier is treated as the
+  //      player variant; we set its u.ai.enabled with the lower tier
+  //      AND DELETE the lower-tier variant. This is what actually
+  //      collapses "Achaian Epilektoi × 4" down to "× 2" (one per
+  //      faction list).
+  //   2. EDB-side scan — for each surviving unit, look up its existing
+  //      EDB recruit lines and tick u.aor.enabled (AOR-paired or
+  //      AOR-only) when the EDB carries a `recruit "aor X"` clause.
   const detectAiAorPairing = useCallback(() => {
     if (!modIndex.recruits) { toast("Load the mod files first.", "error"); return; }
-    // Index recruit lines by name for O(1) lookup. Captures both the
-    // bare and the aor-prefixed names.
+    const tierOf = (lvl) => {
+      const m = String(lvl || "").match(/^mic_(\d)$/);
+      return m ? parseInt(m[1], 10) : null;
+    };
+
+    // ── Pass 1: project-side AI collapse ─────────────────────────
+    // Group variants by (recruit name + sorted factions list). Within
+    // each group, if multiple entries have different canonicalMicTier
+    // values, collapse: keeper = highest tier, set keeper.ai with the
+    // lowest tier, drop the other entries.
+    const groupKey = (u) => String(u.unit || "") + "|" + (u.factions || []).slice().sort().join(",");
+    const groups = new Map();
+    for (const u of units) (groups.get(groupKey(u)) || groups.set(groupKey(u), []).get(groupKey(u))).push(u);
+    const drop = new Set();          // unit ids being deleted
+    const updates = new Map();       // unit id → patched unit
+    let collapsed = 0;
+    let aiEnabled = 0;
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      // Highest canonicalMicTier first; ties broken by writeBack (writable
+      // beats ref-only as the keeper) so we don't promote a ref-only
+      // entry over a writable one.
+      const sorted = list.slice().sort((a, b) => {
+        const ta = a.canonicalMicTier ?? 1, tb = b.canonicalMicTier ?? 1;
+        if (ta !== tb) return tb - ta;
+        const wa = a.writeBack === false ? 1 : 0, wb = b.writeBack === false ? 1 : 0;
+        return wa - wb;
+      });
+      const keeper = sorted[0];
+      const lowestTier = sorted[sorted.length - 1].canonicalMicTier ?? 1;
+      if (lowestTier >= (keeper.canonicalMicTier ?? 1)) continue;     // no real tier spread
+      updates.set(keeper.id, {
+        ...keeper,
+        ai: { enabled: true, canonicalMicTier: lowestTier },
+      });
+      aiEnabled++;
+      for (let i = 1; i < sorted.length; i++) { drop.add(sorted[i].id); collapsed++; }
+    }
+
+    // ── Pass 2: EDB-side AOR detect on the surviving units ───────
     const linesByName = new Map();
     for (const r of modIndex.recruits) {
       const list = linesByName.get(r.unit) || [];
       list.push(r);
       linesByName.set(r.unit, list);
     }
-    const tierOf = (lvl) => {
-      const m = String(lvl || "").match(/^mic_(\d)$/);
-      return m ? parseInt(m[1], 10) : null;
-    };
-    let aorEnabled = 0, aorOnly = 0, aiEnabled = 0, untouched = 0;
-    const next = units.map((u) => {
+    let aorPaired = 0, aorOnly = 0, aiFromEdb = 0, untouched = 0;
+    const survivors = units.filter(u => !drop.has(u.id));
+    for (const original of survivors) {
+      const u = updates.get(original.id) || original;
       const factional = linesByName.get(u.unit) || [];
       const aor = linesByName.get("aor " + u.unit) || [];
       const hasFactional = factional.some(e => /\bis_player\b/.test(e.requires) && !/\bnot is_player\b/.test(e.requires));
       const hasAor = aor.length > 0;
       const aiLines = factional.filter(e => /\bnot is_player\b/.test(e.requires));
       const playerLines = factional.filter(e => /\bis_player\b/.test(e.requires) && !/\bnot is_player\b/.test(e.requires));
+      let patched = u;
       // AOR pairing.
-      let nextAor = u.aor;
       if (hasAor && hasFactional) {
-        if (!u.aor || !u.aor.enabled) {
-          nextAor = { enabled: true, govTier: (u.aor && u.aor.govTier) || 1, aorOnly: false, recruitName: "aor " + u.unit };
-          aorEnabled++;
+        if (!patched.aor || !patched.aor.enabled) {
+          patched = { ...patched, aor: { enabled: true, govTier: (patched.aor && patched.aor.govTier) || 1, aorOnly: false, recruitName: "aor " + patched.unit } };
+          aorPaired++;
         }
       } else if (hasAor && !hasFactional) {
-        if (!u.aor || !u.aor.enabled || !u.aor.aorOnly) {
-          nextAor = { enabled: true, govTier: (u.aor && u.aor.govTier) || 1, aorOnly: true, recruitName: "aor " + u.unit };
+        if (!patched.aor || !patched.aor.enabled || !patched.aor.aorOnly) {
+          patched = { ...patched, aor: { enabled: true, govTier: (patched.aor && patched.aor.govTier) || 1, aorOnly: true, recruitName: "aor " + patched.unit } };
           aorOnly++;
         }
       }
-      // AI sibling.
-      let nextAi = u.ai;
-      if (aiLines.length && playerLines.length) {
+      // AI sibling — only set if pass 1 didn't already (it's authoritative
+      // when the project carries explicit lower-tier siblings).
+      if ((!patched.ai || !patched.ai.enabled) && aiLines.length && playerLines.length) {
         const aiTiers = aiLines.map(e => tierOf(e.level)).filter(t => t != null);
         const playerTiers = playerLines.map(e => tierOf(e.level)).filter(t => t != null);
         if (aiTiers.length && playerTiers.length) {
           const aiMin = Math.min(...aiTiers);
           const playerMin = Math.min(...playerTiers);
           if (aiMin !== playerMin) {
-            if (!u.ai || !u.ai.enabled || u.ai.canonicalMicTier !== aiMin) {
-              nextAi = { enabled: true, canonicalMicTier: aiMin };
-              aiEnabled++;
-            }
+            patched = { ...patched, ai: { enabled: true, canonicalMicTier: aiMin } };
+            aiFromEdb++;
           }
         }
       }
-      if (nextAor === u.aor && nextAi === u.ai) { untouched++; return u; }
-      return { ...u, aor: nextAor, ai: nextAi };
-    });
-    if (aorEnabled + aorOnly + aiEnabled === 0) {
-      toast("No new pairings detected — every unit already matches what's in the EDB.", "info");
+      if (patched !== u) updates.set(original.id, patched);
+      else if (!updates.has(original.id)) untouched++;
+    }
+
+    if (collapsed + aorPaired + aorOnly + aiEnabled + aiFromEdb === 0) {
+      toast("Nothing to do — pairings already match the EDB and no collapsible AI variants found.", "info");
       return;
     }
+    const summary =
+      `${collapsed} variant${collapsed === 1 ? "" : "s"} collapsed into AI siblings, ` +
+      `${aorPaired} AOR-paired + ${aorOnly} AOR-only ticked, ` +
+      `${aiFromEdb} AI siblings ticked from EDB scan.`;
+    if (collapsed > 0) {
+      const ok = window.confirm(
+        `Detected ${aiEnabled} unit${aiEnabled === 1 ? "" : "s"} that can collapse a lower-tier sibling into an AI variant — ${collapsed} entr${collapsed === 1 ? "y" : "ies"} will be deleted from the project (their data captured on the keeper's AI sibling toggle).\n\n` +
+        `Recoverable via Ctrl+Z. Continue?`
+      );
+      if (!ok) return;
+    }
+    const next = [];
+    for (const u of units) {
+      if (drop.has(u.id)) continue;
+      next.push(updates.get(u.id) || u);
+    }
+    if (selectedId && drop.has(selectedId)) setSelectedId(null);
     persistUnits(next);
-    toast(
-      `Detected: ${aorEnabled} AOR-paired, ${aorOnly} AOR-only, ${aiEnabled} AI sibling. ${untouched} unit${untouched === 1 ? "" : "s"} unchanged.`,
-      "success",
-      6000
-    );
-  }, [modIndex, units, persistUnits]);
+    toast(summary, "success", 6500);
+  }, [modIndex, units, persistUnits, selectedId]);
 
   const mergeIdenticalVariants = useCallback(() => {
     const groups = findMergeCandidates();
