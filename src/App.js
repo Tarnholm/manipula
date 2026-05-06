@@ -2498,6 +2498,20 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
     } else { setActivity([]); }
   }, [projectDir, api]);
 
+  // Fetch from the remote, then refresh status. Used when the popover opens
+  // and after every action — the only times the user is about to make a
+  // sync decision. The 5s status polling skips the fetch so it doesn't hit
+  // the network 12× per minute for a panel the user isn't looking at.
+  // Without this, gitStatus's behind count is stale (it compares against the
+  // LOCAL view of the remote, which only updates on fetch/pull) and Pull is
+  // greyed out even when the actual remote has new commits — leading to push
+  // rejections with the "fetch first" hint that the user can't act on.
+  const refreshWithFetch = useCallback(async () => {
+    if (!projectDir || !api?.gitFetch) return refresh();
+    try { await api.gitFetch(projectDir); } catch {}
+    return refresh();
+  }, [projectDir, api, refresh]);
+
   useEffect(() => {
     if (!api?.gitAvailable) { setAvailable(false); return; }
     let cancelled = false;
@@ -2526,7 +2540,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
   // combobox popover in DataTable.
   useEffect(() => {
     if (!open) return;
-    refresh();   // pull fresh status the instant the user looks
+    refreshWithFetch();   // fetch + status the instant the user looks
     const reposition = () => {
       if (!btnRef.current) return;
       const r = btnRef.current.getBoundingClientRect();
@@ -2598,7 +2612,10 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
       const r = await fn();
       const out = (r.stdout || "") + (r.stderr ? "\n" + r.stderr : "");
       setLog(`${label} ${r.ok ? "✓" : "✗"}\n${out.trim() || "(no output)"}`);
-      await refresh();
+      // Fetch-then-status so the behind count is fresh after the action —
+      // critical when push fails with "fetch first": the user needs Pull to
+      // un-grey before they can actually unblock themselves.
+      await refreshWithFetch();
     } catch (e) {
       setLog(`${label} ✗\n${e.message}`);
     } finally { setBusy(false); }
