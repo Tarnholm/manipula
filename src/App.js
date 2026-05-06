@@ -850,8 +850,11 @@ export default function App() {
     setEdumaticPreview(null);
   };
 
-  const importFromEDB = async () => {
-    if (!modIndex.recruits) { alert("Load mod files first."); return; }
+  // Parse modIndex.recruits into authored-unit records. Used by both the destructive
+  // "Import from EDB" (replaces everything) and the additive "Import new from EDB" (only
+  // the unit names that aren't already authored). Pure transform — no state writes.
+  const parseRecruitsFromEDB = () => {
+    if (!modIndex.recruits) return [];
     const groups = groupByUnit(modIndex.recruits);
     const imported = [];
     for (const [unitName, g] of groups) {
@@ -939,10 +942,41 @@ export default function App() {
         imported.push(u);
       }
     }
+    return imported;
+  };
+
+  const importFromEDB = async () => {
+    if (!modIndex.recruits) { alert("Load mod files first."); return; }
+    const imported = parseRecruitsFromEDB();
     if (!window.confirm(`Import ${imported.length} units from EDB?\nThis replaces your current units.json.`)) return;
     history.reset(imported);
     if (api) await api.writeUnits({ units: imported });
     setStatus(`Imported ${imported.length} units from EDB.`);
+  };
+
+  // Non-destructive companion to importFromEDB. Scans the live EDB and adds authored
+  // entries only for unit names that have no existing authored entry yet — leaves
+  // every hand-tuned entry untouched. Use case: the EDB has been edited externally
+  // (or by a different Manipula session) and the project's authored snapshot drifted
+  // out of date. Match key is `u.unit` — if any variant of a name is already authored,
+  // none of its variants are re-imported (avoids stomping merge/split decisions).
+  const importNewFromEDB = async () => {
+    if (!modIndex.recruits) { alert("Load mod files first."); return; }
+    const all = parseRecruitsFromEDB();
+    const existing = new Set(units.map(u => u.unit));
+    const newOnly = all.filter(u => !existing.has(u.unit));
+    if (newOnly.length === 0) {
+      setStatus("Nothing new — every EDB recruit unit name already has an authored entry.");
+      return;
+    }
+    const sample = newOnly.slice(0, 8).map(u => `  • ${u.unit}`).join("\n");
+    const more = newOnly.length > 8 ? `\n  …and ${newOnly.length - 8} more` : "";
+    if (!window.confirm(
+      `Found ${newOnly.length} unit name${newOnly.length === 1 ? "" : "s"} in the EDB with no authored entry yet:\n\n${sample}${more}\n\n` +
+      `Add them to your project? Existing authored entries will not be touched.`
+    )) return;
+    persistUnits([...newOnly, ...units]);
+    setStatus(`Added ${newOnly.length} new authored entries from EDB.`);
   };
 
   const [diff, setDiff] = useState(null); // { added, removed, kept } | null
@@ -1724,6 +1758,7 @@ export default function App() {
         onPick={async () => { const d = await api.pickDataDir(); if (d) { setDataDir(d); } }}
         onReload={loadMod}
         onImport={importFromEDB}
+        onImportNewFromEDB={importNewFromEDB}
         onImportEdumatic={importFromEdumatic}
         onResetImportsToReferenceOnly={resetImportsToReferenceOnly}
         onWriteBack={previewWriteBack}
@@ -1979,7 +2014,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportEdumatic, onResetImportsToReferenceOnly, onMergeIdenticalVariants, onDetectAiAorPairing, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMergeIdenticalVariants, onDetectAiAorPairing, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -2009,7 +2044,8 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <button onClick={onPick} style={tbtn("#3a4a5a")}>Mod data folder…</button>
       <span style={{ color: "#999", fontSize: 12, fontFamily: "Consolas, monospace" }}>{dataDir}</span>
       <button onClick={onReload} disabled={loading} style={tbtn("#446")}>{loading ? "Loading…" : "Reload"}</button>
-      <button onClick={onImport} style={tbtn("#665")}>Import from EDB</button>
+      <button onClick={onImport} style={tbtn("#665")} title="Replace every authored entry with a fresh parse of the current EDB. Destructive — loses any hand-tuned authoring.">Import from EDB</button>
+      <button onClick={onImportNewFromEDB} style={tbtn("#566")} title="Add authored entries only for unit names that exist in the EDB but have no entry in this project yet. Existing authored entries are not touched.">Import new from EDB</button>
       <button onClick={onImportEdumatic} style={tbtn("#665")} title="Import an EDUMatic .xlsm — populates both recruitment data and EDU stats">Import xlsm…</button>
       <button data-rtshortcut="save-project" onClick={onSaveProject} style={tbtn(projectDirty ? "#dca64a" : "#465")} title={`Save project (Ctrl+S) — writes one JSON file per unit/faction/armour into a folder you pick (git-friendly for team sharing)${projectDirty ? "\n— You have unsaved changes —" : ""}`}>
         {projectDirty ? "● Save project" : "Save project"}
