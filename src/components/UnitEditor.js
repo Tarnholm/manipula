@@ -10,7 +10,7 @@ import { QUALITY_CLASSES, findQualityClass } from "../qualityClasses";
 
 // Unit family editor — grade-driven authoring.
 // Layout: Identity → Grade → Player section → AOR sibling → AI section → Common requires → Stats + Preview.
-export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilterFaction, onSelectUnit, eduProject, onJumpToEdu, onCreateEduStub }) {
+export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilterFaction, onSelectUnit, onShowVariantDiff, eduProject, onJumpToEdu, onCreateEduStub }) {
   const opts = useMemo(() => buildOptions(modIndex), [modIndex]);
 
   // Live emit-count: how many EDB recruit lines this unit will produce given current toggles.
@@ -81,6 +81,13 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
       {siblings.length > 1 && (
         <div style={{ marginBottom: 10, display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", padding: "6px 8px", background: "rgba(20,22,23,0.7)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 6 }}>
           <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginRight: 6 }}>Variant:</span>
+          {onShowVariantDiff && (
+            <button
+              onClick={() => onShowVariantDiff(u.id)}
+              title="Field-by-field comparison of these variants — see exactly which fields keep them from being merged into one entry."
+              style={{ background: "rgba(220,166,74,0.12)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.4)", padding: "3px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", marginRight: 6 }}
+            >⇄ Diff</button>
+          )}
           {siblings.map((s, i) => {
             const active = s.id === u.id;
             const isAor = s.aor && s.aor.enabled;

@@ -9,7 +9,7 @@ const GRADE_ORDER = { Levy: 1, Standard: 2, Professional: 3, Elite: 4, Veteran: 
 // Map role string → bucket number (mirrors generator.js bucketOf, derived from ROSTER_ROLES).
 const BUCKET_OF_ROLE = Object.fromEntries(ROSTER_ROLES.map((r, i) => [r, i + 1]));
 
-export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
+export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, onShowVariantDiff, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
   // Build a Map of unit name → EDU row, so the badge can show a stat-preview tooltip.
   const eduMap = useMemo(() => {
     if (!eduProject || !Array.isArray(eduProject.units)) return null;
@@ -667,6 +667,11 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
               }
             },
             { label: "Copy unit name", onClick: () => navigator.clipboard?.writeText(ctxMenu.unit.unit) },
+            onShowVariantDiff && (() => {
+              const siblings = units.filter(u => u.unit === ctxMenu.unit.unit);
+              if (siblings.length < 2) return null;
+              return { label: `Compare ${siblings.length} variants…`, onClick: () => onShowVariantDiff(ctxMenu.unit.id) };
+            })(),
             onMarkForRemoval && (ctxMenu.unit.pendingRemoval
               ? { label: "Cancel removal", onClick: () => onMarkForRemoval(ctxMenu.unit.id, false), color: "#dca64a" }
               : { label: "Mark for removal (strips EDB lines on next write)", onClick: () => onMarkForRemoval(ctxMenu.unit.id, true), color: "#e88" }

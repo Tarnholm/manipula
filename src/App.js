@@ -522,6 +522,23 @@ export default function App() {
   const [sidebarMode, setSidebarMode] = useState(() => localStorage.getItem("rt:sidebarMode") || "edit");
   useEffect(() => { localStorage.setItem("rt:sidebarMode", sidebarMode); }, [sidebarMode]);
 
+  // Variant-diff modal — when the user wants to see why N variants of
+  // the same recruit name remain separate (i.e. what the merge tool
+  // can't collapse), this surfaces a field-by-field comparison. Set
+  // by sidebar right-click → "Compare variants" or the link in the
+  // UnitEditor's variant tab strip.
+  const [variantDiff, setVariantDiff] = useState(null);
+  const showVariantDiff = useCallback((unitId) => {
+    const u = units.find(x => x.id === unitId);
+    if (!u) return;
+    const siblings = units.filter(x => x.unit === u.unit);
+    if (siblings.length < 2) {
+      toast(`"${u.unit}" has only one variant — nothing to diff.`, "info");
+      return;
+    }
+    setVariantDiff({ variants: siblings, recruitName: u.unit });
+  }, [units]);
+
   // Merge variants of the same unit that share every recruit-line-
   // affecting field except their faction list. Per the user's rule:
   // unless a unit has DIFFERENT recruitment requirements per faction,
@@ -1620,6 +1637,9 @@ export default function App() {
       {diff && (
         <DiffModal diff={diff} onCancel={() => setDiff(null)} onConfirm={confirmWriteBack} />
       )}
+      {variantDiff && (
+        <VariantDiffModal variantDiff={variantDiff} onClose={() => setVariantDiff(null)} />
+      )}
       {edbConflict && (
         <EdbConflictModal
           conflict={edbConflict}
@@ -1706,6 +1726,7 @@ export default function App() {
                 onReorder={onReorder}
                 onInsertNear={onInsertNear}
                 onMarkForRemoval={onMarkForRemoval}
+                onShowVariantDiff={showVariantDiff}
                 viewMode={sidebarMode}
                 onViewModeChange={setSidebarMode}
                 modIndex={modIndex}
@@ -1749,7 +1770,7 @@ export default function App() {
                 <EditorErrorBoundary>
                   {selectedIds.size > 1
                     ? <BulkEditor selectedUnits={bulkSelected} onApply={applyBulk} modIndex={modIndex} onClearSelection={clearSelection} />
-                    : <UnitEditor unit={selected} onChange={onChangeUnit} modIndex={modIndex} allUnits={units} onFilterFaction={(faction) => { setListFilter({ mode: "faction", value: faction }); }} onSelectUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); }} eduProject={eduProject} onJumpToEdu={() => { setEduView("units"); setActiveTab("edu"); }} onCreateEduStub={(authoredUnit) => {
+                    : <UnitEditor unit={selected} onChange={onChangeUnit} modIndex={modIndex} allUnits={units} onFilterFaction={(faction) => { setListFilter({ mode: "faction", value: faction }); }} onSelectUnit={(id) => { setSelectedIds(new Set()); setSelectedId(id); }} onShowVariantDiff={showVariantDiff} eduProject={eduProject} onJumpToEdu={() => { setEduView("units"); setActiveTab("edu"); }} onCreateEduStub={(authoredUnit) => {
                     if (!eduProject) return;
                     // Append a minimal EDU row for this unit. User fills in the rest in the
                     // EDU Builder Units screen — this just removes the friction of opening it
@@ -2921,6 +2942,105 @@ function EdbConflictModal({ conflict, onCancel, onShowDiff, onOpenInEditor, onOv
         </div>
       </div>
     </div>
+  );
+}
+
+// Variant comparison modal — side-by-side field grid for siblings
+// sharing a recruit name. Differing rows surface in amber at the top;
+// matching rows are dimmed below so the user can see at-a-glance what
+// keeps two variants from merging cleanly.
+function VariantDiffModal({ variantDiff, onClose }) {
+  const { variants, recruitName } = variantDiff;
+  // Field set: union of every key across the variants, minus identity
+  // / ordering / per-instance cosmetics that don't affect recruit lines.
+  const OMIT = new Set(["id", "manualOrder", "pendingRemoval", "_ghost"]);
+  const fieldKeys = useMemo(() => {
+    const s = new Set();
+    for (const v of variants) for (const k of Object.keys(v || {})) if (!OMIT.has(k)) s.add(k);
+    return [...s].sort();
+  }, [variants]);
+  const norm = (v) => {
+    // Make arrays / objects deterministically comparable.
+    if (Array.isArray(v)) return JSON.stringify([...v].sort());
+    if (v && typeof v === "object") return JSON.stringify(v, Object.keys(v).sort());
+    if (v == null) return "";
+    return String(v);
+  };
+  const render = (v) => {
+    if (Array.isArray(v)) return v.length ? v.join(", ") : <span style={{ color: "#666" }}>—</span>;
+    if (v && typeof v === "object") return <code style={{ color: "#aaa", fontSize: 10 }}>{JSON.stringify(v)}</code>;
+    if (v == null || v === "") return <span style={{ color: "#666" }}>—</span>;
+    if (v === true) return <span style={{ color: "#7c9" }}>✓ true</span>;
+    if (v === false) return <span style={{ color: "#888" }}>✗ false</span>;
+    return String(v);
+  };
+  const rows = useMemo(() => {
+    return fieldKeys.map((k) => {
+      const cells = variants.map((v) => v[k]);
+      const sigs = cells.map(norm);
+      const allSame = sigs.every((s) => s === sigs[0]);
+      return { key: k, cells, allSame };
+    });
+  }, [fieldKeys, variants]);
+  const differing = rows.filter((r) => !r.allSame);
+  const matching = rows.filter((r) => r.allSame);
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 13000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "5vh", overflow: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#1a1a1a", border: "1px solid rgba(220,166,74,0.4)", borderRadius: 10, padding: 22, minWidth: 720, maxWidth: "90vw", maxHeight: "85vh", overflow: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.6)", color: "#ddd" }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+          <h2 style={{ margin: 0, color: "#dca64a", fontWeight: 600, fontSize: 16 }}>
+            Variant diff <span style={{ color: "#999", fontWeight: 400, fontSize: 13 }}>· "{recruitName}" · {variants.length} variants</span>
+          </h2>
+          <button onClick={onClose} style={{ background: "transparent", border: "1px solid #444", color: "#bbb", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 11 }}>Esc / close</button>
+        </div>
+        <p style={{ color: "#999", fontSize: 12, marginTop: 0 }}>
+          {differing.length === 0
+            ? <>All fields match — these variants <strong style={{ color: "#7c9" }}>could be merged</strong>. Use the topbar's "↻ Merge identical variants" to collapse them.</>
+            : <>The amber rows below are why these variants haven't merged. Edit them in the editor to align if you want a single entry.</>}
+        </p>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "Consolas, monospace", fontSize: 11.5 }}>
+          <thead>
+            <tr style={{ background: "rgba(220,166,74,0.06)", color: "#dca64a" }}>
+              <th style={{ textAlign: "left", padding: "6px 10px", borderBottom: "1px solid rgba(220,166,74,0.25)", whiteSpace: "nowrap" }}>Field</th>
+              {variants.map((v, i) => (
+                <th key={i} style={{ textAlign: "left", padding: "6px 10px", borderBottom: "1px solid rgba(220,166,74,0.25)" }}>
+                  Variant {i + 1}
+                  <div style={{ fontSize: 10, color: "#888", fontWeight: 400, marginTop: 2 }}>
+                    {v.aor && v.aor.enabled ? (v.aor.aorOnly ? "AOR-only" : "Factional + AOR") : "Factional"}
+                    {v.writeBack === false && " · ref-only"}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {differing.length > 0 && (
+              <tr><td colSpan={variants.length + 1} style={{ padding: "8px 10px", color: "#dca64a", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, background: "rgba(220,166,74,0.04)" }}>Differing — {differing.length}</td></tr>
+            )}
+            {differing.map((r) => (
+              <tr key={r.key} style={{ background: "rgba(220,166,74,0.05)" }}>
+                <td style={{ padding: "5px 10px", color: "#dca64a", verticalAlign: "top", whiteSpace: "nowrap", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{r.key}</td>
+                {r.cells.map((c, i) => (
+                  <td key={i} style={{ padding: "5px 10px", color: "#ddd", verticalAlign: "top", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{render(c)}</td>
+                ))}
+              </tr>
+            ))}
+            {matching.length > 0 && (
+              <tr><td colSpan={variants.length + 1} style={{ padding: "8px 10px", color: "#666", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, background: "rgba(255,255,255,0.02)" }}>Matching — {matching.length}</td></tr>
+            )}
+            {matching.map((r) => (
+              <tr key={r.key}>
+                <td style={{ padding: "4px 10px", color: "#666", verticalAlign: "top", whiteSpace: "nowrap", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>{r.key}</td>
+                {r.cells.map((c, i) => (
+                  <td key={i} style={{ padding: "4px 10px", color: "#888", verticalAlign: "top", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>{render(c)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>,
+    document.body
   );
 }
 
