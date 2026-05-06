@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import FactionIcon from "./FactionIcon";
 import UnitCard from "./UnitCard";
 import { categorizeUnit, ROSTER_ROLES, isNonRecruitable } from "../qualityClasses";
@@ -627,8 +628,15 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
           );
         })}
       </div>
-      {ctxMenu && (
-        <div style={{ position: "fixed", left: ctxMenu.x, top: ctxMenu.y, zIndex: 5000, background: "rgba(28,30,32,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, fontSize: 12, color: "#ddd", boxShadow: "0 8px 24px rgba(0,0,0,0.6)", minWidth: 200 }}>
+      {ctxMenu && createPortal(
+        // Portaled to document.body so the sidebar's backdrop-filter
+        // doesn't trap position:fixed inside it. Same fix the
+        // QuickSearch dropdown got back in v0.30.1 — without the
+        // portal the menu sits BEHIND the editor pane because
+        // backdrop-filter creates a containing block for fixed
+        // descendants and a fresh stacking context that z-index 5000
+        // can't escape.
+        <div style={{ position: "fixed", left: ctxMenu.x, top: ctxMenu.y, zIndex: 12000, background: "rgba(28,30,32,0.98)", border: "1px solid rgba(220,166,74,0.3)", borderRadius: 6, padding: 4, fontSize: 12, color: "#ddd", boxShadow: "0 8px 24px rgba(0,0,0,0.6)", minWidth: 200 }}>
           <div style={{ padding: "5px 10px", color: "#dca64a", fontWeight: 700, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 4 }}>{ctxMenu.unit.unit}</div>
           {[
             { label: "Edit (select)", onClick: () => onSelect(ctxMenu.unit.id, {}) },
@@ -656,7 +664,8 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
               {it.label}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
