@@ -41,16 +41,49 @@ function compute(project) {
   const idx = buildIndex(project);
   const isM2 = String(project.modInfo?.platform || "") === "M2TW" || String(project.modInfo?.platform || "") === "KGDM";
   const isV070 = project.globals && project.globals.CombatExp !== undefined;
-  const rows = [];
+  // Master lookup for the linked-variant feature (v0.34.3+). When a
+  // unit carries `linkedTo: "<master Unit name>"`, every empty field on
+  // it inherits from the master at compute time. The user authors
+  // stats once on the master and references propagate automatically.
+  const masterByName = new Map();
   for (const u of project.units) {
-    if (u.kind === "comment") {
-      rows.push({ kind: "comment", text: u.text, row: u.row });
+    if (u && u.kind === "unit" && u.Unit) masterByName.set(String(u.Unit), u);
+  }
+  const resolveLinks = (u) => {
+    if (!u || u.kind !== "unit" || !u.linkedTo) return u;
+    const master = masterByName.get(String(u.linkedTo));
+    if (!master || master === u) return u;
+    // Detect cycles by walking up; cap at 4 to keep this trivial.
+    let chain = master, depth = 0;
+    while (chain && chain.linkedTo && depth < 4) {
+      const next = masterByName.get(String(chain.linkedTo));
+      if (!next || next === u) break;
+      chain = next; depth++;
+    }
+    // Merge: master's fields fill any missing on the reference. Don't
+    // overwrite Unit / linkedTo / availability / kind / row — those are
+    // identity / structural fields that should stay per-unit.
+    const merged = { ...chain, ...u };
+    // Restore identity fields explicitly (... spread above re-applies u
+    // last, so they're already correct, but be defensive).
+    merged.Unit = u.Unit;
+    merged.kind = u.kind;
+    merged.row = u.row;
+    merged.linkedTo = u.linkedTo;
+    if (u.availability) merged.availability = u.availability;
+    return merged;
+  };
+  const rows = [];
+  for (const raw of project.units) {
+    if (raw.kind === "comment") {
+      rows.push({ kind: "comment", text: raw.text, row: raw.row });
       continue;
     }
-    if (u.kind === "wip") {
-      rows.push({ kind: "wip", name: u.name, row: u.row });
+    if (raw.kind === "wip") {
+      rows.push({ kind: "wip", name: raw.name, row: raw.row });
       continue;
     }
+    const u = resolveLinks(raw);
     // v0.7.0: each unit produces one DATA row per entry type listed in
     // its `Entries` field (e.g. "Factional + AoR + Merc" → 3 rows).
     // Older workbooks have no Entries field — emit a single row.

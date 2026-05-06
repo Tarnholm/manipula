@@ -1059,6 +1059,75 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     }
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
+  // Linked-variant model — set / clear the linkedTo pointer on a unit
+  // so its empty fields inherit from a master. Compute-side merging
+  // happens in compute.js's resolveLinks. Row gets a chain icon in the
+  // table once linkedTo is non-empty.
+  const linkUnitToMaster = useCallback((unitIdx) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const cur = project.units[unitIdx];
+    if (!cur || cur.kind !== "unit") return;
+    // Suggest the strip-prefix parent first. e.g. "aor knossian archers"
+    // → suggest "knossian archers" as the master.
+    const fallback = String(cur.Unit || "").replace(/^(aor|merc)\s+/i, "");
+    const masterName = (window.prompt(
+      `Link "${cur.Unit}" to which master Unit name?\n` +
+      `Empty fields on the linked unit will inherit from the master at compute time. ` +
+      `Leave blank to cancel.`,
+      fallback !== cur.Unit ? fallback : ""
+    ) || "").trim();
+    if (!masterName) return;
+    if (masterName === String(cur.Unit)) {
+      window.alert("A unit cannot link to itself.");
+      return;
+    }
+    const exists = project.units.some(u => u && u.kind === "unit" && String(u.Unit) === masterName);
+    if (!exists) {
+      const ok = window.confirm(`No unit named "${masterName}" exists yet. Save the link anyway? (You can create the master later.)`);
+      if (!ok) return;
+    }
+    const next = { ...cur, linkedTo: masterName };
+    const nextUnits = project.units.slice();
+    nextUnits[unitIdx] = next;
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  const unlinkUnit = useCallback((unitIdx) => {
+    if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    const cur = project.units[unitIdx];
+    if (!cur || cur.kind !== "unit" || !cur.linkedTo) return;
+    const next = { ...cur };
+    delete next.linkedTo;
+    const nextUnits = project.units.slice();
+    nextUnits[unitIdx] = next;
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject]);
+  // Bulk: every "aor X" / "merc X" gets linkedTo set to "X" if a unit
+  // by that base name exists. Skips units that already have linkedTo
+  // set so a partial run doesn't clobber existing manual links.
+  const autoLinkAorVariants = useCallback(() => {
+    const baseNames = new Set();
+    for (const u of project.units) {
+      if (u && u.kind === "unit" && u.Unit) baseNames.add(String(u.Unit));
+    }
+    let linked = 0;
+    const nextUnits = project.units.map((u) => {
+      if (!u || u.kind !== "unit" || u.linkedTo) return u;
+      const name = String(u.Unit || "");
+      const m = name.match(/^(?:aor|merc)\s+(.+)$/i);
+      if (!m) return u;
+      const base = m[1];
+      if (!baseNames.has(base)) return u;
+      linked++;
+      return { ...u, linkedTo: base };
+    });
+    if (!linked) {
+      if (window.toast) window.toast("Nothing to link — no aor/merc-prefixed unit had a matching base name.", "info", 3000);
+      return;
+    }
+    setProject({ ...project, units: nextUnits });
+    if (window.toast) window.toast(`Auto-linked ${linked} variant${linked === 1 ? "" : "s"} to their base unit.`, "ok", 3500);
+  }, [project, setProject]);
+
   // Replace a unit's record from a clipboard-pasted JSON. Preserves
   // kind / row to avoid corrupting the project shape; everything else
   // structural-replaces.
@@ -1259,6 +1328,13 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       const f = validationByName.get(u.name) || {};
       const importNote = importDiffByIdx.get(idx);
       if (importNote) f.info = importNote;
+      // Linked-variant hint — surface "↪ Linked to <master>" in the
+      // flag-dot tooltip so the user can see at a glance which rows
+      // inherit their stats.
+      if (u.linkedTo) {
+        const tag = `↪ Linked to "${u.linkedTo}" — empty fields inherit from the master at compute time.`;
+        f.info = f.info ? `${f.info}\n${tag}` : tag;
+      }
       // Recruit-line linkage hint — encoded into the flag tooltip so
       // hovering the Unit Name cell shows a quick summary.
       const rec = recruitsByKey.get(u["unit id"]) || recruitsByKey.get(u.name);
@@ -1400,6 +1476,11 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         <span style={{ flex: 1 }} />
         <button
           className="btn"
+          onClick={autoLinkAorVariants}
+          title="One-shot: every aor / merc-prefixed unit gets linked to its base unit (so it inherits stats from the master). Skips units already linked manually."
+        >↪ Auto-link AOR variants</button>
+        <button
+          className="btn"
           onClick={() => insertSectionHeader(null, "above")}
           title="Insert a section header line at the top of the table (e.g. MID-REPUBLICAN ROMANS). For mid-list placement, right-click any row → Insert section header above/below."
         >+ Section header</button>
@@ -1467,6 +1548,14 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
           { label: "Insert blank below", onClick: (idx) => insertBlankUnitBelow(idx) },
           { label: "Insert section header above…", onClick: (idx) => insertSectionHeader(idx, "above") },
           { label: "Insert section header below…", onClick: (idx) => insertSectionHeader(idx, "below") },
+          { label: "↪ Link to master unit / Unlink…", onClick: (idx) => {
+            const u = project.units[idx];
+            if (u && u.linkedTo) {
+              if (window.confirm(`Unlink "${u.Unit}" from master "${u.linkedTo}"? Existing fields stay where they are.`)) unlinkUnit(idx);
+            } else {
+              linkUnitToMaster(idx);
+            }
+          } },
           ...(modDataDir ? [{
             label: "Stub in export_units.txt",
             onClick: (idx) => { const u = project.units[idx]; if (u) stubInExportUnits(u); },
