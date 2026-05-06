@@ -285,12 +285,18 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
             (outside this tool's scope) and don't have AOR variants in EDB.
           </div>
         )}
-        <div style={{ display: "flex", gap: 12, alignItems: "center", opacity: /^merc\s+/i.test(u.unit || "") ? 0.5 : 1 }}>
+        {/^aor\s+/i.test(u.unit || "") && (
+          <div style={{ marginBottom: 8, padding: "6px 10px", background: "rgba(232,136,136,0.08)", border: "1px solid rgba(232,136,136,0.2)", borderRadius: 6, fontSize: 11.5, color: "#caa" }}>
+            This is already an AOR unit (recruit name starts with <code>aor</code>). AOR pairing is configured on the FACTIONAL parent — switch to the
+            <code> {String(u.unit).replace(/^aor\s+/i, "")} </code>variant tab and toggle AOR sibling there. Pairing AOR-on-AOR isn't a meaningful EDB shape.
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 12, alignItems: "center", opacity: /^(merc|aor)\s+/i.test(u.unit || "") ? 0.5 : 1, pointerEvents: /^aor\s+/i.test(u.unit || "") ? "none" : "auto" }}>
           <Toggle
             label="Pair with an AOR variant"
             checked={!!(u.aor && u.aor.enabled)}
             onChange={(v) => {
-              if (/^merc\s+/i.test(u.unit || "")) return;
+              if (/^(merc|aor)\s+/i.test(u.unit || "")) return;
               set({ aor: v ? { enabled: true, govTier: 1, aorOnly: false, recruitName: null } : null });
             }}
           />

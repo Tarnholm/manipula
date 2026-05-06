@@ -215,13 +215,30 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
   // sorted `filtered` list, so the existing role/grade/tier sort still
   // shapes the sidebar.
   const filteredGroups = useMemo(() => {
-    const map = new Map();   // name → { name, variants: [] }
+    // Strip the leading "aor " / "merc " prefix when computing the group
+    // key so an `aor knossian archers` row folds into the same card as
+    // its base `knossian archers` parent. The user explicitly asked
+    // for AOR units to disappear from the sidebar list and only show
+    // up as a sibling tab in the editor — same shape as the existing
+    // factional-variant grouping.
+    const stripPrefix = (s) => String(s || "").replace(/^(aor|merc)\s+/i, "");
+    const map = new Map();   // baseName → { name, variants: [] }
     for (const u of filtered) {
-      const key = u.unit || "";
-      const g = map.get(key);
+      const baseKey = stripPrefix(u.unit);
+      const g = map.get(baseKey);
       if (g) g.variants.push(u);
-      else map.set(key, { name: key, variants: [u] });
+      else map.set(baseKey, { name: baseKey, variants: [u] });
     }
+    // Sort variants WITHIN each group so the factional one shows first,
+    // AOR siblings second, merc third — keeps the editor's variant
+    // tab order predictable.
+    const kindRank = (u) => {
+      const n = String(u.unit || "").toLowerCase();
+      if (n.startsWith("merc ")) return 2;
+      if (n.startsWith("aor ")) return 1;
+      return 0;
+    };
+    for (const g of map.values()) g.variants.sort((a, b) => kindRank(a) - kindRank(b));
     return [...map.values()];
   }, [filtered]);
   // Mirror filtered list to a ref so the keyboard handler can read it without re-binding.
