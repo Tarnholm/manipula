@@ -531,12 +531,17 @@ export default function App() {
   const showVariantDiff = useCallback((unitId) => {
     const u = units.find(x => x.id === unitId);
     if (!u) return;
-    const siblings = units.filter(x => x.unit === u.unit);
+    // Strip aor/merc prefix to match the sidebar's grouping. Picks up
+    // sibling variants that live under a prefixed recruit name (e.g.
+    // an AOR-only "aor X" sibling of factional "X").
+    const stripPrefix = (s) => String(s || "").replace(/^(aor|merc)\s+/i, "");
+    const baseKey = stripPrefix(u.unit);
+    const siblings = units.filter(x => stripPrefix(x.unit) === baseKey);
     if (siblings.length < 2) {
       toast(`"${u.unit}" has only one variant — nothing to diff.`, "info");
       return;
     }
-    setVariantDiff({ variants: siblings, recruitName: u.unit });
+    setVariantDiff({ variants: siblings, recruitName: baseKey });
   }, [units]);
 
   // Merge variants of the same unit that share every recruit-line-

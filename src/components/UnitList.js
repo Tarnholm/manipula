@@ -668,7 +668,11 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             },
             { label: "Copy unit name", onClick: () => navigator.clipboard?.writeText(ctxMenu.unit.unit) },
             onShowVariantDiff && (() => {
-              const siblings = units.filter(u => u.unit === ctxMenu.unit.unit);
+              // Match the stripped-prefix grouping the sidebar uses so
+              // the count includes prefixed-name siblings (aor X, merc X).
+              const stripPrefix = (s) => String(s || "").replace(/^(aor|merc)\s+/i, "");
+              const baseKey = stripPrefix(ctxMenu.unit.unit);
+              const siblings = units.filter(u => stripPrefix(u.unit) === baseKey);
               if (siblings.length < 2) return null;
               return { label: `Compare ${siblings.length} variants…`, onClick: () => onShowVariantDiff(ctxMenu.unit.id) };
             })(),

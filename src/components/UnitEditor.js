@@ -33,7 +33,14 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
   // variant of that one card they actually want to edit.
   const siblings = useMemo(() => {
     if (!unit || !Array.isArray(allUnits)) return [];
-    return allUnits.filter(u => u.unit === unit.unit);
+    // Match the sidebar grouping logic — strip leading aor / merc
+    // prefix so an "aor achaian peltast" rolls into the same variant
+    // strip as "achaian peltast". Without this the sidebar shows 4
+    // variants for the group but the editor only shows 3 because
+    // variant 4 lives under a prefixed recruit name. (v0.34.6.)
+    const stripPrefix = (s) => String(s || "").replace(/^(aor|merc)\s+/i, "");
+    const baseKey = stripPrefix(unit.unit);
+    return allUnits.filter(u => stripPrefix(u.unit) === baseKey);
   }, [unit, allUnits]);
 
   if (!unit) {
