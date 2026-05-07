@@ -334,28 +334,10 @@ function ModInfoScreen({ project, setProject }) {
   );
 }
 
-// Hash a password to hex SHA-256 via Web Crypto. Used for the optional
-// password gate on Core Data editing — the hash is stored in the
-// project's manipula.project.json (modInfo.coreDataLockHash) so the
-// project itself carries the lock and travels with git, but the
-// password is never persisted in plaintext.
-async function sha256Hex(text) {
-  const buf = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
 function CoreDataScreen({ project, setProject }) {
   const tables = project?.coreData || {};
   const names = Object.keys(tables);
   const [active, setActive] = useState(names[0] || null);
-  // Lock state for editable mode. The project's modInfo carries the hash
-  // (set on first lock), so a teammate cloning the repo inherits the gate.
-  const lockHash = (project && project.modInfo && project.modInfo.coreDataLockHash) || null;
-  const [unlocked, setUnlocked] = useState(false);
-  const [pwPrompt, setPwPrompt] = useState(null);   // null | "set" | "verify"
-  const [pwInput, setPwInput] = useState("");
-  const [pwError, setPwError] = useState(null);
 
   // Defer early-returns until after every hook below has been called.
   // Same Rules-of-Hooks fix as UnitsScreen / ArmourScreen.
@@ -368,27 +350,10 @@ function CoreDataScreen({ project, setProject }) {
     return [...s];
   }, [rows]);
 
-  const tryUnlock = async () => {
-    setPwError(null);
-    if (!pwInput) return;
-    if (lockHash) {
-      const h = await sha256Hex(pwInput);
-      if (h === lockHash) {
-        setUnlocked(true); setPwPrompt(null); setPwInput("");
-      } else {
-        setPwError("Wrong password.");
-      }
-    } else {
-      // First-time set — hash and stash on the project.
-      const h = await sha256Hex(pwInput);
-      const nextProject = { ...project, modInfo: { ...(project.modInfo || {}), coreDataLockHash: h } };
-      setProject(nextProject);
-      setUnlocked(true); setPwPrompt(null); setPwInput("");
-    }
-  };
-
+  // Core Data is freely editable — the password lock the screen used to
+  // gate edits behind has been removed. (modInfo.coreDataLockHash may
+  // still be present on existing projects but is now ignored.)
   const onEdit = useCallback((rowIdx, columnKey, newValue) => {
-    if (!unlocked) return;
     const t = tables[active];
     if (!Array.isArray(t)) return;
     const cur = t[rowIdx];
@@ -399,34 +364,31 @@ function CoreDataScreen({ project, setProject }) {
     else next[columnKey] = newValue;
     const nextTable = t.slice(); nextTable[rowIdx] = next;
     setProject({ ...project, coreData: { ...tables, [active]: nextTable } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
 
   const addBlank = useCallback(() => {
-    if (!unlocked) return;
     const t = tables[active] || [];
     // Seed a blank row using the first existing row's keys (so the column
     // shape stays consistent) — empty strings everywhere.
     const seed = t[0] ? Object.fromEntries(Object.keys(t[0]).map(k => [k, ""])) : {};
     setProject({ ...project, coreData: { ...tables, [active]: [...t, seed] } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
   const duplicateRow = useCallback((idx) => {
-    if (!unlocked) return;
     const t = tables[active] || [];
     const cur = t[idx]; if (!cur) return;
     const copy = JSON.parse(JSON.stringify(cur));
     const next = t.slice(); next.splice(idx + 1, 0, copy);
     setProject({ ...project, coreData: { ...tables, [active]: next } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
   const deleteRow = useCallback((idx) => {
-    if (!unlocked) return;
     const t = tables[active] || [];
     const next = t.slice(); next.splice(idx, 1);
     setProject({ ...project, coreData: { ...tables, [active]: next } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
 
   // Bulk operations on selected rows of the active core-data table.
   const bulkSetCoreData = useCallback((rowIdxs, column, value) => {
-    if (!unlocked || !rowIdxs || !rowIdxs.length || !column) return;
+    if (!rowIdxs || !rowIdxs.length || !column) return;
     const t = tables[active] || [];
     const sel = new Set(rowIdxs);
     const next = t.map((r, i) => {
@@ -437,17 +399,17 @@ function CoreDataScreen({ project, setProject }) {
       return out;
     });
     setProject({ ...project, coreData: { ...tables, [active]: next } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
   const bulkDeleteCoreData = useCallback((rowIdxs) => {
-    if (!unlocked || !rowIdxs || !rowIdxs.length) return;
+    if (!rowIdxs || !rowIdxs.length) return;
     if (!window.confirm(`Delete ${rowIdxs.length} selected row${rowIdxs.length === 1 ? "" : "s"} from "${active}"?`)) return;
     const t = tables[active] || [];
     const sel = new Set(rowIdxs);
     const next = t.filter((_, i) => !sel.has(i));
     setProject({ ...project, coreData: { ...tables, [active]: next } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
   const bulkDuplicateCoreData = useCallback((rowIdxs) => {
-    if (!unlocked || !rowIdxs || !rowIdxs.length) return;
+    if (!rowIdxs || !rowIdxs.length) return;
     const t = tables[active] || [];
     const sel = rowIdxs.slice().sort((a, b) => b - a);
     let next = t.slice();
@@ -457,14 +419,13 @@ function CoreDataScreen({ project, setProject }) {
       next.splice(idx + 1, 0, copy);
     }
     setProject({ ...project, coreData: { ...tables, [active]: next } });
-  }, [unlocked, tables, active, project, setProject]);
+  }, [tables, active, project, setProject]);
 
   // Add a brand-new core data table. Used when a teammate needs a
   // category set the xlsm didn't ship with — e.g. a new specialMounts
   // row. Tables are arrays of objects keyed by column name; we seed
   // the new one as an empty array so the user can add rows.
   const addNewTable = useCallback(() => {
-    if (!unlocked) { window.alert("Unlock core-data editing first."); return; }
     const name = window.prompt("New table name (lowercase camelCase, e.g. 'specialFormations'):", "");
     if (!name) return;
     const safe = name.trim();
@@ -472,7 +433,7 @@ function CoreDataScreen({ project, setProject }) {
     if (tables[safe]) { window.alert(`Table "${safe}" already exists.`); return; }
     setProject({ ...project, coreData: { ...tables, [safe]: [] } });
     setActive(safe);
-  }, [unlocked, tables, project, setProject]);
+  }, [tables, project, setProject]);
 
   // Now that all hooks have been called we can early-return safely.
   if (!project) return <EmptyScreen />;
@@ -480,42 +441,7 @@ function CoreDataScreen({ project, setProject }) {
 
   return (
     <div className="screen">
-      <h2 style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        Core Data
-        {unlocked ? (
-          <span style={{ fontSize: 11, color: "#7c9", border: "1px solid #7c9", padding: "2px 8px", borderRadius: 12, fontWeight: 400 }}>editing unlocked</span>
-        ) : (
-          <button
-            className="btn"
-            onClick={() => setPwPrompt(lockHash ? "verify" : "set")}
-            style={{ marginLeft: 8 }}
-            title={lockHash ? "Enter the team password to edit core data" : "Set a password to gate core-data edits for this project"}
-          >🔒 {lockHash ? "Unlock for editing" : "Set lock + edit"}</button>
-        )}
-      </h2>
-
-      {pwPrompt && (
-        <div style={{ background: "#1c1c1c", border: "1px solid #3a3a3a", borderRadius: 6, padding: 12, marginBottom: 14, maxWidth: 420, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ color: "#dca64a", fontSize: 12 }}>
-            {pwPrompt === "set"
-              ? "Set a password to gate Core Data edits for this project. Hashed and stored in manipula.project.json — teammates need to know it to edit."
-              : "Enter the project's Core Data password."}
-          </div>
-          <input
-            type="password"
-            autoFocus
-            value={pwInput}
-            onChange={(e) => setPwInput(e.target.value)}
-            onKeyDown={async (e) => { if (e.key === "Enter") await tryUnlock(); else if (e.key === "Escape") { setPwPrompt(null); setPwInput(""); setPwError(null); } }}
-            style={{ background: "#0e0e0e", color: "#fff", border: "1px solid #3a3a3a", borderRadius: 4, padding: "6px 10px", fontFamily: "Consolas, monospace", outline: "none" }}
-          />
-          {pwError && <div style={{ color: "#d66c6c", fontSize: 11 }}>{pwError}</div>}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn" onClick={tryUnlock}>{pwPrompt === "set" ? "Set" : "Unlock"}</button>
-            <button className="btn" onClick={() => { setPwPrompt(null); setPwInput(""); setPwError(null); }}>Cancel</button>
-          </div>
-        </div>
-      )}
+      <h2>Core Data</h2>
 
       <div className="tabs">
         {names.map((n) => (
@@ -528,14 +454,12 @@ function CoreDataScreen({ project, setProject }) {
             <span className="tab-count"> ({tables[n].length})</span>
           </button>
         ))}
-        {unlocked && (
-          <button
-            className="tab"
-            onClick={addNewTable}
-            style={{ color: "#7c9", borderStyle: "dashed" }}
-            title="Add a new core-data table"
-          >+ table</button>
-        )}
+        <button
+          className="tab"
+          onClick={addNewTable}
+          style={{ color: "#7c9", borderStyle: "dashed" }}
+          title="Add a new core-data table"
+        >+ table</button>
       </div>
       <DataTable
         columns={columns}
