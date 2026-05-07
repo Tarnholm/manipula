@@ -155,31 +155,66 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
         </div>
       )}
 
-      {[...groups].map(([unitId, issuesForUnit]) => {
-        const u = units.find(x => x.id === unitId);
-        if (!u) return null;
-        const display = modIndex.unitDisplayName ? modIndex.unitDisplayName(u.unit) : null;
+      {/* Cap visible groups so a project with thousands of cross-file
+          issues (e.g. DMB orphans on a freshly imported mod) doesn't
+          drop 12k DOM rows on the user. The filter pills above narrow
+          by severity; an explicit "show all" affordance below the
+          truncation marker handles the rare case where the user wants
+          everything at once. */}
+      {(() => {
+        const all = [...groups];
+        const CAP = 200;
+        const head = all.slice(0, CAP);
+        const rest = all.slice(CAP);
         return (
-          <div key={unitId} style={{ marginBottom: 14, background: "rgba(28,30,32,0.4)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "10px 12px" }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-              <button
-                onClick={() => onJump && onJump(unitId)}
-                style={{ background: "rgba(220,166,74,0.18)", border: "1px solid rgba(220,166,74,0.3)", color: "#dca64a", padding: "3px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600 }}
-              >Jump →</button>
-              <span style={{ fontWeight: 600 }}>{display || u.unit}</span>
-              {display && <span style={{ color: "#666", fontSize: 11 }}>({u.unit})</span>}
-              <span style={{ color: "#888", fontSize: 11 }}>· {u.unitType || "faction"} · t{u.minTier}</span>
-            </div>
-            {issuesForUnit.map((i, idx) => (
-              <div key={idx} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "3px 0", fontSize: 12.5 }}>
-                <Severity severity={i.severity} />
-                <span style={{ color: "#ccc" }}>{i.message}</span>
-                <span title={ISSUE_DOCS[i.code] || ""} style={{ color: "#555", fontFamily: "Consolas, monospace", fontSize: 11, cursor: ISSUE_DOCS[i.code] ? "help" : "default", borderBottom: ISSUE_DOCS[i.code] ? "1px dotted #555" : "none" }}>[{i.code}]</span>
+          <>
+            {head.map(([unitId, issuesForUnit]) => renderGroup(unitId, issuesForUnit, units, modIndex, onJump))}
+            {rest.length > 0 && (
+              <div style={{ padding: 12, textAlign: "center", color: "#888", fontSize: 12, background: "rgba(28,30,32,0.4)", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 8 }}>
+                Showing first {CAP} of {all.length} groups · {rest.length} more hidden — narrow with the severity filter pills above, or look at the count summary at the top of the page.
               </div>
-            ))}
-          </div>
+            )}
+          </>
         );
-      })}
+      })()}
+    </div>
+  );
+}
+
+// Render a single (unitId, issues[]) group row. Groups map 1:1 to a
+// project unit when the issue's unitId is a real unit id; cross-file
+// issues use synthetic ids (edu:[DMB] X, orphan:X, [asset orphan] X)
+// that don't resolve. The synthetic case is rendered without the
+// Jump-to-editor button so the rows stay visible — previously those
+// groups returned null and the Validate panel sat empty while the
+// count pills claimed thousands of errors.
+function renderGroup(unitId, issuesForUnit, units, modIndex, onJump) {
+  const u = units.find(x => x.id === unitId);
+  const display = u && modIndex.unitDisplayName ? modIndex.unitDisplayName(u.unit) : null;
+  const heading = u
+    ? (display || u.unit)
+    : (issuesForUnit[0] && issuesForUnit[0].unit) || unitId;
+  return (
+    <div key={unitId} style={{ marginBottom: 14, background: "rgba(28,30,32,0.4)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+        {u && (
+          <button
+            onClick={() => onJump && onJump(unitId)}
+            style={{ background: "rgba(220,166,74,0.18)", border: "1px solid rgba(220,166,74,0.3)", color: "#dca64a", padding: "3px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600 }}
+          >Jump →</button>
+        )}
+        <span style={{ fontWeight: 600 }}>{heading}</span>
+        {u && display && <span style={{ color: "#666", fontSize: 11 }}>({u.unit})</span>}
+        {u && <span style={{ color: "#888", fontSize: 11 }}>· {u.unitType || "faction"} · t{u.minTier}</span>}
+        {!u && <span style={{ color: "#888", fontSize: 11 }}>· cross-file</span>}
+      </div>
+      {issuesForUnit.map((i, idx) => (
+        <div key={idx} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "3px 0", fontSize: 12.5 }}>
+          <Severity severity={i.severity} />
+          <span style={{ color: "#ccc" }}>{i.message}</span>
+          <span title={ISSUE_DOCS[i.code] || ""} style={{ color: "#555", fontFamily: "Consolas, monospace", fontSize: 11, cursor: ISSUE_DOCS[i.code] ? "help" : "default", borderBottom: ISSUE_DOCS[i.code] ? "1px dotted #555" : "none" }}>[{i.code}]</span>
+        </div>
+      ))}
     </div>
   );
 }

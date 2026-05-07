@@ -169,12 +169,17 @@ export default function App() {
             if (cancelled) return;
             if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) eduHistory.reset(loadedEdu);
             if (loadedUnits && loadedUnits.length) {
+              // history.reset triggers the units→dirty effect; mark the
+              // change as silent so the user isn't prompted to save a
+              // project they just auto-loaded without touching.
+              silentUnitChangeRef.current++;
               history.reset(loadedUnits.map(migrateV1));
               if (api && api.writeUnits) api.writeUnits({ units: loadedUnits });
             }
             setEduProjectSource(lastProject);
             setProjectDir(lastProject);
             setProjectExports(loadedExports || {});
+            setProjectDirty(false);
             setStatus(`Loaded project — ${(loadedUnits || []).length} recruit-lines · ${(loadedEdu?.units || []).length} EDU units`);
             return;
           }
@@ -1259,6 +1264,11 @@ export default function App() {
     const created = refreshed.filter(r => !units.some(u => u.unit === r.unit));
     const updated = refreshed.length - created.length;
     const collapsed = dropIds.size;
+    // Don't flip the project-dirty flag for auto-reconcile updates —
+    // they're idempotent re-derivations from the live EDB, not user
+    // edits. The next load reproduces the same shape, so losing them
+    // is harmless and the user shouldn't be prompted to save.
+    silentUnitChangeRef.current++;
     persistUnits(next);
     const parts = [];
     if (created.length) parts.push(`${created.length} new`);
@@ -1481,6 +1491,10 @@ export default function App() {
       const { eduProject: loadedEdu, units: loadedUnits, exports: loadedExports } = await loadProject(dir);
       if (loadedEdu && (loadedEdu.units || loadedEdu.factions || loadedEdu.coreData)) eduHistory.reset(loadedEdu);
       if (loadedUnits && loadedUnits.length) {
+        // The history.reset triggers the units→dirty effect; flag it as
+        // a silent change so the user isn't prompted to save right after
+        // opening a project they haven't even touched yet.
+        silentUnitChangeRef.current++;
         history.reset(loadedUnits.map(migrateV1));
         if (api) await api.writeUnits({ units: loadedUnits });
       }
@@ -1488,6 +1502,7 @@ export default function App() {
       setProjectDir(dir);
       setProjectExports(loadedExports || {});
       setEduDirty(false);
+      setProjectDirty(false);
       localStorage.setItem("rt:projectDir", dir);
       toast(`Loaded project — ${(loadedUnits || []).length} recruit-lines · ${(loadedEdu?.units || []).length} EDU units`, "success");
       return true;
@@ -1603,7 +1618,21 @@ export default function App() {
   const [projectDirty, setProjectDirty] = useState(false);
   const projectDirtyRef = useRef(false);
   useEffect(() => { projectDirtyRef.current = projectDirty; }, [projectDirty]);
-  useEffect(() => { setProjectDirty(true); }, [units]);
+  // Two guards on the units→dirty link so the user isn't prompted to
+  // save when they didn't actually edit anything:
+  //   • didMountRef skips the initial mount (React's useEffect fires
+  //     once on mount with the dep value, even when nothing changed).
+  //   • silentUnitChangeRef is bumped by callers that mutate `units`
+  //     for non-user reasons (auto-reconcile, project load) so the
+  //     next dirty flip is suppressed. Decremented in the effect so
+  //     stacked silent updates are all absorbed in order.
+  const didMountUnitsRef = useRef(false);
+  const silentUnitChangeRef = useRef(0);
+  useEffect(() => {
+    if (!didMountUnitsRef.current) { didMountUnitsRef.current = true; return; }
+    if (silentUnitChangeRef.current > 0) { silentUnitChangeRef.current--; return; }
+    setProjectDirty(true);
+  }, [units]);
   useEffect(() => { if (eduDirty) setProjectDirty(true); }, [eduDirty]);
 
   useEffect(() => {
