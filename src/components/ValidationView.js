@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { validateUnits, validateFactions, summarize, eduValidationIssues, eduOrphanIssues, crossSideIssues } from "../validation";
 import { validate as eduValidate } from "../edu_matic/validate";
 
@@ -55,6 +55,12 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
   // Code filter: Set<string> of issue codes to keep. Empty = no filter.
   const [codeFilter, setCodeFilter] = useState(() => new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  // Bulk-action selection: Set<unitId> of groups the user has ticked.
+  // Cleared whenever the visible filter changes so stale selections
+  // don't trigger surprise actions on rows the user can't see.
+  const [selectedUnitIds, setSelectedUnitIds] = useState(() => new Set());
+  useEffect(() => { setSelectedUnitIds(new Set()); }, [filter, codeFilter, searchQuery]);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Distinct (code → count) for the code-filter chip bar. Computed off
   // severity-filtered issues so the count next to each chip reflects
@@ -233,7 +239,79 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
         </div>
       )}
 
-      {[...groups].map(([unitId, issuesForUnit]) => renderGroup(unitId, issuesForUnit, units, modIndex, onJump))}
+      {(() => {
+        // Bulk-action bar — only meaningful when the visible groups all
+        // belong to one actionable code. We support two flavours today:
+        //   • dmb-orphan-asset → delete files from disk
+        //   • dmb-orphan-type → strip 'type X' blocks from DMB
+        // Need codeFilter to be exactly one of those (otherwise mixing
+        // selections would be ambiguous about what action to run).
+        const actionableCodes = new Set(["dmb-orphan-asset", "dmb-orphan-type"]);
+        const onlyCode = codeFilter.size === 1 ? [...codeFilter][0] : null;
+        if (!onlyCode || !actionableCodes.has(onlyCode)) return null;
+        const visibleIds = [...groups.keys()];
+        const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedUnitIds.has(id));
+        const selectionCount = visibleIds.filter(id => selectedUnitIds.has(id)).length;
+        const labelFor = onlyCode === "dmb-orphan-asset"
+          ? `Delete ${selectionCount} orphan file${selectionCount === 1 ? "" : "s"} from disk`
+          : `Strip ${selectionCount} 'type X' block${selectionCount === 1 ? "" : "s"} from DMB`;
+        const runBulk = async () => {
+          const api = window.eduAPI;
+          if (!api) return;
+          const selectedGroups = [...groups.entries()].filter(([id]) => selectedUnitIds.has(id));
+          if (selectedGroups.length === 0) return;
+          if (onlyCode === "dmb-orphan-asset") {
+            const paths = selectedGroups.map(([, items]) => items[0] && (items[0].unit || "").replace(/^\[asset orphan\]\s+/, "")).filter(Boolean);
+            if (!window.confirm(
+              `Permanently delete ${paths.length} file${paths.length === 1 ? "" : "s"} from the mod data folder?\n\n` +
+              `${paths.slice(0, 8).map(p => "  • " + p).join("\n")}${paths.length > 8 ? `\n  …and ${paths.length - 8} more` : ""}\n\n` +
+              `NOT recoverable. Files are unlinked, not moved to a recycle bin.`
+            )) return;
+            setBulkBusy(true);
+            try {
+              const r = await api.deleteModFiles(paths);
+              alert(`Deleted ${r.deleted} file${r.deleted === 1 ? "" : "s"}.${r.failed && r.failed.length ? `\n\n${r.failed.length} failed:\n${r.failed.slice(0, 8).map(f => "  • " + f.path + " — " + f.error).join("\n")}` : ""}\n\nReload mod files (topbar Reload) to refresh the validation list.`);
+              setSelectedUnitIds(new Set());
+            } finally { setBulkBusy(false); }
+          } else if (onlyCode === "dmb-orphan-type") {
+            const types = selectedGroups.map(([, items]) => items[0] && (items[0].unit || "").replace(/^\[DMB\]\s+/, "")).filter(Boolean);
+            if (!window.confirm(
+              `Strip ${types.length} 'type X' block${types.length === 1 ? "" : "s"} from descr_model_battle.txt?\n\n` +
+              `${types.slice(0, 8).map(t => "  • type " + t).join("\n")}${types.length > 8 ? `\n  …and ${types.length - 8} more` : ""}\n\n` +
+              `Each block runs from its 'type' line until the next one (or EOF). A timestamped backup of DMB is written first.`
+            )) return;
+            setBulkBusy(true);
+            try {
+              const r = await api.stripDmbTypes(types);
+              if (!r.ok) { alert("Strip failed: " + (r.reason || "unknown")); return; }
+              alert(`Stripped ${r.stripped} block${r.stripped === 1 ? "" : "s"} from DMB.\n\nBackup: ${r.backup}\n\nReload mod files (topbar Reload) to refresh the validation list.`);
+              setSelectedUnitIds(new Set());
+            } finally { setBulkBusy(false); }
+          }
+        };
+        return (
+          <div style={{ marginBottom: 12, padding: "8px 12px", background: "rgba(232,136,136,0.06)", border: "1px solid rgba(232,136,136,0.25)", borderRadius: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "#ccc" }}>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={() => {
+                  if (allSelected) setSelectedUnitIds(new Set());
+                  else setSelectedUnitIds(new Set(visibleIds));
+                }}
+              />
+              {allSelected ? "Deselect all" : `Select all ${visibleIds.length} visible`}
+            </label>
+            <span style={{ color: "#888", fontSize: 11 }}>· {selectionCount} selected</span>
+            <button
+              disabled={bulkBusy || selectionCount === 0}
+              onClick={runBulk}
+              style={{ marginLeft: "auto", background: selectionCount > 0 ? "rgba(232,136,136,0.18)" : "rgba(255,255,255,0.04)", color: selectionCount > 0 ? "#e88" : "#666", border: "1px solid " + (selectionCount > 0 ? "rgba(232,136,136,0.5)" : "#333"), padding: "5px 14px", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: selectionCount > 0 ? "pointer" : "not-allowed" }}
+            >{bulkBusy ? "Working…" : labelFor}</button>
+          </div>
+        );
+      })()}
+      {[...groups].map(([unitId, issuesForUnit]) => renderGroup(unitId, issuesForUnit, units, modIndex, onJump, selectedUnitIds, setSelectedUnitIds, codeFilter))}
     </div>
   );
 }
@@ -242,18 +320,35 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
 // project unit when the issue's unitId is a real unit id; cross-file
 // issues use synthetic ids (edu:[DMB] X, orphan:X, [asset orphan] X)
 // that don't resolve. The synthetic case is rendered without the
-// Jump-to-editor button so the rows stay visible — previously those
-// groups returned null and the Validate panel sat empty while the
-// count pills claimed thousands of errors.
-function renderGroup(unitId, issuesForUnit, units, modIndex, onJump) {
+// Jump-to-editor button so the rows stay visible.
+//
+// When the codeFilter is one of the bulk-actionable codes
+// (dmb-orphan-asset / dmb-orphan-type) a checkbox is rendered so the
+// user can select rows for the bulk-action bar above.
+function renderGroup(unitId, issuesForUnit, units, modIndex, onJump, selectedUnitIds, setSelectedUnitIds, codeFilter) {
   const u = units.find(x => x.id === unitId);
   const display = u && modIndex.unitDisplayName ? modIndex.unitDisplayName(u.unit) : null;
   const heading = u
     ? (display || u.unit)
     : (issuesForUnit[0] && issuesForUnit[0].unit) || unitId;
+  const actionableCodes = new Set(["dmb-orphan-asset", "dmb-orphan-type"]);
+  const showCheckbox = codeFilter && codeFilter.size === 1 && actionableCodes.has([...codeFilter][0]);
+  const isSelected = selectedUnitIds && selectedUnitIds.has(unitId);
   return (
-    <div key={unitId} style={{ marginBottom: 14, background: "rgba(28,30,32,0.4)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "10px 12px" }}>
+    <div key={unitId} style={{ marginBottom: 14, background: isSelected ? "rgba(232,136,136,0.08)" : "rgba(28,30,32,0.4)", border: `1px solid ${isSelected ? "rgba(232,136,136,0.4)" : "rgba(255,255,255,0.06)"}`, borderRadius: 8, padding: "10px 12px" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+        {showCheckbox && setSelectedUnitIds && (
+          <input
+            type="checkbox"
+            checked={!!isSelected}
+            onChange={() => {
+              const next = new Set(selectedUnitIds);
+              if (next.has(unitId)) next.delete(unitId); else next.add(unitId);
+              setSelectedUnitIds(next);
+            }}
+            style={{ marginRight: 4 }}
+          />
+        )}
         {u && (
           <button
             onClick={() => onJump && onJump(unitId)}

@@ -893,6 +893,67 @@ ipcMain.handle("prewarm-unit-cards", async (_e, list) => {
 // inputs that are missing on disk; cached by mtime so repeat calls are
 // cheap. Cache is cleared whenever the data dir changes (see
 // set-data-dir → clearResolveTgaCache below if it exists).
+// Bulk-delete asset files under the mod data dir. Used by the Validate
+// panel's "Delete N orphan files" bulk action. Inputs are the
+// `data/...`-prefixed paths emitted by parseDMB / list-mod-asset-files;
+// resolved by stripping the prefix and joining onto dataDir. Reports
+// per-path success / failure so the UI can flag what couldn't be removed
+// (permissions, file-in-use, etc.).
+ipcMain.handle("delete-mod-files", async (_e, relPaths) => {
+  if (!Array.isArray(relPaths)) return { ok: false, deleted: 0, failed: [] };
+  const d = dataDir();
+  let deleted = 0;
+  const failed = [];
+  for (const p of relPaths) {
+    if (typeof p !== "string" || !p) continue;
+    const rel = p.replace(/^data[\\/]+/i, "").replace(/[\\/]+/g, path.sep);
+    const abs = path.join(d, rel);
+    try {
+      if (fs.existsSync(abs)) { fs.unlinkSync(abs); deleted++; }
+      else failed.push({ path: p, error: "not found" });
+    } catch (e) {
+      failed.push({ path: p, error: e.message });
+    }
+  }
+  return { ok: true, deleted, failed };
+});
+
+// Strip named `type X` blocks from descr_model_battle.txt. Used by the
+// Validate panel's "Strip N DMB blocks" bulk action. Backs up the
+// original to descr_model_battle.txt.bak_<timestamp> before writing so
+// the user can recover if the strip removed too much. A block runs from
+// its `type X` line until the next `type Y` (or EOF), inclusive of the
+// type line itself.
+ipcMain.handle("strip-dmb-types", async (_e, typeNames) => {
+  if (!Array.isArray(typeNames) || typeNames.length === 0) return { ok: false, stripped: 0 };
+  const d = dataDir();
+  const dmbPath = path.join(d, "descr_model_battle.txt");
+  if (!fs.existsSync(dmbPath)) return { ok: false, reason: "descr_model_battle.txt not found" };
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = dmbPath + ".bak_" + stamp;
+    fs.copyFileSync(dmbPath, backupPath);
+    const text = readSmart(dmbPath);
+    const lines = text.split(/\r?\n/);
+    const targetSet = new Set(typeNames);
+    const out = [];
+    let skipping = false;
+    let stripped = 0;
+    for (const line of lines) {
+      const m = line.match(/^type\s+(\S+)/i);
+      if (m) {
+        if (targetSet.has(m[1])) { skipping = true; stripped++; continue; }
+        skipping = false;
+      }
+      if (!skipping) out.push(line);
+    }
+    fs.writeFileSync(dmbPath, out.join("\n"), "utf8");
+    return { ok: true, stripped, backup: backupPath };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
+
 ipcMain.handle("check-mod-paths", async (_e, relPaths) => {
   if (!Array.isArray(relPaths)) return { missing: [] };
   const d = dataDir();

@@ -96,6 +96,8 @@ contextBridge.exposeInMainWorld("eduAPI", {
   gitDiscardAndPull: (dir) => ipcRenderer.invoke("git-discard-and-pull", dir),
   checkModPaths: (relPaths) => ipcRenderer.invoke("check-mod-paths", relPaths),
   listModAssetFiles: (subdirs, exts) => ipcRenderer.invoke("list-mod-asset-files", subdirs, exts),
+  deleteModFiles: (relPaths) => ipcRenderer.invoke("delete-mod-files", relPaths),
+  stripDmbTypes: (typeNames) => ipcRenderer.invoke("strip-dmb-types", typeNames),
   gitClone: (url, dest) => ipcRenderer.invoke("git-clone", url, dest),
   gitDiffStat: (dir) => ipcRenderer.invoke("git-diff-stat", dir),
   gitLogFile: (dir, relPath, n) => ipcRenderer.invoke("git-log-file", dir, relPath, n),
