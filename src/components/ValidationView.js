@@ -52,8 +52,31 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
   const factionIssues = useMemo(() => validateFactions(units, modIndex), [units, modIndex]);
   const sum = useMemo(() => summarize(issues), [issues]);
   const [filter, setFilter] = useState("all");
+  // Code filter: Set<string> of issue codes to keep. Empty = no filter.
+  const [codeFilter, setCodeFilter] = useState(() => new Set());
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const filtered = issues.filter(i => filter === "all" || i.severity === filter);
+  // Distinct (code → count) for the code-filter chip bar. Computed off
+  // severity-filtered issues so the count next to each chip reflects
+  // what's actually visible at the current severity.
+  const codeCounts = useMemo(() => {
+    const m = new Map();
+    for (const i of issues) {
+      if (filter !== "all" && i.severity !== filter) continue;
+      m.set(i.code, (m.get(i.code) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);   // most-frequent first
+  }, [issues, filter]);
+
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return issues.filter(i => {
+      if (filter !== "all" && i.severity !== filter) return false;
+      if (codeFilter.size > 0 && !codeFilter.has(i.code)) return false;
+      if (q && !((i.unit || "").toLowerCase().includes(q) || (i.message || "").toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }, [issues, filter, codeFilter, searchQuery]);
 
   // Group by unit
   const groups = new Map();
@@ -87,6 +110,60 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
           ) : null;
         })()}
       </div>
+
+      {/* Filter row: free-text search + multi-select code chips. The chips
+          show a count derived off the severity filter above so they're
+          self-consistent ("after I filtered to errors, how many of each
+          code remain?"). Click a chip to add/remove from codeFilter;
+          empty codeFilter = show all codes. */}
+      {(codeCounts.length > 1 || sum.total > 0) && (
+        <div style={{ marginBottom: 12, padding: 8, background: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 6 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search unit name or message…"
+              style={{ flex: 1, background: "#1c1c1c", border: "1px solid #333", color: "#ddd", padding: "5px 10px", borderRadius: 4, fontSize: 12 }}
+            />
+            {(codeFilter.size > 0 || searchQuery) && (
+              <button
+                onClick={() => { setCodeFilter(new Set()); setSearchQuery(""); }}
+                style={{ background: "rgba(255,255,255,0.06)", color: "#aaa", border: "1px solid #333", padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer" }}
+                title="Clear search query and all code-chip selections"
+              >Clear</button>
+            )}
+            <span style={{ fontSize: 11, color: "#888" }}>
+              {filtered.length} / {sum.total} shown
+            </span>
+          </div>
+          {codeCounts.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {codeCounts.map(([code, count]) => {
+                const active = codeFilter.has(code);
+                return (
+                  <button
+                    key={code}
+                    onClick={() => {
+                      const next = new Set(codeFilter);
+                      if (next.has(code)) next.delete(code); else next.add(code);
+                      setCodeFilter(next);
+                    }}
+                    title={ISSUE_DOCS[code] || code}
+                    style={{
+                      background: active ? "rgba(220,166,74,0.2)" : "rgba(255,255,255,0.04)",
+                      color: active ? "#dca64a" : "#aaa",
+                      border: `1px solid ${active ? "rgba(220,166,74,0.5)" : "rgba(255,255,255,0.1)"}`,
+                      padding: "2px 8px", borderRadius: 12, fontSize: 10, fontWeight: 600,
+                      fontFamily: "Consolas, monospace", cursor: "pointer", letterSpacing: 0.3,
+                    }}
+                  >{code} <span style={{ opacity: 0.7 }}>· {count}</span></button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {sum.total === 0 && factionIssues.length === 0 && (
         <div style={{ padding: 30, textAlign: "center", color: "#7c9", fontSize: 14 }}>
