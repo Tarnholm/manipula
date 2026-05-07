@@ -1595,6 +1595,11 @@ ipcMain.handle("git-fetch", async (_e, dir) => runGit(dir, ["fetch", "--quiet"])
 // the user is about to commit. --stat is human-readable and short
 // enough for an inline panel; we don't try to pretty-render the diff itself.
 ipcMain.handle("git-diff-stat", async (_e, dir) => runGit(dir, ["diff", "--stat", "HEAD"]));
+// Full unified diff vs HEAD — used by the Sync popover's expand-diff
+// view so the user can proofread what's about to be committed +
+// pushed. Capped at ~500KB by the renderer (diffs above that fall
+// back to the stat-only view).
+ipcMain.handle("git-diff", async (_e, dir) => runGit(dir, ["diff", "HEAD"]));
 // Per-file blame summary — last N commits touching a path. Used to
 // surface "last edited by X (3h ago)" tooltips on rows. Returns
 // pipe-delimited "shortHash|author|relativeDate" lines.

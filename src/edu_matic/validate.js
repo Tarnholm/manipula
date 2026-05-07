@@ -114,6 +114,7 @@ function validate(project, opts) {
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
   ctx.dmbAssetOrphans = (opts && Array.isArray(opts.dmbAssetOrphans)) ? opts.dmbAssetOrphans : null;
+  ctx.unitStringTags = (opts && opts.unitStringTags instanceof Set) ? opts.unitStringTags : null;
 
   checkModInfo(project, ctx, push);
   checkGlobals(project, ctx, push);
@@ -127,6 +128,7 @@ function validate(project, opts) {
     checkUnitArmourUpgrades(u, ctx, push);
     checkUnitFactionOwnership(u, ctx, project, push);
     checkUnitDmbModel(u, ctx, push);
+    checkUnitDictionaryTag(u, ctx, push);
   }
   checkDmbAssetReferences(project, ctx, push);
   checkDmbOrphanTypes(project, ctx, push);
@@ -463,6 +465,20 @@ function checkUnitDmbModel(u, ctx, push) {
   if (!ctx.dmbModels.has(modelId)) {
     push(err(u.name, u.row, `Unit "model id" references "${modelId}" but no matching 'type ${modelId}' block exists in descr_model_battle.txt — game will crash on load.`, "unit-dmb-missing"));
   }
+}
+
+// Cross-file: the EDU's `dictionary_tag` column is the key text/export_units.txt
+// uses to look up the unit's display name + descriptions. If the tag has no
+// matching `{tag}…` entry there, the unit's name shows up as the raw tag in
+// the game's UI (and any tooltip / encyclopaedia entry will be empty).
+// ctx.unitStringTags is the precomputed Set<tag> built off the parsed
+// strings index; skipped when the strings file isn't loaded.
+function checkUnitDictionaryTag(u, ctx, push) {
+  if (!ctx.unitStringTags) return;
+  const tag = String(u.dictionary_tag || "").trim();
+  if (!tag) return;     // empty is its own structural error elsewhere
+  if (ctx.unitStringTags.has(tag)) return;
+  push(err(u.name, u.row, `Dictionary tag "${tag}" has no matching {${tag}} entry in text/export_units.txt — the unit's name and description won't display correctly in-game.`, "unit-dict-missing"));
 }
 
 // DMB → mod-data: every `pbr_texture / texture / model_flexi*` path

@@ -100,6 +100,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   stripDmbTypes: (typeNames) => ipcRenderer.invoke("strip-dmb-types", typeNames),
   gitClone: (url, dest) => ipcRenderer.invoke("git-clone", url, dest),
   gitDiffStat: (dir) => ipcRenderer.invoke("git-diff-stat", dir),
+  gitDiff: (dir) => ipcRenderer.invoke("git-diff", dir),
   gitLogFile: (dir, relPath, n) => ipcRenderer.invoke("git-log-file", dir, relPath, n),
   gitLogBulk: (dir) => ipcRenderer.invoke("git-log-bulk", dir),
   appendExportUnitsStub: (modDataDir, unitKey, displayName) => ipcRenderer.invoke("append-export-units-stub", modDataDir, unitKey, displayName),

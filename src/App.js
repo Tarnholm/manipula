@@ -1928,12 +1928,13 @@ export default function App() {
           dmbModelFiles: modIndex.dmbModelFiles,
           dmbAssetMissing: modIndex.dmbAssetMissing,
           dmbAssetOrphans: modIndex.dmbAssetOrphans,
+          unitStringTags: modIndex.strings && modIndex.strings.units ? new Set(Object.keys(modIndex.strings.units)) : null,
         });
         if (!cancelled) setEduValidationErrors(Array.isArray(errs) ? errs : []);
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
@@ -2901,11 +2902,19 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
   const [pos, setPos] = useState(null);
 
   const [diffStat, setDiffStat] = useState("");
+  // Full diff body for the expand-to-view-diff button. Loaded lazily on
+  // expand to avoid hauling potentially-megabytes of patch text on
+  // every popover open. Capped on render so a giant diff doesn't lock
+  // the renderer.
+  const [diffFull, setDiffFull] = useState(null);     // null | string
+  const [diffLoading, setDiffLoading] = useState(false);
   const [activity, setActivity] = useState([]);
   const refresh = useCallback(async () => {
     if (!projectDir || !api?.gitStatus) { setStatus(null); return; }
     const s = await api.gitStatus(projectDir);
     setStatus(s);
+    setDiffFull(null);   // any working-tree change invalidates the cached diff body
+
     if (api.gitDiffStat && s && s.isRepo && s.dirtyCount > 0) {
       try {
         const d = await api.gitDiffStat(projectDir);
@@ -3100,9 +3109,50 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                   {validationErrorCount > 0 && <span style={{ color: "#d66c6c" }}>⚠ {validationErrorCount} errors</span>}
                 </div>
                 {dirty && diffStat && (
-                  <pre style={{ margin: "8px 0 0", padding: 6, background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, fontSize: 10, color: "#bbb", maxHeight: 120, overflow: "auto", whiteSpace: "pre" }}>
-                    {diffStat.trim()}
-                  </pre>
+                  <>
+                    <pre style={{ margin: "8px 0 0", padding: 6, background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, fontSize: 10, color: "#bbb", maxHeight: 120, overflow: "auto", whiteSpace: "pre" }}>
+                      {diffStat.trim()}
+                    </pre>
+                    <div style={{ marginTop: 4, display: "flex", gap: 6 }}>
+                      {diffFull == null ? (
+                        <button
+                          disabled={diffLoading}
+                          onClick={async () => {
+                            if (!api.gitDiff || !projectDir) return;
+                            setDiffLoading(true);
+                            try {
+                              const r = await api.gitDiff(projectDir);
+                              const text = (r && (r.stdout || "")) || "";
+                              // Cap at ~500KB so a refactor-the-world diff
+                              // doesn't lock up the renderer with millions
+                              // of DOM characters.
+                              const CAP = 500 * 1024;
+                              setDiffFull(text.length > CAP ? text.slice(0, CAP) + `\n\n…[truncated; ${text.length - CAP} more chars hidden]` : text);
+                            } finally { setDiffLoading(false); }
+                          }}
+                          style={{ background: "rgba(255,255,255,0.04)", color: "#aaa", border: "1px solid #333", padding: "2px 8px", borderRadius: 3, fontSize: 10, cursor: "pointer" }}
+                          title="Show full unified diff vs HEAD — proofread the lines about to be pushed"
+                        >{diffLoading ? "Loading…" : "▸ Show diff"}</button>
+                      ) : (
+                        <button
+                          onClick={() => setDiffFull(null)}
+                          style={{ background: "rgba(220,166,74,0.10)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.3)", padding: "2px 8px", borderRadius: 3, fontSize: 10, cursor: "pointer" }}
+                        >▾ Hide diff</button>
+                      )}
+                    </div>
+                    {diffFull != null && (
+                      <pre style={{ margin: "6px 0 0", padding: 6, background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 4, fontSize: 10, color: "#bbb", maxHeight: 280, overflow: "auto", whiteSpace: "pre", lineHeight: 1.4 }}>
+                        {diffFull.split(/\r?\n/).map((line, i) => {
+                          const c = line.startsWith("+") && !line.startsWith("+++") ? "#7c9"
+                                  : line.startsWith("-") && !line.startsWith("---") ? "#e88"
+                                  : line.startsWith("@@") ? "#dca64a"
+                                  : line.startsWith("diff ") || line.startsWith("index ") ? "#888"
+                                  : "#bbb";
+                          return <div key={i} style={{ color: c }}>{line || " "}</div>;
+                        })}
+                      </pre>
+                    )}
+                  </>
                 )}
                 {validationErrorCount > 0 && (
                   <div style={{ marginTop: 8, padding: 6, background: "rgba(214,108,108,0.08)", border: "1px solid rgba(214,108,108,0.4)", borderRadius: 4, fontSize: 10, color: "#e88", maxHeight: 160, overflow: "auto" }}>
