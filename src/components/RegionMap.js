@@ -155,6 +155,18 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
   const dragRef = useRef(null);
   const dragMovedRef = useRef(false);
   const [mode, setMode] = useState("recruit");
+  // Provincia-style overlays: pixelated black borders between regions and
+  // region-name labels at each region's centroid. Default on so the map
+  // reads more like a campaign-strategy reference than a recruit-overlay.
+  // Persisted to localStorage so the user's preference survives reloads.
+  const [showBorders, setShowBorders] = useState(() => {
+    try { return localStorage.getItem("rt:mapBorders") !== "0"; } catch { return true; }
+  });
+  const [showLabels, setShowLabels] = useState(() => {
+    try { return localStorage.getItem("rt:mapLabels") !== "0"; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem("rt:mapBorders", showBorders ? "1" : "0"); } catch {} }, [showBorders]);
+  useEffect(() => { try { localStorage.setItem("rt:mapLabels", showLabels ? "1" : "0"); } catch {} }, [showLabels]);
   const [compareUnitId, setCompareUnitId] = useState(null);
   const [searchQ, setSearchQ] = useState("");
   const [clickedRegion, setClickedRegion] = useState(null); // when set, shows the side panel
@@ -236,7 +248,37 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
     return map;
   }, [modIndex.factions]);
 
-  // Repaint canvas. Each mode picks its own colouring function.
+  // Per-region centroid for label placement. Computed once per pixels load
+  // by averaging x,y over every pixel of each region. ~O(width*height)
+  // but only fires when the source map changes (rare).
+  const centroids = useMemo(() => {
+    if (!pixels) return new Map();
+    const { width, height, data } = pixels;
+    const sums = new Map(); // rgbKey → { x, y, count, name }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        const key = `${r},${g},${b}`;
+        const region = lookup[key];
+        if (!region || !region.region) continue;
+        let s = sums.get(key);
+        if (!s) { s = { x: 0, y: 0, count: 0, name: region.region }; sums.set(key, s); }
+        s.x += x; s.y += y; s.count++;
+      }
+    }
+    const out = new Map();
+    for (const [key, s] of sums) {
+      out.set(key, { x: s.x / s.count, y: s.y / s.count, name: s.name });
+    }
+    return out;
+  }, [pixels, lookup]);
+
+  // Repaint canvas. Each mode picks its own colouring function. When
+  // borders are enabled we paint a pixel black if any 4-neighbour belongs
+  // to a different region — gives the pixelated-stencil look from Provincia.
+  // When labels are enabled we draw region names at each centroid as a
+  // second pass on top of the ImageData.
   useEffect(() => {
     if (!pixels || !canvasRef.current) return;
     const { width, height, data } = pixels;
@@ -249,17 +291,57 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
       tierByKey,
     };
     const getColor = buildGetColor(mode, ctx);
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const region = lookup[`${r},${g},${b}`];
-      const col = getColor(region, r, g, b);
-      out[i] = col[0]; out[i + 1] = col[1]; out[i + 2] = col[2]; out[i + 3] = 255;
+    // Single pass — colour + (optional) border check. Sampling two
+    // neighbours (right + below) is enough to draw a 1-pixel border
+    // along every region boundary.
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        const region = lookup[`${r},${g},${b}`];
+        let col = getColor(region, r, g, b);
+        if (showBorders && region) {
+          let isBorder = false;
+          if (x + 1 < width) {
+            const j = (y * width + (x + 1)) * 4;
+            if (data[j] !== r || data[j + 1] !== g || data[j + 2] !== b) {
+              const r2 = lookup[`${data[j]},${data[j + 1]},${data[j + 2]}`];
+              if (r2 && r2.rgbKey !== region.rgbKey) isBorder = true;
+            }
+          }
+          if (!isBorder && y + 1 < height) {
+            const j = ((y + 1) * width + x) * 4;
+            if (data[j] !== r || data[j + 1] !== g || data[j + 2] !== b) {
+              const r2 = lookup[`${data[j]},${data[j + 1]},${data[j + 2]}`];
+              if (r2 && r2.rgbKey !== region.rgbKey) isBorder = true;
+            }
+          }
+          if (isBorder) col = [0, 0, 0];
+        }
+        out[i] = col[0]; out[i + 1] = col[1]; out[i + 2] = col[2]; out[i + 3] = 255;
+      }
     }
     const c = canvasRef.current;
     c.width = width;
     c.height = height;
-    c.getContext("2d").putImageData(new ImageData(out, width, height), 0, 0);
-  }, [pixels, lookup, matched, matchedB, mode, factionColors, density, tierByKey, modIndex.regionOwner]);
+    const ctx2d = c.getContext("2d");
+    ctx2d.putImageData(new ImageData(out, width, height), 0, 0);
+    // Labels: draw at each centroid. White fill with a thin black stroke
+    // so they stay readable across the saturated colour palette without
+    // needing per-region contrast logic.
+    if (showLabels) {
+      ctx2d.font = "600 9px Arial, sans-serif";
+      ctx2d.textAlign = "center";
+      ctx2d.textBaseline = "middle";
+      ctx2d.lineWidth = 2;
+      ctx2d.strokeStyle = "rgba(0, 0, 0, 0.85)";
+      ctx2d.fillStyle = "#fff";
+      for (const cd of centroids.values()) {
+        ctx2d.strokeText(cd.name, cd.x, cd.y);
+        ctx2d.fillText(cd.name, cd.x, cd.y);
+      }
+    }
+  }, [pixels, lookup, matched, matchedB, mode, factionColors, density, tierByKey, modIndex.regionOwner, showBorders, showLabels, centroids]);
 
   // Reset compare-unit picker when leaving compare mode.
   useEffect(() => { if (mode !== "compare") setCompareUnitId(null); }, [mode]);
@@ -435,6 +517,16 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
             placeholder="find region…"
             style={{ background: "#252525", border: "1px solid #333", color: "#ddd", padding: "3px 8px", borderRadius: 4, fontSize: 11, width: 130 }}
           />
+          <button
+            onClick={() => setShowBorders(b => !b)}
+            style={{ ...zoomBtn, fontSize: 10, padding: "2px 8px", background: showBorders ? "#3a3a2a" : "transparent", color: showBorders ? "#dca64a" : "#888", borderColor: showBorders ? "#5a4a2a" : "#333" }}
+            title="Toggle pixelated black borders between regions"
+          >Borders</button>
+          <button
+            onClick={() => setShowLabels(l => !l)}
+            style={{ ...zoomBtn, fontSize: 10, padding: "2px 8px", background: showLabels ? "#3a3a2a" : "transparent", color: showLabels ? "#dca64a" : "#888", borderColor: showLabels ? "#5a4a2a" : "#333" }}
+            title="Toggle region-name labels at each region's centroid"
+          >Labels</button>
           <button onClick={() => { const z = Math.max(1, zoom / 1.4); setZoom(z); if (z === 1) setPan({ x: 0, y: 0 }); }} style={zoomBtn} title="Zoom out (or Ctrl + scroll)">−</button>
           <span style={{ fontSize: 10, color: "#888", minWidth: 30, textAlign: "center", fontFamily: "Consolas, monospace" }} title="Ctrl + scroll to zoom">{zoom.toFixed(1)}×</span>
           <button onClick={() => setZoom(z => Math.min(8, z * 1.4))} style={zoomBtn} title="Zoom in (or Ctrl + scroll)">+</button>
