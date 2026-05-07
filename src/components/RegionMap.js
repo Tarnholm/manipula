@@ -263,7 +263,7 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
         const region = lookup[key];
         if (!region || !region.region) continue;
         let s = sums.get(key);
-        if (!s) { s = { x: 0, y: 0, count: 0, name: region.region }; sums.set(key, s); }
+        if (!s) { s = { x: 0, y: 0, count: 0, name: region.region, regionRecord: region }; sums.set(key, s); }
         s.x += x; s.y += y; s.count++;
       }
     }
@@ -271,7 +271,15 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
     for (const [key, s] of sums) {
       // area = pixel count, used at draw time to skip tiny slivers
       // that wouldn't have room for a label even at high zoom.
-      out.set(key, { x: s.x / s.count, y: s.y / s.count, name: s.name, area: s.count });
+      // Display name prefers the settlement (Pisae, Roma) over the
+      // descr_regions province key (Etruria_Septentrionalis) — shorter,
+      // matches what Provincia shows; falls back to a humanised region
+      // key if no settlement exists.
+      const region = s.regionRecord;
+      const display = (region && region.settlement)
+        ? region.settlement
+        : (region && region.region ? region.region.replace(/_/g, " ") : s.name);
+      out.set(key, { x: s.x / s.count, y: s.y / s.count, name: display, area: s.count });
     }
     return out;
   }, [pixels, lookup]);
@@ -587,7 +595,11 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
               transformOrigin: "0 0", pointerEvents: "none", overflow: "hidden",
             }}>
               {(() => {
-                const minArea = Math.max(60, 600 / (zoom * zoom));
+                // Slivers get suppressed at low zoom (so the labels at
+                // 1.5–2× don't pile up on islands), but at high zoom
+                // every region gets a label — that's the user's "max
+                // zoom should show everything" expectation.
+                const minArea = zoom >= 4 ? 0 : Math.max(20, 400 / (zoom * zoom));
                 const out = [];
                 for (const cd of centroids.values()) {
                   if ((cd.area || 0) < minArea) continue;
