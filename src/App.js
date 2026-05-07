@@ -1054,13 +1054,14 @@ export default function App() {
         // as the editor's QC-onChange handler.
         if (canonical) {
           const t = canonical.tierHint;
-          const canonMic = Math.min(t, 3);   // RIS caps mic_tier at 3 (mic_4 is buff-only, no recruits)
+          const canonMic = Math.min(t, 3);     // RIS caps mic_tier at 3 (mic_4 is buff-only, no recruits)
+          const homeland = t <= 2 ? 1 : 2;     // GovD: tier 1-2 → 1, tier 3+ → 2
           const govBOn = t === 1;
           const colony = t === 1 ? 1 : 2;
           if (
             u.qualityClass === value &&
             u.canonicalMicTier === canonMic &&
-            u.homelandMicTier === 2 &&
+            u.homelandMicTier === homeland &&
             u.emitGovB === govBOn &&
             u.colonyTier === colony
           ) return u;
@@ -1068,7 +1069,7 @@ export default function App() {
             ...u,
             qualityClass: value,
             canonicalMicTier: canonMic,
-            homelandMicTier: 2,              // GovD constant
+            homelandMicTier: homeland,
             emitGovB: govBOn,
             colonyTier: colony,
           };
@@ -1136,7 +1137,74 @@ export default function App() {
       }
       return patched;
     });
-    const next = paired.filter(u => !dropIds.has(u.id));
+    let next = paired.filter(u => !dropIds.has(u.id));
+    // Auto-merge identical ref-only variants. Two variants of the same
+    // unit name that share every recruit-line setting except their
+    // factions list get unioned (faction lists merged) and the
+    // duplicates dropped. Mirrors the old manual "Merge identical
+    // variants" button — now silent because the user shouldn't have to
+    // click anything for the project to land in a clean canonical shape.
+    const OMIT = new Set([
+      "id", "unit", "factions", "excludeFactions",
+      "notes", "manualOrder", "pendingRemoval", "writeBackUserSet",
+    ]);
+    const recruitSig = (u) => {
+      const keys = Object.keys(u).filter(k => !OMIT.has(k)).sort();
+      const out = {};
+      for (const k of keys) out[k] = u[k];
+      return JSON.stringify(out);
+    };
+    const mergeBuckets = new Map();
+    for (const u of next) {
+      if (u.writeBack) continue;                 // writable entries are sacrosanct
+      const key = String(u.unit || "") + "|" + recruitSig(u);
+      const list = mergeBuckets.get(key);
+      if (list) list.push(u); else mergeBuckets.set(key, [u]);
+    }
+    const mergeDrop = new Set();
+    const mergeUpdate = new Map();
+    for (const list of mergeBuckets.values()) {
+      if (list.length < 2) continue;
+      const keeper = list[0];
+      const factions = new Set(keeper.factions || []);
+      const excludeFactions = new Set(keeper.excludeFactions || []);
+      for (let i = 1; i < list.length; i++) {
+        for (const f of (list[i].factions || [])) factions.add(f);
+        for (const f of (list[i].excludeFactions || [])) excludeFactions.add(f);
+        mergeDrop.add(list[i].id);
+      }
+      mergeUpdate.set(keeper.id, { ...keeper, factions: [...factions], excludeFactions: [...excludeFactions] });
+    }
+    if (mergeDrop.size > 0) {
+      next = next.filter(u => !mergeDrop.has(u.id))
+                 .map(u => mergeUpdate.get(u.id) || u);
+    }
+    // Auto-collapse same-(unit, factions) variants that differ only in
+    // canonicalMicTier into one entry with ai.enabled at the lowest tier.
+    // Mirrors pass 1 of the old "Detect AI / AOR pairing" button. Only
+    // runs over ref-only entries to keep writable authoring intact.
+    const tierGroups = new Map();
+    for (const u of next) {
+      if (u.writeBack) continue;
+      const k = String(u.unit || "") + "|" + (u.factions || []).slice().sort().join(",");
+      (tierGroups.get(k) || tierGroups.set(k, []).get(k)).push(u);
+    }
+    const tierDrop = new Set();
+    const tierUpdate = new Map();
+    for (const list of tierGroups.values()) {
+      if (list.length < 2) continue;
+      const sorted = list.slice().sort((a, b) => (b.canonicalMicTier ?? 1) - (a.canonicalMicTier ?? 1));
+      const keeper = sorted[0];
+      const lowest = sorted[sorted.length - 1].canonicalMicTier ?? 1;
+      const top = keeper.canonicalMicTier ?? 1;
+      if (lowest >= top) continue;
+      tierUpdate.set(keeper.id, { ...keeper, ai: { enabled: true, canonicalMicTier: Math.min(lowest, 3) } });
+      for (let i = 1; i < sorted.length; i++) tierDrop.add(sorted[i].id);
+    }
+    if (tierDrop.size > 0) {
+      next = next.filter(u => !tierDrop.has(u.id))
+                 .map(u => tierUpdate.get(u.id) || u);
+    }
     // Idempotency check — only fire setUnits when something actually
     // differs, so a clean reload doesn't mark the project dirty for no
     // reason. Compare a normalized signature: unit name + a few key
@@ -1890,8 +1958,6 @@ export default function App() {
         projectDir={projectDir}
         projectDirty={projectDirty}
         onShowShortcuts={() => setShortcutOpen(true)}
-        onMergeIdenticalVariants={mergeIdenticalVariants}
-        onDetectAiAorPairing={detectAiAorPairing}
         unitsCount={units.length}
         units={units}
         theme={theme}
@@ -2247,7 +2313,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMergeIdenticalVariants, onDetectAiAorPairing, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -2301,20 +2367,11 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
         title="Set every imported unit to reference-only (writeBack: false). Manually authored units are untouched."
         style={tbtn("#553")}
       >Imports → reference</button>
-      {onMergeIdenticalVariants && (
-        <button
-          onClick={onMergeIdenticalVariants}
-          title="Find variants of the same unit that share every recruit-line setting except their faction list, and merge them into one entry with a unioned factions array. The user's rule: unless a unit has DIFFERENT recruitment requirements per faction, it should be one entry — splitting identical variants is noise."
-          style={tbtn("#553")}
-        >↻ Merge identical variants</button>
-      )}
-      {onDetectAiAorPairing && (
-        <button
-          onClick={onDetectAiAorPairing}
-          title={'Walk the parsed EDB recruit lines and auto-tick the "Pair with AOR variant" / "Pair with AI variant" toggles for every unit whose existing clauses already look like one. AOR-paired = both recruit "X" and recruit "aor X" exist. AI sibling = AI lines (not is_player) emit at a different mic_tier than the player lines.'}
-          style={tbtn("#553")}
-        >↻ Detect AI / AOR pairing</button>
-      )}
+      {/* Merge-identical-variants and Detect-AI/AOR-pairing buttons used to
+          live here. Both are now run automatically as part of every
+          mod-load reconcile (App.js auto-import effect), so the user
+          never has to click them — the project always lands in canonical
+          shape on its own. */}
       <span style={{ color: "#666", margin: "0 4px" }}>|</span>
       <button onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" style={tbtn("rgba(255,255,255,0.06)")}>↶</button>
       <button onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" style={tbtn("rgba(255,255,255,0.06)")}>↷</button>
@@ -3427,7 +3484,7 @@ function VariantDiffModal({ variantDiff, onClose }) {
         </div>
         <p style={{ color: "#999", fontSize: 12, marginTop: 0 }}>
           {differing.length === 0
-            ? <>All fields match — these variants <strong style={{ color: "#7c9" }}>could be merged</strong>. Use the topbar's "↻ Merge identical variants" to collapse them.</>
+            ? <>All fields match — these variants <strong style={{ color: "#7c9" }}>are identical</strong> and will be auto-merged on the next mod reload (the merge runs as part of the auto-reconcile pass).</>
             : <>The amber rows below are why these variants haven't merged. Edit them in the editor to align if you want a single entry.</>}
         </p>
         <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "Consolas, monospace", fontSize: 11.5 }}>

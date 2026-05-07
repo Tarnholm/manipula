@@ -112,8 +112,10 @@ export function migrateV1(u) {
   //   • tier 2 → GovB off (manual flip on for the rare tier-2 GovB unit),
   //              colony 2 (manual flip to 1 case-by-case)
   //   • tier 3+ → GovB off, colony 2
-  //   • homeland mic_tier is ALWAYS 2 — every factional GovD line uses
-  //     mic_tier_2 regardless of the unit's own tier. (User confirmed.)
+  //   • homeland mic_tier (GovD) — tier 1-2 units use mic_tier_1, tier 3+
+  //     units use mic_tier_2. The homeland gov gives a "one tier earlier"
+  //     discount for higher-tier units, while levy / standard still gate
+  //     at mic_tier_1.
   //   • canonical mic_tier caps at 3 — RIS reserves mic_tier_4 for the
   //     buff-only top building, no factional units recruit there. QC
   //     tier 4 (elite) and tier 5 (veteran/special) collapse to
@@ -122,6 +124,7 @@ export function migrateV1(u) {
   // compat, but the tier itself drives every default below.
   const mic = u.minTier || 1;
   const cappedMic = Math.min(mic, 3);
+  const homeland = mic <= 2 ? 1 : 2;
   const tdef = tierDefaults(mic);
   const inferredGrade = mic <= 1 ? "Standard" : mic === 2 ? "Professional" : "Elite";
   const looksImported = (u.notes || "").toLowerCase().includes("imported");
@@ -132,7 +135,7 @@ export function migrateV1(u) {
     notes: u.notes || "",
     grade: inferredGrade,
     canonicalMicTier: cappedMic,
-    homelandMicTier: 2,                   // GovD constant — see header note
+    homelandMicTier: homeland,
     colonyTier: tdef.colonyTier,
     outsideExtras: [],
     emitGovB: tdef.emitGovB,

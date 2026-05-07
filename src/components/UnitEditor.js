@@ -198,7 +198,7 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
                 set({
                   qualityClass: v,
                   canonicalMicTier: Math.min(t, 3),  // RIS caps mic_tier at 3 (mic_4 is buff-only, no recruits)
-                  homelandMicTier: 2,                // GovD always uses mic_tier_2
+                  homelandMicTier: t <= 2 ? 1 : 2,   // GovD: tier 1-2 → 1, tier 3+ → 2
                   emitGovB: t === 1,                 // GovB only on tier 1; tier 2+ is manual flip
                   colonyTier: t === 1 ? 1 : 2,       // tier 1 → 1, tier 2+ → 2 (tier 2's manual flip to 1 is one click below)
                 });
