@@ -326,36 +326,14 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
     const c = canvasRef.current;
     c.width = width;
     c.height = height;
-    const ctx2d = c.getContext("2d");
-    ctx2d.putImageData(new ImageData(out, width, height), 0, 0);
-    // Labels: only paint when the user is zoomed in enough for the text
-    // to actually fit. At zoom 1 the entire map fits in the viewport and
-    // all 1311 region names overlap into a wall of mush — useless. Above
-    // zoom 1.5 the visible viewport shrinks far enough that label
-    // collision becomes manageable, and we skip regions whose pixel
-    // coverage is below a min-area threshold (tiny islands and
-    // sub-region slivers don't deserve a label).
-    //
-    // Font size scales inversely with zoom so the on-screen height
-    // stays close to constant (~14px CSS pixels) regardless of how far
-    // the user has zoomed in. Without this, a zoom-3 view would render
-    // each label as huge text that obscures the colour underneath.
-    if (showLabels && zoom >= 1.5) {
-      const fontPx = Math.max(5, Math.round(11 / zoom));
-      const minArea = Math.max(60, 600 / (zoom * zoom));   // skip slivers
-      ctx2d.font = `600 ${fontPx}px Arial, sans-serif`;
-      ctx2d.textAlign = "center";
-      ctx2d.textBaseline = "middle";
-      ctx2d.lineWidth = Math.max(1.5, fontPx * 0.25);
-      ctx2d.strokeStyle = "rgba(0, 0, 0, 0.9)";
-      ctx2d.fillStyle = "#fff";
-      for (const cd of centroids.values()) {
-        if ((cd.area || 0) < minArea) continue;
-        ctx2d.strokeText(cd.name, cd.x, cd.y);
-        ctx2d.fillText(cd.name, cd.x, cd.y);
-      }
-    }
-  }, [pixels, lookup, matched, matchedB, mode, factionColors, density, tierByKey, modIndex.regionOwner, showBorders, showLabels, centroids, zoom]);
+    c.getContext("2d").putImageData(new ImageData(out, width, height), 0, 0);
+    // Labels are NOT painted to the canvas any more — they're rendered as
+    // a sibling DOM overlay below (see the labels block in the JSX).
+    // Painting to the canvas worked but the canvas itself is scaled by
+    // CSS transform when the user zooms in, so the rasterised text got
+    // upscaled into blocky pixelation. DOM overlay text stays sharp at
+    // any zoom and lets the browser do the typography work.
+  }, [pixels, lookup, matched, matchedB, mode, factionColors, density, tierByKey, modIndex.regionOwner, showBorders]);
 
   // Reset compare-unit picker when leaving compare mode.
   useEffect(() => { if (mode !== "compare") setCompareUnitId(null); }, [mode]);
@@ -590,6 +568,52 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
               cursor: dragRef.current ? "grabbing" : brushHR ? "cell" : (zoom > 1 ? "grab" : "crosshair"),
             }}
           />
+          {/* Region-name labels — DOM overlay positioned by centroid as a
+              percentage of the source map so the labels track the canvas
+              under any zoom/pan transform. Each label is wrapped in the
+              same translate+scale transform that the canvas uses (so it
+              sits over its region); the label itself counter-scales so
+              the visible text size stays at base CSS pixels regardless
+              of how far the user has zoomed in. Without DOM rendering
+              the canvas-rasterised text turned to blocky garbage above
+              zoom 1.5×. Skipped at low zoom to avoid the wall-of-mush
+              overlap and below an adaptive area threshold so tiny
+              slivers don't earn a label they wouldn't have room for. */}
+          {showLabels && zoom >= 1.5 && pixels && centroids.size > 0 && (
+            <div style={{
+              position: "absolute", left: 8, top: 8,
+              width: `calc(100% - 16px)`, height: `calc(100% - 16px)`,
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: "0 0", pointerEvents: "none", overflow: "hidden",
+            }}>
+              {(() => {
+                const minArea = Math.max(60, 600 / (zoom * zoom));
+                const out = [];
+                for (const cd of centroids.values()) {
+                  if ((cd.area || 0) < minArea) continue;
+                  out.push(
+                    <div key={cd.name} style={{
+                      position: "absolute",
+                      left: `${(cd.x / pixels.width) * 100}%`,
+                      top: `${(cd.y / pixels.height) * 100}%`,
+                      transform: `translate(-50%, -50%) scale(${1 / zoom})`,
+                      transformOrigin: "center center",
+                      color: "#fff",
+                      fontFamily: "Arial, sans-serif",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      whiteSpace: "nowrap",
+                      textShadow: "0 0 2px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.8), 1px 1px 0 rgba(0,0,0,0.95), -1px -1px 0 rgba(0,0,0,0.95)",
+                      letterSpacing: 0.2,
+                    }}>
+                      {cd.name}
+                    </div>
+                  );
+                }
+                return out;
+              })()}
+            </div>
+          )}
           {hover && hover.region && (
             <div style={{
               position: "absolute", left: Math.min(hover.x + 10, 600), top: hover.y + 10,
