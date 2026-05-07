@@ -93,9 +93,14 @@ const CAT_MOUNTED   = new Set(["Mounted", "Mounted Missile"]);
 
 /**
  * @param {Project} project
- * @param {{ dmbModels?: Set<string> }} [opts]  Cross-file references that
- *   live outside the project itself (e.g. descr_model_battle.txt model
- *   types). Optional — when omitted, those checks are skipped.
+ * @param {{
+ *   dmbModels?: Set<string>,
+ *   dmbTextures?: Array<{ type: string, path: string }>,
+ *   dmbModelFiles?: Array<{ type: string, path: string }>,
+ *   dmbAssetMissing?: Set<string>,
+ *   dmbAssetOrphans?: string[]
+ * }} [opts]  Cross-file references resolved outside the EDU project.
+ *   Optional — when omitted, those checks are skipped.
  * @returns {ErrorEntry[]}
  */
 function validate(project, opts) {
@@ -104,6 +109,10 @@ function validate(project, opts) {
   const push = (e) => errors.push(e);
   const ctx = buildContext(project);
   ctx.dmbModels = (opts && opts.dmbModels instanceof Set) ? opts.dmbModels : null;
+  ctx.dmbTextures = (opts && Array.isArray(opts.dmbTextures)) ? opts.dmbTextures : null;
+  ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
+  ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
+  ctx.dmbAssetOrphans = (opts && Array.isArray(opts.dmbAssetOrphans)) ? opts.dmbAssetOrphans : null;
 
   checkModInfo(project, ctx, push);
   checkGlobals(project, ctx, push);
@@ -118,6 +127,9 @@ function validate(project, opts) {
     checkUnitFactionOwnership(u, ctx, project, push);
     checkUnitDmbModel(u, ctx, push);
   }
+  checkDmbAssetReferences(project, ctx, push);
+  checkDmbOrphanTypes(project, ctx, push);
+  checkDmbOrphanAssets(ctx, push);
 
   // unit id collision check — two units with the same unit id are
   // silently broken in-game; the game keeps only one and the rest stop
@@ -449,6 +461,58 @@ function checkUnitDmbModel(u, ctx, push) {
   if (!modelId) return;             // empty is its own structural error
   if (!ctx.dmbModels.has(modelId)) {
     push(err(u.name, u.row, `Unit "model id" references "${modelId}" but no matching 'type ${modelId}' block exists in descr_model_battle.txt — game will crash on load.`, "unit-dmb-missing"));
+  }
+}
+
+// DMB → mod-data: every `pbr_texture / texture / model_flexi*` path
+// must resolve to a real file under the mod data folder. ctx.dmbAssetMissing
+// is the precomputed set of missing paths (built on the renderer side
+// via a bulk fs.existsSync IPC) so this check is just a lookup.
+function checkDmbAssetReferences(project, ctx, push) {
+  if (!ctx.dmbAssetMissing || ctx.dmbAssetMissing.size === 0) return;
+  if (!ctx.dmbTextures && !ctx.dmbModelFiles) return;
+  // Surface one error per (DMB type, missing path) pair so the user can
+  // jump to the right block in DMB. The "unit" field carries the model
+  // id rather than an EDU unit name, prefixed [DMB] for clarity.
+  const seen = new Set();
+  const emit = (kind, list) => {
+    for (const ref of list || []) {
+      if (!ref || !ref.path) continue;
+      if (!ctx.dmbAssetMissing.has(ref.path)) continue;
+      const key = `${ref.type}|${ref.path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      push(err(`[DMB] ${ref.type || "(no type)"}`, null, `${kind} reference "${ref.path}" — file not found in the mod data folder.`, "dmb-asset-missing"));
+    }
+  };
+  emit("texture", ctx.dmbTextures);
+  emit("model_flexi", ctx.dmbModelFiles);
+}
+
+// DMB types declared but never referenced by any EDU unit's `model id`.
+// Cleanup target — these blocks are dead weight in DMB. Silenced when
+// DMB or units list isn't available.
+function checkDmbOrphanTypes(project, ctx, push) {
+  if (!ctx.dmbModels || !project || !Array.isArray(project.units)) return;
+  const used = new Set();
+  for (const u of project.units) {
+    if (u.kind !== "unit") continue;
+    const id = String(u["model id"] || "").trim();
+    if (id) used.add(id);
+  }
+  for (const t of ctx.dmbModels) {
+    if (used.has(t)) continue;
+    push(err(`[DMB] ${t}`, null, `'type ${t}' is declared in descr_model_battle.txt but no EDU unit references it — safe to delete from DMB unless used by descr_strat or another file.`, "dmb-orphan-type"));
+  }
+}
+
+// .tga / .cas files in data/characters that no DMB block references.
+// Cleanup target — these are dead asset files the user can prune from
+// the mod once they confirm nothing else points at them.
+function checkDmbOrphanAssets(ctx, push) {
+  if (!ctx.dmbAssetOrphans || ctx.dmbAssetOrphans.length === 0) return;
+  for (const p of ctx.dmbAssetOrphans) {
+    push(err(`[asset orphan] ${p}`, null, `File exists in data/characters but no DMB block references it — candidate for deletion if no other system uses it.`, "dmb-orphan-asset"));
   }
 }
 

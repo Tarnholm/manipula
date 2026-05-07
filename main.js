@@ -885,6 +885,71 @@ ipcMain.handle("prewarm-unit-cards", async (_e, list) => {
   return true;
 });
 
+// Validation helper — bulk-check whether a list of `data/...`-prefixed
+// paths exists under the configured mod data dir. DMB's texture and
+// model_flexi paths are written as `data/characters/.../foo.tga` and
+// resolve to `<dataDir>/characters/.../foo.tga`. Returns the subset of
+// inputs that are missing on disk; cached by mtime so repeat calls are
+// cheap. Cache is cleared whenever the data dir changes (see
+// set-data-dir → clearResolveTgaCache below if it exists).
+ipcMain.handle("check-mod-paths", async (_e, relPaths) => {
+  if (!Array.isArray(relPaths)) return { missing: [] };
+  const d = dataDir();
+  const seen = new Set();
+  const missing = [];
+  for (const p of relPaths) {
+    if (typeof p !== "string" || !p || seen.has(p)) continue;
+    seen.add(p);
+    // Strip the leading "data/" or "data\" so the rest is relative to dataDir.
+    const rel = p.replace(/^data[\\/]+/i, "").replace(/[\\/]+/g, path.sep);
+    const abs = path.join(d, rel);
+    try { if (!fs.existsSync(abs)) missing.push(p); }
+    catch { missing.push(p); }
+  }
+  return { missing };
+});
+
+// List every file under `<dataDir>/<subdir>` matching one of the given
+// extensions, returning paths in `data/...`-prefixed canonical form
+// (matching how DMB writes them) so the caller can diff against a set
+// of referenced paths to find orphan assets. Subdirs is an array of
+// data-dir-relative folder names ("characters", "characters/textures",
+// etc.). Walk is recursive. Bounded by a 200k-entry safety cap so a
+// misconfigured dataDir doesn't hang the renderer.
+ipcMain.handle("list-mod-asset-files", async (_e, subdirs, exts) => {
+  const d = dataDir();
+  const subs = Array.isArray(subdirs) && subdirs.length ? subdirs : ["characters"];
+  const allowedExts = new Set((Array.isArray(exts) && exts.length ? exts : [".tga", ".cas"]).map(e => e.toLowerCase()));
+  const out = [];
+  const MAX = 200000;
+  let scanned = 0;
+  function walk(absDir, relParts) {
+    if (out.length >= MAX) return;
+    let entries = [];
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); }
+    catch { return; }
+    for (const e of entries) {
+      if (out.length >= MAX) return;
+      scanned++;
+      const childAbs = path.join(absDir, e.name);
+      const childRel = [...relParts, e.name];
+      if (e.isDirectory()) walk(childAbs, childRel);
+      else if (e.isFile()) {
+        const ext = path.extname(e.name).toLowerCase();
+        if (!allowedExts.has(ext)) continue;
+        // Canonical "data/...." form with forward slashes — matches DMB.
+        out.push("data/" + childRel.join("/"));
+      }
+    }
+  }
+  for (const sub of subs) {
+    const absSub = path.join(d, sub);
+    try { if (fs.existsSync(absSub)) walk(absSub, [sub.replace(/\\/g, "/")]); }
+    catch {}
+  }
+  return { files: out, scanned, capped: out.length >= MAX };
+});
+
 // Validation helper — given a list of {unit, faction, dictionary}, return the names of units
 // whose unit_card.tga can't be located in the mod data. Used by ValidationView to flag
 // missing portraits as warnings.

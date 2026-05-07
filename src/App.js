@@ -334,20 +334,56 @@ export default function App() {
       setStatus("Parsing buildings (EDB)…"); await tick();
       const edb = f.edb ? await parseEDBAsync(f.edb) : { aliases: [], buildings: [], recruits: [] };
       await tick();
-      // DMB — just the set of declared model types, used by EDU validation
-      // to flag units that reference a model that doesn't exist in
-      // descr_model_battle.txt (would crash the game on load).
-      const dmbModels = f.dmb ? parseDMB(f.dmb) : new Set();
+      // DMB — extracts declared model types + every texture/model_flexi
+      // path. Used by EDU validation in three ways:
+      //   • flag units whose `model id` doesn't resolve to a `type X`
+      //     block in DMB (game crashes on load)
+      //   • flag DMB texture / model_flexi paths whose file is missing
+      //     from the mod data folder
+      //   • flag DMB types that no EDU unit references (cleanup target)
+      //   • flag asset files (.tga / .cas) under data/characters that
+      //     no DMB block references (cleanup target)
+      const dmbParse = f.dmb ? parseDMB(f.dmb) : { types: new Set(), textures: [], models: [] };
+      const dmbModels = dmbParse.types;
 
       setModIndex(prev => ({
         ...prev,
         aliases: edb.aliases, buildings: edb.buildings, recruits: edb.recruits,
         reforms, scriptFiles,
         dmbModels,
+        dmbTextures: dmbParse.textures,
+        dmbModelFiles: dmbParse.models,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
       }));
       setEdbText(f.edb || "");
       setStatus(`Loaded: ${factions.length} factions, ${resources.length} resources, ${hiddenResources.length} hidden, ${regions.length} regions, ${edb.recruits.length} recruit lines, ${reforms.length} reforms, ${dmbModels.size} DMB models.`);
+
+      // Async DMB asset audit — bulk-check every referenced texture +
+      // model file, then walk data/characters to find orphan assets.
+      // Both calls are bounded (cap on the file walk) and the results
+      // land in modIndex when ready; the validator picks them up on its
+      // next debounced tick. Failures are non-fatal (e.g. the user
+      // hasn't pointed at a mod data dir yet).
+      (async () => {
+        try {
+          const referenced = new Set();
+          for (const t of dmbParse.textures) if (t.path) referenced.add(t.path);
+          for (const m of dmbParse.models) if (m.path) referenced.add(m.path);
+          let dmbAssetMissing = new Set();
+          let dmbAssetOrphans = [];
+          if (window.eduAPI && window.eduAPI.checkModPaths && referenced.size > 0) {
+            const r = await window.eduAPI.checkModPaths([...referenced]);
+            if (r && Array.isArray(r.missing)) dmbAssetMissing = new Set(r.missing);
+          }
+          if (window.eduAPI && window.eduAPI.listModAssetFiles) {
+            const r = await window.eduAPI.listModAssetFiles(["characters"], [".tga", ".cas"]);
+            if (r && Array.isArray(r.files)) {
+              for (const f of r.files) if (!referenced.has(f)) dmbAssetOrphans.push(f);
+            }
+          }
+          setModIndex(prev => ({ ...prev, dmbAssetMissing, dmbAssetOrphans }));
+        } catch (e) { console.warn("[dmb-audit] failed:", e && e.message); }
+      })();
     } catch (e) {
       console.error(e);
       setStatus("Error: " + e.message);
@@ -1844,12 +1880,18 @@ export default function App() {
       if (cancelled) return;
       try {
         const { validate } = await import("./edu_matic/validate");
-        const errs = validate(eduProject, { dmbModels: modIndex.dmbModels });
+        const errs = validate(eduProject, {
+          dmbModels: modIndex.dmbModels,
+          dmbTextures: modIndex.dmbTextures,
+          dmbModelFiles: modIndex.dmbModelFiles,
+          dmbAssetMissing: modIndex.dmbAssetMissing,
+          dmbAssetOrphans: modIndex.dmbAssetOrphans,
+        });
         if (!cancelled) setEduValidationErrors(Array.isArray(errs) ? errs : []);
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
