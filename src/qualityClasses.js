@@ -81,18 +81,18 @@ export const QUALITY_CLASSES = [
   { id: "32. general",                          role: "general",  tierHint: 4 },
   { id: "32. chariot general",                  role: "general",  tierHint: 4 },
   { id: "33. infantry general",                 role: "general",  tierHint: 4 },
-  // Specials user didn't explicitly tier-place — best guess (TBD, correct as needed):
-  //   • royal guards / royal pikes / epigonoi phalangites → tier 4 (elite-class).
-  //   • imperial legionaries (38–41) → tier 4 (elite-class).
-  //   • roman auxilia → tier 3 (professional-class).
+  // Greek royal classes (35, 36, 36B) — not used in the current mod, kept for
+  // schema completeness but tier hints are placeholders.
   { id: "35. greek royal guards",               role: "infantry", tierHint: 4 },
   { id: "36. greek royal pikes",                role: "infantry", tierHint: 4 },
   { id: "36B. epigonoi phalangites",            role: "infantry", tierHint: 4 },
-  { id: "37A. roman auxilia (no testudo)",      role: "infantry", tierHint: 3 },
-  { id: "37B. roman auxilia",                   role: "infantry", tierHint: 3 },
-  { id: "38. early imperial legionary",         role: "infantry", tierHint: 4 },
+  // Roman: per user, auxilia = tier 2, regular legionaries = tier 3,
+  // first-cohort legionaries = tier 4.
+  { id: "37A. roman auxilia (no testudo)",      role: "infantry", tierHint: 2 },
+  { id: "37B. roman auxilia",                   role: "infantry", tierHint: 2 },
+  { id: "38. early imperial legionary",         role: "infantry", tierHint: 3 },
   { id: "39. early imperial legionary 1st",     role: "infantry", tierHint: 4 },
-  { id: "40. late imperial legionary",          role: "infantry", tierHint: 4 },
+  { id: "40. late imperial legionary",          role: "infantry", tierHint: 3 },
   { id: "41. late imperial legionary 1st",      role: "infantry", tierHint: 4 },
   // Siege = tier 5 = mic_tier 4.
   { id: "42. siege",                            role: "siege",    tierHint: 4 },
