@@ -181,7 +181,15 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
       <Section title="Quality Class">
         <Field label="Quality Class (from EDUMatic)">
           <select
-            value={u.qualityClass || ""}
+            // Normalise to the canonical-case id from QUALITY_CLASSES so the
+            // <select> can match it. EDU writes TitleCase ("5a. Infantry"),
+            // QUALITY_CLASSES are lowercase ("5a. infantry"). Without the
+            // normalisation the dropdown silently falls back to "— none —"
+            // even when the value is a valid QC.
+            value={(() => {
+              const q = findQualityClass(u.qualityClass);
+              return q ? q.id : (u.qualityClass || "");
+            })()}
             onChange={(e) => {
               const v = e.target.value;
               const q = findQualityClass(v);

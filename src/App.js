@@ -109,6 +109,7 @@ import { parseStrings, parseStringsAsync } from "./parsers/strings";
 import { parseReforms } from "./parsers/reforms";
 import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
+import { findQualityClass } from "./qualityClasses";
 
 const api = window.electronAPI;
 
@@ -1034,8 +1035,16 @@ export default function App() {
         const eu = eduByUnitId.get(lookupName);
         if (!eu) return u;
         const q = eu.Quality || eu.quality;
-        if (!q || u.qualityClass === q) return u;
-        return { ...u, qualityClass: q };
+        if (!q) return u;
+        // Normalise to the canonical id from QUALITY_CLASSES so the editor's
+        // <select> can match it case-sensitively. EDU uses TitleCase
+        // ("5a. Infantry") but QUALITY_CLASSES are all lowercase
+        // ("5a. infantry") — without this normalisation the dropdown shows
+        // "— none —" even though findQualityClass (case-insensitive) finds it.
+        const canonical = findQualityClass(q);
+        const value = canonical ? canonical.id : q;
+        if (u.qualityClass === value) return u;
+        return { ...u, qualityClass: value };
       });
     }
     const beforeMerge = [...writable, ...refreshed];
