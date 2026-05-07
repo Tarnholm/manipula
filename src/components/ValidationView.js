@@ -155,28 +155,7 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
         </div>
       )}
 
-      {/* Cap visible groups so a project with thousands of cross-file
-          issues (e.g. DMB orphans on a freshly imported mod) doesn't
-          drop 12k DOM rows on the user. The filter pills above narrow
-          by severity; an explicit "show all" affordance below the
-          truncation marker handles the rare case where the user wants
-          everything at once. */}
-      {(() => {
-        const all = [...groups];
-        const CAP = 200;
-        const head = all.slice(0, CAP);
-        const rest = all.slice(CAP);
-        return (
-          <>
-            {head.map(([unitId, issuesForUnit]) => renderGroup(unitId, issuesForUnit, units, modIndex, onJump))}
-            {rest.length > 0 && (
-              <div style={{ padding: 12, textAlign: "center", color: "#888", fontSize: 12, background: "rgba(28,30,32,0.4)", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 8 }}>
-                Showing first {CAP} of {all.length} groups · {rest.length} more hidden — narrow with the severity filter pills above, or look at the count summary at the top of the page.
-              </div>
-            )}
-          </>
-        );
-      })()}
+      {[...groups].map(([unitId, issuesForUnit]) => renderGroup(unitId, issuesForUnit, units, modIndex, onJump))}
     </div>
   );
 }
