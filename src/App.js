@@ -2078,6 +2078,13 @@ export default function App() {
                 onReorder={onReorder}
                 onInsertNear={onInsertNear}
                 onMarkForRemoval={onMarkForRemoval}
+                onToggleWriteBack={(id, value) => {
+                  // Right-click → "Mark for editing" / "Stop editing".
+                  // Stamp writeBackUserSet so migrateV1's reset-to-default
+                  // logic doesn't undo this on the next reload.
+                  const next = units.map(u => u.id === id ? { ...u, writeBack: !!value, writeBackUserSet: true } : u);
+                  persistUnits(next);
+                }}
                 onShowVariantDiff={showVariantDiff}
                 viewMode={sidebarMode}
                 onViewModeChange={setSidebarMode}

@@ -9,7 +9,7 @@ const GRADE_ORDER = { Levy: 1, Standard: 2, Professional: 3, Elite: 4, Veteran: 
 // Map role string → bucket number (mirrors generator.js bucketOf, derived from ROSTER_ROLES).
 const BUCKET_OF_ROLE = Object.fromEntries(ROSTER_ROLES.map((r, i) => [r, i + 1]));
 
-export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, onShowVariantDiff, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
+export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, onToggleWriteBack, onShowVariantDiff, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
   // Build a Map of unit name → EDU row, so the badge can show a stat-preview tooltip.
   const eduMap = useMemo(() => {
     if (!eduProject || !Array.isArray(eduProject.units)) return null;
@@ -504,11 +504,6 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                 <div style={{ fontWeight: 600, color: u.enabled === false ? "#888" : "#ddd", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                   <span>{display || u.unit}</span>
                   {display && <span style={{ color: "#666", fontWeight: 400, fontSize: 11 }}>({u.unit})</span>}
-                  {totalSame > 1 && (
-                    <span title={`${totalSame} variants of this unit — click a row below to jump to that variant`} style={{ background: "rgba(220,166,74,0.18)", color: "#dca64a", fontSize: 10, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace" }}>
-                      × {totalSame}
-                    </span>
-                  )}
                   {eduMap && eduMap.has(u.unit) && (() => {
                     const tip = summarizeEdu(eduMap.get(u.unit));
                     return (
@@ -519,97 +514,61 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
                     <span title="Marked for removal — Write to EDB strips this unit's recruit lines and deletes it from the project." style={{ background: "rgba(214,108,108,0.18)", color: "#e88", border: "1px solid rgba(214,108,108,0.45)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>🗑 REMOVING</span>
                   )}
                 </div>
-                {/* One row per variant — its own kind (FACTIONAL / AOR),
-                 *  WRITE/REF status, tier, and faction list. The user
-                 *  asked to see all variants individually inside the
-                 *  same card instead of one collapsed summary.
-                 *  Skipped in compact + unitsOnly densities — those
-                 *  modes deliberately hide per-variant detail. */}
-                {!compact && !unitsOnly && variants.map((v, vIdx) => {
-                  const vIsAor = !!(v.aor && v.aor.enabled);
-                  const vWrites = v.writeBack !== false;
-                  const vSel = v.id === selectedId;
-                  const vMulti = selectedIds.has(v.id);
-                  const vFactions = (v.factions || []).filter(f => f && f !== "all");
-                  const tier = v.canonicalMicTier ?? v.minTier ?? "?";
+                {/* Single-line badge strip per unit. The user wants to know
+                 *  at a glance: factional? AOR sibling? merc? AI recruitable?
+                 *  ...not which project entries split into which variant.
+                 *  Variant-level drill-down lives in the editor's variant
+                 *  tab strip on the right. */}
+                {(() => {
+                  const hasMerc = variants.some(v => /^merc\s+/i.test(v.unit || ""));
+                  const hasFactional = variants.some(v => {
+                    if (/^(aor|merc)\s+/i.test(v.unit || "")) return false;
+                    if (v.aor && v.aor.aorOnly) return false;
+                    return true;
+                  });
+                  const hasAor = variants.some(v => (v.aor && v.aor.enabled) || /^aor\s+/i.test(v.unit || ""));
+                  const hasAi = variants.some(v => v.ai && v.ai.enabled);
+                  const tier = u.canonicalMicTier ?? u.minTier ?? "?";
+                  const factionList = (u.factions || []).filter(f => f && f !== "all");
+                  const writeAny = variants.some(v => v.writeBack !== false);
                   return (
-                    <div
-                      key={v.id}
-                      onClick={(ev) => { ev.stopPropagation(); onSelect(v.id, ev); }}
-                      title={vIsAor ? "AOR variant — recruits via hidden_resource regions" : "Factional variant — main MIC-chain recruitment"}
-                      style={{
-                        marginTop: vIdx === 0 ? 4 : 2,
-                        padding: "3px 6px",
-                        borderRadius: 4,
-                        background: vSel ? "rgba(220,166,74,0.20)" : vMulti ? "rgba(220,166,74,0.08)" : "rgba(255,255,255,0.025)",
-                        border: vSel ? "1px solid rgba(220,166,74,0.55)" : "1px solid rgba(255,255,255,0.05)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5,
-                        flexWrap: "wrap",
-                        fontSize: 11,
-                        color: v.enabled === false ? "#777" : "#bbb",
-                      }}
-                    >
-                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: vSel ? "#dca64a" : "#555", flexShrink: 0 }} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4, fontSize: 11, color: "#888", flexWrap: "wrap" }}>
                       <span style={{ color: "#888", fontFamily: "Consolas, monospace", fontSize: 10 }}>
-                        {v.grade || "?"} · t{tier}
+                        {u.qualityClass ? `${u.qualityClass} · t${tier}` : `t${tier}`}
                       </span>
-                      {vIsAor ? (
-                        <span style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>AOR</span>
-                      ) : (
-                        <span style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>FACTIONAL</span>
+                      {hasFactional && (
+                        <span title="Factional — recruits in the MIC chain for the listed factions" style={badgeStyle("#dca64a")}>F</span>
                       )}
-                      {vWrites ? (
-                        <span title="Will write back to EDB on next Write-to-EDB" style={{ background: "rgba(124,201,153,0.12)", color: "#7c9", border: "1px solid rgba(124,201,153,0.30)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
-                      ) : (
-                        <span title="Reference-only — Write-to-EDB skips this variant" style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
+                      {hasAor && (
+                        <span title="AOR sibling — recruits via hidden_resource regions" style={badgeStyle("#7c9")}>A</span>
                       )}
-                      {vFactions.length > 0 && (
-                        <span style={{ color: "#aaa", fontFamily: "Consolas, monospace", fontSize: 10 }}>
-                          {vFactions.slice(0, 3).join(", ")}
-                          {vFactions.length > 3 && ` +${vFactions.length - 3}`}
+                      {hasMerc && (
+                        <span title="Merc — recruited via descr_mercenaries.txt (managed outside this tool)" style={badgeStyle("#a8a")}>M</span>
+                      )}
+                      {hasAi && (
+                        <span title="AI recruitable — has not-is_player lines in the EDB" style={badgeStyle("#7aa")}>AI</span>
+                      )}
+                      {writeAny && (
+                        <span title="Marked for editing — Write to EDB will regenerate this unit's lines" style={badgeStyle("#e8a")}>EDIT</span>
+                      )}
+                      {factionList.length > 0 && (
+                        <span style={{ color: "#aaa", fontFamily: "Consolas, monospace", fontSize: 10, marginLeft: 4 }}>
+                          {factionList.slice(0, 3).join(", ")}
+                          {factionList.length > 3 && ` +${factionList.length - 3}`}
                         </span>
                       )}
-                      {(v.factions || []).slice(0, 4).map(fid => (
-                        fid === "all" ? null : (
-                          <FactionIcon
-                            key={fid}
-                            iconPath={`faction_icons/${fid}.tga`}
-                            alt={fid}
-                            size={14}
-                            modIconsDir={modIndex.factionIconsDir}
-                          />
-                        )
+                      {factionList.slice(0, 4).map(fid => (
+                        <FactionIcon
+                          key={fid}
+                          iconPath={`faction_icons/${fid}.tga`}
+                          alt={fid}
+                          size={14}
+                          modIconsDir={modIndex.factionIconsDir}
+                        />
                       ))}
                     </div>
                   );
-                })}
-                {(compact || unitsOnly) && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#888", flexWrap: "wrap" }}>
-                    <span>
-                      {u.grade || "?"} · t{u.canonicalMicTier ?? u.minTier ?? "?"}
-                      {u.aor && u.aor.enabled ? " · +AOR" : ""}
-                    </span>
-                    {factionalCount > 0 && (
-                      <span style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
-                        FACTIONAL{factionalCount > 1 ? ` ×${factionalCount}` : ""}
-                      </span>
-                    )}
-                    {aorCount > 0 && (
-                      <span style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>
-                        AOR{aorCount > 1 ? ` ×${aorCount}` : ""}
-                      </span>
-                    )}
-                    {refCount === 0 ? (
-                      <span style={{ background: "rgba(124,201,153,0.16)", color: "#7c9", border: "1px solid rgba(124,201,153,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>WRITE</span>
-                    ) : writeCount === 0 ? (
-                      <span style={{ background: "rgba(120,120,120,0.15)", color: "#888", border: "1px solid #444", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>REF ONLY</span>
-                    ) : (
-                      <span style={{ background: "rgba(220,166,74,0.16)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.35)", fontSize: 9, fontWeight: 700, padding: "0 5px", borderRadius: 3, fontFamily: "Consolas, monospace", letterSpacing: 0.5 }}>{writeCount}/{totalSame} WRITE</span>
-                    )}
-                  </div>
-                )}
+                })()}
               </div>
             </div>
           );
@@ -680,7 +639,10 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             onInsertNear ? { label: "Insert blank above", onClick: () => onInsertNear(ctxMenu.unit.id, "above") } : null,
             onInsertNear ? { label: "Insert blank below", onClick: () => onInsertNear(ctxMenu.unit.id, "below") } : null,
             { label: "Duplicate…", onClick: () => onDuplicate && onDuplicate(ctxMenu.unit.id) },
-            { label: "Toggle reference-only", onClick: () => onSelect(ctxMenu.unit.id, {}) /* user toggles in editor */ },
+            onToggleWriteBack ? (ctxMenu.unit.writeBack !== false
+              ? { label: "Stop editing (back to reference-only)", onClick: () => onToggleWriteBack(ctxMenu.unit.id, false) }
+              : { label: "Mark for editing (write back to EDB on next save)", onClick: () => onToggleWriteBack(ctxMenu.unit.id, true), color: "#dca64a" }
+            ) : null,
             { label: "Filter to faction…", onClick: () => {
                 const f = (ctxMenu.unit.factions || []).find(x => x !== "all");
                 if (f && onFilterChange) onFilterChange({ mode: "faction", value: f });
@@ -729,4 +691,30 @@ function btn(color, disabled) {
     fontWeight: 500,
     cursor: disabled ? "default" : "pointer",
   };
+}
+
+// Compact pill used in the unit-card badge strip. The colour gets a soft
+// background tint and matching border so multiple side-by-side badges
+// stay legible without dominating the row.
+function badgeStyle(color) {
+  return {
+    background: hexToRgba(color, 0.16),
+    color,
+    border: `1px solid ${hexToRgba(color, 0.4)}`,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: "0 5px",
+    borderRadius: 3,
+    fontFamily: "Consolas, monospace",
+    letterSpacing: 0.5,
+  };
+}
+function hexToRgba(hex, a) {
+  // Accepts #RGB or #RRGGBB. Returns rgba(r, g, b, a) string.
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
