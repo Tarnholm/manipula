@@ -197,10 +197,10 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
                 const t = q.tierHint;
                 set({
                   qualityClass: v,
-                  canonicalMicTier: t,
-                  homelandMicTier: t,            // mirror canonical (no homeland bonus until clarified)
-                  emitGovB: t === 1,             // GovB only on tier 1; tier 2+ is manual flip
-                  colonyTier: t === 1 ? 1 : 2,   // tier 1 → 1, tier 2+ → 2 (tier 2's manual flip to 1 is one click below)
+                  canonicalMicTier: Math.min(t, 3),  // RIS caps mic_tier at 3 (mic_4 is buff-only, no recruits)
+                  homelandMicTier: 2,                // GovD always uses mic_tier_2
+                  emitGovB: t === 1,                 // GovB only on tier 1; tier 2+ is manual flip
+                  colonyTier: t === 1 ? 1 : 2,       // tier 1 → 1, tier 2+ → 2 (tier 2's manual flip to 1 is one click below)
                 });
               } else {
                 set({ qualityClass: v });

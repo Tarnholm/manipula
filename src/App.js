@@ -1054,20 +1054,23 @@ export default function App() {
         // as the editor's QC-onChange handler.
         if (canonical) {
           const t = canonical.tierHint;
+          const canonMic = Math.min(t, 3);   // RIS caps mic_tier at 3 (mic_4 is buff-only, no recruits)
+          const govBOn = t === 1;
+          const colony = t === 1 ? 1 : 2;
           if (
             u.qualityClass === value &&
-            u.canonicalMicTier === t &&
-            u.homelandMicTier === t &&
-            u.emitGovB === (t === 1) &&
-            u.colonyTier === (t === 1 ? 1 : 2)
+            u.canonicalMicTier === canonMic &&
+            u.homelandMicTier === 2 &&
+            u.emitGovB === govBOn &&
+            u.colonyTier === colony
           ) return u;
           return {
             ...u,
             qualityClass: value,
-            canonicalMicTier: t,
-            homelandMicTier: t,
-            emitGovB: t === 1,
-            colonyTier: t === 1 ? 1 : 2,
+            canonicalMicTier: canonMic,
+            homelandMicTier: 2,              // GovD constant
+            emitGovB: govBOn,
+            colonyTier: colony,
           };
         }
         if (u.qualityClass === value) return u;
@@ -1124,10 +1127,12 @@ export default function App() {
         if (aorEntry && !aorEntry.writeBack) dropIds.add(aorEntry.id);
       }
       // AI sibling: any not-is_player lines in the EDB → ai.enabled.
+      // AI canonical mic_tier capped at 3 — mic_4 is buff-only in RIS,
+      // so any EDB line that says mic_tier_4 gets pinned to 3 here.
       if (aiLines.length > 0 && (!patched.ai || !patched.ai.enabled)) {
         const aiTiers = aiLines.map(e => tierOfLevel(e.level)).filter(t => t != null);
         const aiMin = aiTiers.length ? Math.min(...aiTiers) : (patched.canonicalMicTier ?? 1);
-        patched = { ...patched, ai: { enabled: true, canonicalMicTier: aiMin } };
+        patched = { ...patched, ai: { enabled: true, canonicalMicTier: Math.min(aiMin, 3) } };
       }
       return patched;
     });
