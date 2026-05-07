@@ -1038,23 +1038,70 @@ export default function App() {
         return { ...u, qualityClass: q };
       });
     }
-    const next = [...writable, ...refreshed];
+    const beforeMerge = [...writable, ...refreshed];
+    // Post-process: pair AOR siblings + flag AI siblings automatically.
+    // The standalone "aor X" entries that parseRecruitsFromEDB emits get
+    // collapsed into the factional X's aor.enabled toggle (the EDB
+    // already paired them — no reason for the UI to show two separate
+    // cards). Likewise every unit with not-is_player recruit lines in
+    // the EDB gets ai.enabled=true so the AI Sibling section reflects
+    // reality. Both passes only modify writeBack=false entries — active
+    // authoring is sacrosanct.
+    const linesByName = new Map();
+    for (const r of recruits) {
+      const list = linesByName.get(r.unit) || [];
+      list.push(r);
+      linesByName.set(r.unit, list);
+    }
+    const tierOfLevel = (lvl) => {
+      const m = String(lvl || "").match(/^mic_(\d)$/);
+      return m ? parseInt(m[1], 10) : null;
+    };
+    const indexedByUnit = new Map(beforeMerge.map(u => [u.unit, u]));
+    const dropIds = new Set();
+    const paired = beforeMerge.map(u => {
+      if (u.writeBack) return u;
+      const factional = linesByName.get(u.unit) || [];
+      const aorLines = linesByName.get("aor " + u.unit) || [];
+      const aiLines = factional.filter(e => /\bnot is_player\b/.test(e.requires));
+      const playerLines = factional.filter(e => /\bis_player\b/.test(e.requires) && !/\bnot is_player\b/.test(e.requires));
+      let patched = u;
+      // AOR pairing: factional + AOR sibling → set aor.enabled on the
+      // factional entry, drop the standalone "aor X" ref-only entry.
+      if (aorLines.length > 0 && playerLines.length > 0) {
+        if (!patched.aor || !patched.aor.enabled || patched.aor.aorOnly) {
+          patched = { ...patched, aor: { enabled: true, govTier: (patched.aor && patched.aor.govTier) || 1, aorOnly: false, recruitName: "aor " + patched.unit } };
+        }
+        const aorEntry = indexedByUnit.get("aor " + u.unit);
+        if (aorEntry && !aorEntry.writeBack) dropIds.add(aorEntry.id);
+      }
+      // AI sibling: any not-is_player lines in the EDB → ai.enabled.
+      if (aiLines.length > 0 && (!patched.ai || !patched.ai.enabled)) {
+        const aiTiers = aiLines.map(e => tierOfLevel(e.level)).filter(t => t != null);
+        const aiMin = aiTiers.length ? Math.min(...aiTiers) : (patched.canonicalMicTier ?? 1);
+        patched = { ...patched, ai: { enabled: true, canonicalMicTier: aiMin } };
+      }
+      return patched;
+    });
+    const next = paired.filter(u => !dropIds.has(u.id));
     // Idempotency check — only fire setUnits when something actually
     // differs, so a clean reload doesn't mark the project dirty for no
     // reason. Compare a normalized signature: unit name + a few key
     // fields. If those are stable, treat as unchanged.
     const sig = (arr) => arr
-      .map(u => `${u.unit}|${(u.factions || []).join(",")}|${(u.excludeFactions || []).join(",")}|${u.canonicalMicTier ?? ""}|${u.writeBack ? 1 : 0}`)
+      .map(u => `${u.unit}|${(u.factions || []).join(",")}|${(u.excludeFactions || []).join(",")}|${u.canonicalMicTier ?? ""}|${u.writeBack ? 1 : 0}|aor:${u.aor && u.aor.enabled ? (u.aor.aorOnly ? "only" : "pair") : "0"}|ai:${u.ai && u.ai.enabled ? (u.ai.canonicalMicTier ?? "") : "0"}`)
       .sort()
       .join("\n");
     if (sig(next) === sig(units)) return;
     const created = refreshed.filter(r => !units.some(u => u.unit === r.unit));
     const updated = refreshed.length - created.length;
+    const collapsed = dropIds.size;
     persistUnits(next);
     const parts = [];
     if (created.length) parts.push(`${created.length} new`);
     if (updated) parts.push(`${updated} refreshed`);
-    setStatus(`Reconciled with EDB — ${parts.join(", ")} (writable entries preserved).`);
+    if (collapsed) parts.push(`${collapsed} AOR siblings paired`);
+    setStatus(`Reconciled with EDB — ${parts.join(", ") || "nothing changed"} (writable entries preserved).`);
     // eslint-disable-next-line
   }, [modIndex?.recruits]);
 
