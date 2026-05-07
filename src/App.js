@@ -1043,6 +1043,33 @@ export default function App() {
         // "— none —" even though findQualityClass (case-insensitive) finds it.
         const canonical = findQualityClass(q);
         const value = canonical ? canonical.id : q;
+        // When the QC resolves to a known entry, propagate its tier hint
+        // through the recruitment dials so the project mirrors the RIS
+        // tier guide instead of whatever stale mic_tier_X value the EDB
+        // happens to carry. Without this Triarii (Early) → 5d. Veteran
+        // Infantry stayed at canonicalMicTier:2 because the EDB's
+        // mic_tier_2 line is what parseRecruitsFromEDB inferred. Tier
+        // hints drive: canonical/homeland mic_tier (mirror), emitGovB
+        // (only tier 1), colony tier (1 if tier 1 else 2). Same shape
+        // as the editor's QC-onChange handler.
+        if (canonical) {
+          const t = canonical.tierHint;
+          if (
+            u.qualityClass === value &&
+            u.canonicalMicTier === t &&
+            u.homelandMicTier === t &&
+            u.emitGovB === (t === 1) &&
+            u.colonyTier === (t === 1 ? 1 : 2)
+          ) return u;
+          return {
+            ...u,
+            qualityClass: value,
+            canonicalMicTier: t,
+            homelandMicTier: t,
+            emitGovB: t === 1,
+            colonyTier: t === 1 ? 1 : 2,
+          };
+        }
         if (u.qualityClass === value) return u;
         return { ...u, qualityClass: value };
       });
