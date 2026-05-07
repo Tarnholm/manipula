@@ -91,12 +91,19 @@ const CAT_MOUNTED   = new Set(["Mounted", "Mounted Missile"]);
 
 // ── Main entry point ────────────────────────────────────────────────
 
-/** @param {Project} project @returns {ErrorEntry[]} */
-function validate(project) {
+/**
+ * @param {Project} project
+ * @param {{ dmbModels?: Set<string> }} [opts]  Cross-file references that
+ *   live outside the project itself (e.g. descr_model_battle.txt model
+ *   types). Optional — when omitted, those checks are skipped.
+ * @returns {ErrorEntry[]}
+ */
+function validate(project, opts) {
   /** @type {ErrorEntry[]} */
   const errors = [];
   const push = (e) => errors.push(e);
   const ctx = buildContext(project);
+  ctx.dmbModels = (opts && opts.dmbModels instanceof Set) ? opts.dmbModels : null;
 
   checkModInfo(project, ctx, push);
   checkGlobals(project, ctx, push);
@@ -109,6 +116,7 @@ function validate(project) {
     checkUnitConditionalFields(u, ctx, push);
     checkUnitArmourUpgrades(u, ctx, push);
     checkUnitFactionOwnership(u, ctx, project, push);
+    checkUnitDmbModel(u, ctx, push);
   }
 
   // unit id collision check — two units with the same unit id are
@@ -427,6 +435,20 @@ function checkUnitFactionOwnership(u, ctx, project, push) {
     if (tag === "N/A") {
       push(err(u.name, u.row, "Unit should not have a non-available owner assigned.", "unit-def-structural"));
     }
+  }
+}
+
+// Cross-file: the EDU's "model id" column points at a `type X` block in
+// descr_model_battle.txt. If the referenced model isn't declared in DMB,
+// the game crashes on load. ctx.dmbModels is the parsed Set<modelId>;
+// we skip the check when DMB wasn't loaded (e.g. running validate from
+// a unit-test fixture).
+function checkUnitDmbModel(u, ctx, push) {
+  if (!ctx.dmbModels) return;
+  const modelId = String(u["model id"] || "").trim();
+  if (!modelId) return;             // empty is its own structural error
+  if (!ctx.dmbModels.has(modelId)) {
+    push(err(u.name, u.row, `Unit "model id" references "${modelId}" but no matching 'type ${modelId}' block exists in descr_model_battle.txt — game will crash on load.`, "unit-dmb-missing"));
   }
 }
 

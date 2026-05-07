@@ -107,6 +107,7 @@ import { parseDescrStratFactions, regionToFaction } from "./parsers/strat";
 import { parseEDU, parseEDUAsync } from "./parsers/edu";
 import { parseStrings, parseStringsAsync } from "./parsers/strings";
 import { parseReforms } from "./parsers/reforms";
+import { parseDMB } from "./parsers/dmb";
 import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
 import { findQualityClass } from "./qualityClasses";
@@ -333,15 +334,20 @@ export default function App() {
       setStatus("Parsing buildings (EDB)…"); await tick();
       const edb = f.edb ? await parseEDBAsync(f.edb) : { aliases: [], buildings: [], recruits: [] };
       await tick();
+      // DMB — just the set of declared model types, used by EDU validation
+      // to flag units that reference a model that doesn't exist in
+      // descr_model_battle.txt (would crash the game on load).
+      const dmbModels = f.dmb ? parseDMB(f.dmb) : new Set();
 
       setModIndex(prev => ({
         ...prev,
         aliases: edb.aliases, buildings: edb.buildings, recruits: edb.recruits,
         reforms, scriptFiles,
+        dmbModels,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
       }));
       setEdbText(f.edb || "");
-      setStatus(`Loaded: ${factions.length} factions, ${resources.length} resources, ${hiddenResources.length} hidden, ${regions.length} regions, ${edb.recruits.length} recruit lines, ${reforms.length} reforms.`);
+      setStatus(`Loaded: ${factions.length} factions, ${resources.length} resources, ${hiddenResources.length} hidden, ${regions.length} regions, ${edb.recruits.length} recruit lines, ${reforms.length} reforms, ${dmbModels.size} DMB models.`);
     } catch (e) {
       console.error(e);
       setStatus("Error: " + e.message);
@@ -1838,12 +1844,12 @@ export default function App() {
       if (cancelled) return;
       try {
         const { validate } = await import("./edu_matic/validate");
-        const errs = validate(eduProject);
+        const errs = validate(eduProject, { dmbModels: modIndex.dmbModels });
         if (!cancelled) setEduValidationErrors(Array.isArray(errs) ? errs : []);
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject]);
+  }, [eduProject, modIndex.dmbModels]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
