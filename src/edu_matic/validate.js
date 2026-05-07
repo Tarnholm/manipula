@@ -109,6 +109,7 @@ function validate(project, opts) {
   const push = (e) => errors.push(e);
   const ctx = buildContext(project);
   ctx.dmbModels = (opts && opts.dmbModels instanceof Set) ? opts.dmbModels : null;
+  ctx.dmbExtraUsage = (opts && opts.dmbExtraUsage instanceof Set) ? opts.dmbExtraUsage : null;
   ctx.dmbTextures = (opts && Array.isArray(opts.dmbTextures)) ? opts.dmbTextures : null;
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
@@ -489,9 +490,10 @@ function checkDmbAssetReferences(project, ctx, push) {
   emit("model_flexi", ctx.dmbModelFiles);
 }
 
-// DMB types declared but never referenced by any EDU unit's `model id`.
-// Cleanup target — these blocks are dead weight in DMB. Silenced when
-// DMB or units list isn't available.
+// DMB types declared but never referenced by any EDU unit's `model id`
+// OR by descr_character.txt's `battle_model X` lines (general / admiral
+// / captain models). Cleanup target — these blocks are dead weight in
+// DMB. Silenced when DMB isn't loaded.
 function checkDmbOrphanTypes(project, ctx, push) {
   if (!ctx.dmbModels || !project || !Array.isArray(project.units)) return;
   const used = new Set();
@@ -500,9 +502,11 @@ function checkDmbOrphanTypes(project, ctx, push) {
     const id = String(u["model id"] || "").trim();
     if (id) used.add(id);
   }
+  // Union in DMB types referenced from outside EDU (descr_character).
+  if (ctx.dmbExtraUsage) for (const t of ctx.dmbExtraUsage) used.add(t);
   for (const t of ctx.dmbModels) {
     if (used.has(t)) continue;
-    push(err(`[DMB] ${t}`, null, `'type ${t}' is declared in descr_model_battle.txt but no EDU unit references it — safe to delete from DMB unless used by descr_strat or another file.`, "dmb-orphan-type"));
+    push(err(`[DMB] ${t}`, null, `'type ${t}' is declared in descr_model_battle.txt but no EDU unit or descr_character battle_model references it — safe to delete from DMB unless another file references it.`, "dmb-orphan-type"));
   }
 }
 

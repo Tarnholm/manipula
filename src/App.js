@@ -350,12 +350,24 @@ export default function App() {
       //     no DMB block references (cleanup target)
       const dmbParse = f.dmb ? parseDMB(f.dmb) : { types: new Set(), textures: [], models: [] };
       const dmbModels = dmbParse.types;
+      // descr_character.txt's `battle_model X` lines also reference DMB
+      // types (for general / admiral / captain models). Without including
+      // those, the orphan-DMB-type check false-flags every general model
+      // that no EDU unit happens to use as `model id`.
+      const dmbExtraUsage = new Set();
+      if (f.descrCharacter) {
+        for (const raw of f.descrCharacter.split(/\r?\n/)) {
+          const m = raw.replace(/;.*$/, "").match(/^\s*battle_model\s+(\S+)/i);
+          if (m) dmbExtraUsage.add(m[1]);
+        }
+      }
 
       setModIndex(prev => ({
         ...prev,
         aliases: edb.aliases, buildings: edb.buildings, recruits: edb.recruits,
         reforms, scriptFiles,
         dmbModels,
+        dmbExtraUsage,
         dmbTextures: dmbParse.textures,
         dmbModelFiles: dmbParse.models,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
@@ -1911,6 +1923,7 @@ export default function App() {
         const { validate } = await import("./edu_matic/validate");
         const errs = validate(eduProject, {
           dmbModels: modIndex.dmbModels,
+          dmbExtraUsage: modIndex.dmbExtraUsage,
           dmbTextures: modIndex.dmbTextures,
           dmbModelFiles: modIndex.dmbModelFiles,
           dmbAssetMissing: modIndex.dmbAssetMissing,
@@ -1920,7 +1933,7 @@ export default function App() {
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
@@ -2109,6 +2122,19 @@ export default function App() {
         onImportNewFromEDB={importNewFromEDB}
         onImportEdumatic={importFromEdumatic}
         onResetImportsToReferenceOnly={resetImportsToReferenceOnly}
+        onMarkOrphanUnits={(ids) => {
+          if (!ids || !ids.length) return;
+          if (!window.confirm(
+            `Mark ${ids.length} orphan unit${ids.length === 1 ? "" : "s"} for removal?\n\n` +
+            `These units have no positive factions left — they won't recruit anywhere as-is.\n` +
+            `Marking sets pendingRemoval=true; the next Write to EDB strips their recruit lines and the project entry deletes itself afterwards.\n\n` +
+            `Recoverable via Ctrl+Z.`
+          )) return;
+          const idSet = new Set(ids);
+          const next = units.map(u => idSet.has(u.id) ? { ...u, pendingRemoval: true } : u);
+          persistUnits(next);
+          toast(`Marked ${ids.length} orphan unit${ids.length === 1 ? "" : "s"} for removal.`, "success");
+        }}
         onWriteBack={previewWriteBack}
         onExportBundle={exportBundle}
         onSaveText={async () => {
@@ -2421,7 +2447,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -2475,6 +2501,16 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
         title="Set every imported unit to reference-only (writeBack: false). Manually authored units are untouched."
         style={tbtn("#553")}
       >Imports → reference</button>
+      {onMarkOrphanUnits && (() => {
+        const orphans = (units || []).filter(u => !u.pendingRemoval && (!u.factions || u.factions.length === 0));
+        return orphans.length > 0 ? (
+          <button
+            onClick={() => onMarkOrphanUnits(orphans.map(u => u.id))}
+            title={`Mark for removal every unit with an empty factions[] (orphan units that won't recruit anywhere — typically left over after a Remove-faction-from-project run). Lines get stripped from the EDB on the next Write to EDB.`}
+            style={tbtn("#754")}
+          >Mark {orphans.length} orphan unit{orphans.length === 1 ? "" : "s"}</button>
+        ) : null;
+      })()}
       {/* Merge-identical-variants and Detect-AI/AOR-pairing buttons used to
           live here. Both are now run automatically as part of every
           mod-load reconcile (App.js auto-import effect), so the user

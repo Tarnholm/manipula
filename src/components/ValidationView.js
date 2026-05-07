@@ -39,6 +39,7 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
     // App.js debounced validate that drives the Sync count.
     const edu = eduValidationIssues(eduProject, eduValidate, {
       dmbModels: modIndex && modIndex.dmbModels,
+      dmbExtraUsage: modIndex && modIndex.dmbExtraUsage,
       dmbTextures: modIndex && modIndex.dmbTextures,
       dmbModelFiles: modIndex && modIndex.dmbModelFiles,
       dmbAssetMissing: modIndex && modIndex.dmbAssetMissing,
