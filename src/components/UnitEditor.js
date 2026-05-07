@@ -274,6 +274,66 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
         </div>
       </Section>
 
+      {/* COMMON REQUIRES — moved up to sit directly under Player Recruitment.
+          User reported this is the section they edit most often (especially
+          early in a unit's lifecycle), so it should be reachable without
+          scrolling past the AI/AOR sibling blocks. */}
+      <Section title="Common requires (apply to every emitted line)">
+        <Picker
+          label="Hidden resources"
+          options={opts.hiddenResources}
+          value={cr.hidden_resource || []}
+          onChange={(v) => updateCommonRequires("hidden_resource", v)}
+          placeholder="add hidden_resource (e.g. aestian)"
+        />
+        {(cr.hidden_resource || []).length > 0 && modIndex.regionsByHR && (
+          <div style={{ marginTop: -8, marginBottom: 12, padding: "6px 10px", background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 3, fontSize: 11.5, color: "#9b9" }}>
+            {(cr.hidden_resource || []).map(hr => {
+              const regs = (modIndex.regionsByHR[hr] || []);
+              return (
+                <div key={hr} style={{ marginBottom: 4 }}>
+                  <span style={{ color: "#bcb", fontFamily: "Consolas, monospace" }}>{hr}</span>
+                  <span style={{ color: "#666" }}> — </span>
+                  {regs.length === 0
+                    ? <span style={{ color: "#a77" }}>not present in any region</span>
+                    : <span>{regs.length} region{regs.length === 1 ? "" : "s"}: {regs.slice(0, 6).map(r => r.region).join(", ")}{regs.length > 6 ? `, +${regs.length - 6} more` : ""}</span>
+                  }
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <Picker
+          label="Excluded hidden_resources (emits not hidden_resource X — gates regions OUT)"
+          options={opts.hiddenResources}
+          value={cr.not_hidden_resource || []}
+          onChange={(v) => updateCommonRequires("not_hidden_resource", v)}
+          placeholder="add not hidden_resource (e.g. island_settlement)"
+        />
+        <Picker
+          label="Reforms required (major_event)"
+          options={opts.reforms}
+          value={cr.major_event || []}
+          onChange={(v) => updateCommonRequires("major_event", v)}
+        />
+        <Picker
+          label="Aliases"
+          options={opts.aliases}
+          value={cr.alias || []}
+          onChange={(v) => updateCommonRequires("alias", v)}
+          placeholder="e.g. land_recruitment"
+        />
+        <Field label="Custom requires (one per line — verbatim)">
+          <textarea
+            value={(cr.raw || []).join("\n")}
+            onChange={(e) => updateCommonRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
+            rows={2}
+            style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
+            placeholder='e.g. not hidden_resource island_settlement'
+          />
+        </Field>
+      </Section>
+
       {/* AOR SIBLING */}
       <Section title={`AOR sibling${u.aor && u.aor.enabled ? " — enabled" : ""}`}>
         {/^merc\s+/i.test(u.unit || "") && (
@@ -519,63 +579,6 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
           </Field>
         </Section>
       )}
-
-      {/* COMMON REQUIRES */}
-      <Section title="Common requires (apply to every emitted line)">
-        <Picker
-          label="Hidden resources"
-          options={opts.hiddenResources}
-          value={cr.hidden_resource || []}
-          onChange={(v) => updateCommonRequires("hidden_resource", v)}
-          placeholder="add hidden_resource (e.g. aestian)"
-        />
-        {(cr.hidden_resource || []).length > 0 && modIndex.regionsByHR && (
-          <div style={{ marginTop: -8, marginBottom: 12, padding: "6px 10px", background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 3, fontSize: 11.5, color: "#9b9" }}>
-            {(cr.hidden_resource || []).map(hr => {
-              const regs = (modIndex.regionsByHR[hr] || []);
-              return (
-                <div key={hr} style={{ marginBottom: 4 }}>
-                  <span style={{ color: "#bcb", fontFamily: "Consolas, monospace" }}>{hr}</span>
-                  <span style={{ color: "#666" }}> — </span>
-                  {regs.length === 0
-                    ? <span style={{ color: "#a77" }}>not present in any region</span>
-                    : <span>{regs.length} region{regs.length === 1 ? "" : "s"}: {regs.slice(0, 6).map(r => r.region).join(", ")}{regs.length > 6 ? `, +${regs.length - 6} more` : ""}</span>
-                  }
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <Picker
-          label="Excluded hidden_resources (emits not hidden_resource X — gates regions OUT)"
-          options={opts.hiddenResources}
-          value={cr.not_hidden_resource || []}
-          onChange={(v) => updateCommonRequires("not_hidden_resource", v)}
-          placeholder="add not hidden_resource (e.g. island_settlement)"
-        />
-        <Picker
-          label="Reforms required (major_event)"
-          options={opts.reforms}
-          value={cr.major_event || []}
-          onChange={(v) => updateCommonRequires("major_event", v)}
-        />
-        <Picker
-          label="Aliases"
-          options={opts.aliases}
-          value={cr.alias || []}
-          onChange={(v) => updateCommonRequires("alias", v)}
-          placeholder="e.g. land_recruitment"
-        />
-        <Field label="Custom requires (one per line — verbatim)">
-          <textarea
-            value={(cr.raw || []).join("\n")}
-            onChange={(e) => updateCommonRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
-            rows={2}
-            style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
-            placeholder='e.g. not hidden_resource island_settlement'
-          />
-        </Field>
-      </Section>
 
       {/* RECRUITABLE REGIONS MAP */}
       <RegionMap

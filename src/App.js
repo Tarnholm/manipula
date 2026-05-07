@@ -1067,12 +1067,24 @@ export default function App() {
       const playerLines = factional.filter(e => /\bis_player\b/.test(e.requires) && !/\bnot is_player\b/.test(e.requires));
       let patched = u;
       // AOR pairing: factional + AOR sibling → set aor.enabled on the
-      // factional entry, drop the standalone "aor X" ref-only entry.
+      // factional entry, copy the standalone "aor X" entry's AOR-specific
+      // requires (e.g. hidden_resource picentine) into aorRequires so the
+      // generator knows what gates the AOR variant, then drop the
+      // standalone ref-only aor entry.
       if (aorLines.length > 0 && playerLines.length > 0) {
+        const aorEntry = indexedByUnit.get("aor " + u.unit);
         if (!patched.aor || !patched.aor.enabled || patched.aor.aorOnly) {
           patched = { ...patched, aor: { enabled: true, govTier: (patched.aor && patched.aor.govTier) || 1, aorOnly: false, recruitName: "aor " + patched.unit } };
         }
-        const aorEntry = indexedByUnit.get("aor " + u.unit);
+        // Always re-derive aorRequires from the standalone aor entry so a
+        // subsequent EDB change to the AOR sibling propagates here too.
+        // The standalone's commonRequires holds clauses that the EDB has
+        // ON the aor lines but NOT on the factional lines (the AOR's
+        // hidden_resource gate, etc.) — those belong on the factional's
+        // aorRequires under the new merged shape.
+        if (aorEntry && Array.isArray(aorEntry.commonRequires)) {
+          patched = { ...patched, aorRequires: aorEntry.commonRequires };
+        }
         if (aorEntry && !aorEntry.writeBack) dropIds.add(aorEntry.id);
       }
       // AI sibling: any not-is_player lines in the EDB → ai.enabled.
