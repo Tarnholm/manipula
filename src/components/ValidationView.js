@@ -32,7 +32,18 @@ const ISSUE_DOCS = {
 export default function ValidationView({ units, modIndex, missingCards, eduProject, onJump, onFilterFaction, onCreateEduStubs }) {
   const issues = useMemo(() => {
     const recruit = validateUnits(units, modIndex, { missingCards });
-    const edu = eduValidationIssues(eduProject, eduValidate);
+    // Pass DMB cross-file context so the Validate tab matches the Sync
+    // popover's error count. Without this, the four DMB checks
+    // (unit-dmb-missing, dmb-asset-missing, dmb-orphan-type,
+    // dmb-orphan-asset) silently no-op here while still firing in the
+    // App.js debounced validate that drives the Sync count.
+    const edu = eduValidationIssues(eduProject, eduValidate, {
+      dmbModels: modIndex && modIndex.dmbModels,
+      dmbTextures: modIndex && modIndex.dmbTextures,
+      dmbModelFiles: modIndex && modIndex.dmbModelFiles,
+      dmbAssetMissing: modIndex && modIndex.dmbAssetMissing,
+      dmbAssetOrphans: modIndex && modIndex.dmbAssetOrphans,
+    });
     const orphans = eduOrphanIssues(modIndex);
     const cross = crossSideIssues(units, eduProject);
     return [...recruit, ...orphans, ...cross, ...edu];

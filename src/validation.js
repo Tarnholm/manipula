@@ -258,10 +258,10 @@ export function crossSideIssues(units, eduProject) {
 // validation view can display both halves side by side. The EDU validator is statically
 // imported via the helper below so this module stays pure JS without a top-level import
 // cycle (validation.js is also pulled into App.js paths that don't need EDU).
-export function eduValidationIssues(eduProject, validateFn) {
+export function eduValidationIssues(eduProject, validateFn, opts) {
   if (!eduProject || typeof validateFn !== "function") return [];
   try {
-    const errors = validateFn(eduProject) || [];
+    const errors = validateFn(eduProject, opts) || [];
     return errors.map(e => ({
       unitId: `edu:${e.unit}`,
       unit: e.unit,
