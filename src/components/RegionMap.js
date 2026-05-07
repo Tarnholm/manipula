@@ -269,7 +269,9 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
     }
     const out = new Map();
     for (const [key, s] of sums) {
-      out.set(key, { x: s.x / s.count, y: s.y / s.count, name: s.name });
+      // area = pixel count, used at draw time to skip tiny slivers
+      // that wouldn't have room for a label even at high zoom.
+      out.set(key, { x: s.x / s.count, y: s.y / s.count, name: s.name, area: s.count });
     }
     return out;
   }, [pixels, lookup]);
@@ -326,22 +328,34 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
     c.height = height;
     const ctx2d = c.getContext("2d");
     ctx2d.putImageData(new ImageData(out, width, height), 0, 0);
-    // Labels: draw at each centroid. White fill with a thin black stroke
-    // so they stay readable across the saturated colour palette without
-    // needing per-region contrast logic.
-    if (showLabels) {
-      ctx2d.font = "600 9px Arial, sans-serif";
+    // Labels: only paint when the user is zoomed in enough for the text
+    // to actually fit. At zoom 1 the entire map fits in the viewport and
+    // all 1311 region names overlap into a wall of mush — useless. Above
+    // zoom 1.5 the visible viewport shrinks far enough that label
+    // collision becomes manageable, and we skip regions whose pixel
+    // coverage is below a min-area threshold (tiny islands and
+    // sub-region slivers don't deserve a label).
+    //
+    // Font size scales inversely with zoom so the on-screen height
+    // stays close to constant (~14px CSS pixels) regardless of how far
+    // the user has zoomed in. Without this, a zoom-3 view would render
+    // each label as huge text that obscures the colour underneath.
+    if (showLabels && zoom >= 1.5) {
+      const fontPx = Math.max(5, Math.round(11 / zoom));
+      const minArea = Math.max(60, 600 / (zoom * zoom));   // skip slivers
+      ctx2d.font = `600 ${fontPx}px Arial, sans-serif`;
       ctx2d.textAlign = "center";
       ctx2d.textBaseline = "middle";
-      ctx2d.lineWidth = 2;
-      ctx2d.strokeStyle = "rgba(0, 0, 0, 0.85)";
+      ctx2d.lineWidth = Math.max(1.5, fontPx * 0.25);
+      ctx2d.strokeStyle = "rgba(0, 0, 0, 0.9)";
       ctx2d.fillStyle = "#fff";
       for (const cd of centroids.values()) {
+        if ((cd.area || 0) < minArea) continue;
         ctx2d.strokeText(cd.name, cd.x, cd.y);
         ctx2d.fillText(cd.name, cd.x, cd.y);
       }
     }
-  }, [pixels, lookup, matched, matchedB, mode, factionColors, density, tierByKey, modIndex.regionOwner, showBorders, showLabels, centroids]);
+  }, [pixels, lookup, matched, matchedB, mode, factionColors, density, tierByKey, modIndex.regionOwner, showBorders, showLabels, centroids, zoom]);
 
   // Reset compare-unit picker when leaving compare mode.
   useEffect(() => { if (mode !== "compare") setCompareUnitId(null); }, [mode]);
@@ -524,8 +538,8 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
           >Borders</button>
           <button
             onClick={() => setShowLabels(l => !l)}
-            style={{ ...zoomBtn, fontSize: 10, padding: "2px 8px", background: showLabels ? "#3a3a2a" : "transparent", color: showLabels ? "#dca64a" : "#888", borderColor: showLabels ? "#5a4a2a" : "#333" }}
-            title="Toggle region-name labels at each region's centroid"
+            style={{ ...zoomBtn, fontSize: 10, padding: "2px 8px", background: showLabels ? "#3a3a2a" : "transparent", color: showLabels && zoom >= 1.5 ? "#dca64a" : "#888", borderColor: showLabels && zoom >= 1.5 ? "#5a4a2a" : "#333" }}
+            title={`Toggle region-name labels (only painted at zoom ≥ 1.5× to avoid the wall-of-text overlap at full extent — currently ${zoom.toFixed(1)}×${showLabels && zoom < 1.5 ? "; zoom in to see them" : ""})`}
           >Labels</button>
           <button onClick={() => { const z = Math.max(1, zoom / 1.4); setZoom(z); if (z === 1) setPan({ x: 0, y: 0 }); }} style={zoomBtn} title="Zoom out (or Ctrl + scroll)">−</button>
           <span style={{ fontSize: 10, color: "#888", minWidth: 30, textAlign: "center", fontFamily: "Consolas, monospace" }} title="Ctrl + scroll to zoom">{zoom.toFixed(1)}×</span>
