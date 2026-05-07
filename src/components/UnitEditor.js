@@ -4,7 +4,7 @@ import UnitStats from "./UnitStats";
 import EDBOccurrences from "./EDBOccurrences";
 import FactionIcon from "./FactionIcon";
 import RegionMap from "./RegionMap";
-import { renderUnitPreview, generatePlayerLines, generateAORPlayerLines, generateAILines } from "../generator";
+import { generatePlayerLines, generateAORPlayerLines, generateAILines } from "../generator";
 import { QUALITY_CLASSES, findQualityClass } from "../qualityClasses";
 
 // Unit family editor — grade-driven authoring.
@@ -621,13 +621,126 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
       {/* STATS */}
       <UnitStats recruitName={u.unit} modIndex={modIndex} />
 
-      {/* PREVIEW */}
+      {/* PREVIEW — inline diff vs current EDB. Lines that already match an
+          EDB recruit-line for this unit render in default tone (KEPT);
+          lines Manipula would emit but the EDB doesn't have render green
+          (ADD); lines the EDB has but Manipula wouldn't emit render red
+          and struck-through (REMOVE). Lets the user see at a glance
+          what Write to EDB would actually change. */}
       <div style={{ marginTop: 14, padding: 12, background: "rgba(15,17,18,0.7)", border: "1px solid rgba(220,166,74,0.18)", borderRadius: 12, backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
-        <Label>Preview</Label>
-        <pre style={{ whiteSpace: "pre-wrap", fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb", margin: 0 }}>
-{renderUnitPreview(u)}
-        </pre>
+        <Label>Preview (diff vs current EDB)</Label>
+        <PreviewDiff unit={u} modIndex={modIndex} />
       </div>
+    </div>
+  );
+}
+
+// Inline diff preview. Builds a normalized (building + level + sorted
+// requires) signature per line so order-of-clauses differences don't
+// produce false positives. Generated lines are rendered in source order
+// (grouped by building); EDB-only lines are appended at the bottom in a
+// "REMOVED" group so the user sees what Write to EDB would strip.
+function PreviewDiff({ unit, modIndex }) {
+  const { gen, edbOnly, summary } = useMemo(() => {
+    const player = generatePlayerLines(unit);
+    const aor = generateAORPlayerLines(unit);
+    const ai = generateAILines(unit);
+    const generated = [
+      ...player.map(l => ({ ...l, group: "PLAYER (faction sibling)" })),
+      ...aor.map(l => ({ ...l, group: "PLAYER (AOR sibling)" })),
+      ...ai.map(l => ({ ...l, group: l.aorVariant ? "AI [AOR]" : "AI" })),
+    ];
+    // Pull every EDB recruit-line for this unit name + the AOR sibling name.
+    const allRecruits = (modIndex && modIndex.recruits) || [];
+    const aorName = unit.aor && unit.aor.enabled
+      ? (unit.aor.aorOnly && unit.aor.recruitName ? unit.aor.recruitName : `aor ${unit.unit}`)
+      : null;
+    const myEdb = allRecruits.filter(r =>
+      r.unit === unit.unit || (aorName && r.unit === aorName)
+    );
+    // Build signatures both sides.
+    const sigOf = (building, level, requiresText) => {
+      const parts = String(requiresText || "")
+        .split(/\s+and\s+/)
+        .map(s => s.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .sort();
+      return `${building}|${level}|${parts.join("&")}`;
+    };
+    const sigOfGenLine = (l) => {
+      const m = (l.text || "").match(/recruit\s+"[^"]+"\s+\d+\s+requires\s+(.+)$/);
+      return sigOf(l.building, l.level, m ? m[1] : "");
+    };
+    const edbSigs = new Map(); // sig → { entry, used: bool }
+    for (const r of myEdb) {
+      edbSigs.set(sigOf(r.building, r.level, r.requires), { entry: r, used: false });
+    }
+    let added = 0, kept = 0;
+    const gen = generated.map(l => {
+      const s = sigOfGenLine(l);
+      const hit = edbSigs.get(s);
+      if (hit) { hit.used = true; kept++; return { ...l, status: "kept" }; }
+      added++;
+      return { ...l, status: "added" };
+    });
+    const edbOnly = [];
+    for (const [, v] of edbSigs) {
+      if (!v.used) edbOnly.push(v.entry);
+    }
+    return { gen, edbOnly, summary: { added, removed: edbOnly.length, kept } };
+  }, [unit, modIndex]);
+
+  const colorFor = (status) => status === "added" ? "#7c9" : status === "removed" ? "#e88" : "#bbb";
+  const bgFor = (status) => status === "added" ? "rgba(124,201,153,0.10)" : status === "removed" ? "rgba(232,136,136,0.10)" : "transparent";
+
+  // Group generated lines by their group label so the preview retains the
+  // PLAYER / AOR / AI structure the original text-only renderer had.
+  const grouped = new Map();
+  for (const l of gen) {
+    if (!grouped.has(l.group)) grouped.set(l.group, []);
+    grouped.get(l.group).push(l);
+  }
+
+  return (
+    <div style={{ fontFamily: "Consolas, monospace", fontSize: 11.5, color: "#bbb" }}>
+      {/* Header — counters so the user sees the impact at a glance. */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 8, fontSize: 11 }}>
+        {summary.added > 0 && <span style={{ color: "#7c9" }}>+ {summary.added} added</span>}
+        {summary.removed > 0 && <span style={{ color: "#e88" }}>− {summary.removed} removed</span>}
+        {summary.kept > 0 && <span style={{ color: "#888" }}>= {summary.kept} unchanged</span>}
+        {summary.added === 0 && summary.removed === 0 && summary.kept > 0 && (
+          <span style={{ color: "#7c9" }}>✓ in sync — Write to EDB is a no-op</span>
+        )}
+        {summary.added === 0 && summary.removed === 0 && summary.kept === 0 && (
+          <span style={{ color: "#888" }}>nothing to preview — unit is disabled or has no emit lines</span>
+        )}
+      </div>
+
+      {[...grouped.entries()].map(([group, lines]) => (
+        <div key={group} style={{ marginBottom: 8 }}>
+          <div style={{ color: "#888", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 2 }}>; ── {group} ──</div>
+          {lines.map((l, i) => (
+            <div key={i} style={{ background: bgFor(l.status), color: colorFor(l.status), padding: "1px 4px", borderRadius: 2, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+              <span style={{ color: "#666", fontSize: 10 }}>; ({l.building} / {l.level}){l.aorVariant ? " [AOR]" : ""}{"\n"}</span>
+              <span style={{ marginRight: 6 }}>{l.status === "added" ? "+" : "·"}</span>
+              {l.text.trim()}
+            </div>
+          ))}
+        </div>
+      ))}
+
+      {edbOnly.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color: "#e88", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 2 }}>; ── REMOVED (in EDB, not emitted) ──</div>
+          {edbOnly.map((r, i) => (
+            <div key={i} style={{ background: bgFor("removed"), color: colorFor("removed"), padding: "1px 4px", borderRadius: 2, whiteSpace: "pre-wrap", lineHeight: 1.5, textDecoration: "line-through" }}>
+              <span style={{ color: "#a55", fontSize: 10, textDecoration: "none", display: "inline-block" }}>; ({r.building} / {r.level}){"\n"}</span>
+              <span style={{ marginRight: 6, textDecoration: "none" }}>−</span>
+              recruit "{r.unit}" {r.xp || 0} requires {r.requires}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
