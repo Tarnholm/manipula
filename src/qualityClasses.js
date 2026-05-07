@@ -1,74 +1,102 @@
 // EDUMatic Quality Class master list — used as autocomplete for the Quality Class field on each unit.
 // Source: EDUMatic spreadsheet (RIS workflow conversation).
-// Each entry maps to a unit role + an implied tier hint (1..3 based on the tier prefix in the name).
+// Each entry maps to a unit role + an implied tier hint (1..4) that drives
+// canonical mic_tier defaulting in the UI.
 //
-// Tier inference from the prefix:
-//   "levy" / "peasant"      → tier 1
-//   no prefix / "a" suffix  → tier 1 (e.g. "spearman", "hoplite", "infantry")
-//   "professional" / "b"    → tier 2
-//   "elite" / "c"           → tier 3
-//   "veteran" / "d"         → tier 3
+// Tier hint scheme (per user's RIS tier guide):
+//   Tier 1 — Levy/light. mic_tier 1, garrison tier 1, colony tier 1, GovB ON.
+//     "levy ___", peasant, light HA, missile cavalry, light cav.
+//   Tier 2 — Standard. mic_tier 2, garrison tier 1 (AI), aor tier 1, colony tier 2 (sometimes 1), GovB OFF (override case-by-case).
+//     bare-name infantry/spearman/hoplite/slinger/archer/javelinman, medium HA, medium cav.
+//   Tier 3 — Professional. mic_tier 3, garrison tier 2, colony tier 2, GovB OFF (very rare).
+//     "professional ___", heavy HA, heavy cav.
+//   Tier 4 — Elite. mic_tier 4, garrison tier 2, colony tier 2, GovB NEVER (only GovC + GovD).
+//     "elite ___", cataphract HA, elite cav.
+//   Tier 5 — Veteran/Special/General. Same recruitment shape as Tier 4 (mic_tier 4),
+//     just a separate category bucket. Includes veterans, naked fanatics, cataphract,
+//     chariots, elephants, generals, siege.
 //
-// Unit role inferred from the noun (slinger/archer/javelinman = missile, infantry/spearman/hoplite = infantry, etc.).
+// The user can override the per-unit canonical mic_tier even after picking a Quality
+// Class — this is just a hint that the editor uses for default values when the QC
+// is first selected.
 //
-// The user can override the per-unit canonical mic_tier even after picking a Quality Class — this is just a hint.
+// Three categories weren't named in the user's tier guide — best-guess defaults below
+// (marked 'TBD'); user can correct.
 
 export const QUALITY_CLASSES = [
   { id: "01. peasant",                          role: "infantry", tierHint: 1 },
+  // Slinger family: levy=1, bare=2, professional=3 (added), elite=4.
   { id: "02. levy slinger",                     role: "missile",  tierHint: 1 },
-  { id: "02a. slinger",                         role: "missile",  tierHint: 1 },
-  { id: "02b. elite slinger",                   role: "missile",  tierHint: 3 },
+  { id: "02a. slinger",                         role: "missile",  tierHint: 2 },
+  { id: "02b. elite slinger",                   role: "missile",  tierHint: 4 },
+  // Archer family
   { id: "03. levy archer",                      role: "missile",  tierHint: 1 },
-  { id: "03a. archer",                          role: "missile",  tierHint: 1 },
-  { id: "03b. professional archer",             role: "missile",  tierHint: 2 },
-  { id: "03c. elite archer",                    role: "missile",  tierHint: 3 },
+  { id: "03a. archer",                          role: "missile",  tierHint: 2 },
+  { id: "03b. professional archer",             role: "missile",  tierHint: 3 },
+  { id: "03c. elite archer",                    role: "missile",  tierHint: 4 },
+  // Javelinman family
   { id: "04. levy javelinman",                  role: "missile",  tierHint: 1 },
-  { id: "04a. javelinman",                      role: "missile",  tierHint: 1 },
-  { id: "04b. professional javelinman",         role: "missile",  tierHint: 2 },
-  { id: "04c. elite javelinman",                role: "missile",  tierHint: 3 },
+  { id: "04a. javelinman",                      role: "missile",  tierHint: 2 },
+  { id: "04b. professional javelinman",         role: "missile",  tierHint: 3 },
+  { id: "04c. elite javelinman",                role: "missile",  tierHint: 4 },
+  // Infantry family — veteran (tier 5) maps to mic_tier 4.
   { id: "5. levy infantry",                     role: "infantry", tierHint: 1 },
-  { id: "5a. infantry",                         role: "infantry", tierHint: 1 },
-  { id: "5b. professional infantry",            role: "infantry", tierHint: 2 },
-  { id: "5c. elite infantry",                   role: "infantry", tierHint: 3 },
-  { id: "5d. veteran infantry",                 role: "infantry", tierHint: 3 },
+  { id: "5a. infantry",                         role: "infantry", tierHint: 2 },
+  { id: "5b. professional infantry",            role: "infantry", tierHint: 3 },
+  { id: "5c. elite infantry",                   role: "infantry", tierHint: 4 },
+  { id: "5d. veteran infantry",                 role: "infantry", tierHint: 4 },
+  // Spearman family
   { id: "06. levy spearman",                    role: "infantry", tierHint: 1 },
-  { id: "06a. spearman",                        role: "infantry", tierHint: 1 },
-  { id: "06b. professional spearman",           role: "infantry", tierHint: 2 },
-  { id: "06c. elite spearman",                  role: "infantry", tierHint: 3 },
-  { id: "06d. veteran spearman",                role: "infantry", tierHint: 3 },
+  { id: "06a. spearman",                        role: "infantry", tierHint: 2 },
+  { id: "06b. professional spearman",           role: "infantry", tierHint: 3 },
+  { id: "06c. elite spearman",                  role: "infantry", tierHint: 4 },
+  { id: "06d. veteran spearman",                role: "infantry", tierHint: 4 },
+  // Hoplite family — added 07d. veteran hoplite to match the others.
   { id: "07. levy hoplite",                     role: "infantry", tierHint: 1 },
-  { id: "07a. hoplite",                         role: "infantry", tierHint: 1 },
-  { id: "07b. professional hoplite",            role: "infantry", tierHint: 2 },
-  { id: "07c. elite hoplite",                   role: "infantry", tierHint: 3 },
-  { id: "16B. naked fanatics",                  role: "infantry", tierHint: 1 },
+  { id: "07a. hoplite",                         role: "infantry", tierHint: 2 },
+  { id: "07b. professional hoplite",            role: "infantry", tierHint: 3 },
+  { id: "07c. elite hoplite",                   role: "infantry", tierHint: 4 },
+  { id: "07d. veteran hoplite",                 role: "infantry", tierHint: 4 },
+  // Tier 5 catch-all for unique infantry classes.
+  { id: "16B. naked fanatics",                  role: "infantry", tierHint: 4 },
+  // HA cavalry: light=1, medium=2, heavy=3, cataphract=4.
   { id: "17. light HA",                         role: "cavalry",  tierHint: 1 },
   { id: "18. medium HA",                        role: "cavalry",  tierHint: 2 },
   { id: "19. heavy HA",                         role: "cavalry",  tierHint: 3 },
-  { id: "20. cataphract HA",                    role: "cavalry",  tierHint: 3 },
+  { id: "20. cataphract HA",                    role: "cavalry",  tierHint: 4 },
+  // Standard cavalry: missile=1, light=1, medium=2, heavy=3, elite=4.
   { id: "21. missile cavalry",                  role: "cavalry",  tierHint: 1 },
   { id: "22. light cav",                        role: "cavalry",  tierHint: 1 },
   { id: "23. medium cav",                       role: "cavalry",  tierHint: 2 },
   { id: "24. heavy cav",                        role: "cavalry",  tierHint: 3 },
-  { id: "25. elite cav",                        role: "cavalry",  tierHint: 3 },
-  { id: "26. cataphract",                       role: "cavalry",  tierHint: 3 },
-  { id: "27. chariot",                          role: "cavalry",  tierHint: 2 },
-  { id: "28. scythed chariot",                  role: "cavalry",  tierHint: 2 },
-  { id: "29. forest elephant",                  role: "elephant", tierHint: 3 },
-  { id: "30. indian elephant",                  role: "elephant", tierHint: 3 },
-  { id: "31. armoured elephant",                role: "elephant", tierHint: 3 },
-  { id: "32. general",                          role: "general",  tierHint: 1 },
-  { id: "32. chariot general",                  role: "general",  tierHint: 1 },
-  { id: "33. infantry general",                 role: "general",  tierHint: 1 },
-  { id: "35. greek royal guards",               role: "infantry", tierHint: 3 },
-  { id: "36. greek royal pikes",                role: "infantry", tierHint: 3 },
-  { id: "36B. epigonoi phalangites",            role: "infantry", tierHint: 3 },
-  { id: "37A. roman auxilia (no testudo)",      role: "infantry", tierHint: 2 },
-  { id: "37B. roman auxilia",                   role: "infantry", tierHint: 2 },
-  { id: "38. early imperial legionary",         role: "infantry", tierHint: 3 },
-  { id: "39. early imperial legionary 1st",     role: "infantry", tierHint: 3 },
-  { id: "40. late imperial legionary",          role: "infantry", tierHint: 3 },
-  { id: "41. late imperial legionary 1st",      role: "infantry", tierHint: 3 },
-  { id: "42. siege",                            role: "siege",    tierHint: 2 },
+  { id: "25. elite cav",                        role: "cavalry",  tierHint: 4 },
+  // Tier 5: cataphract, chariot, scythed chariot, elephants — all mic_tier 4.
+  { id: "26. cataphract",                       role: "cavalry",  tierHint: 4 },
+  { id: "27. chariot",                          role: "cavalry",  tierHint: 4 },
+  { id: "28. scythed chariot",                  role: "cavalry",  tierHint: 4 },
+  { id: "29. forest elephant",                  role: "elephant", tierHint: 4 },
+  { id: "30. indian elephant",                  role: "elephant", tierHint: 4 },
+  { id: "31. armoured elephant",                role: "elephant", tierHint: 4 },
+  // Generals — tier 5 = mic_tier 4.
+  { id: "32. general",                          role: "general",  tierHint: 4 },
+  { id: "32. chariot general",                  role: "general",  tierHint: 4 },
+  { id: "33. infantry general",                 role: "general",  tierHint: 4 },
+  // Specials user didn't explicitly tier-place — best guess (TBD, correct as needed):
+  //   • royal guards / royal pikes / epigonoi phalangites → tier 4 (elite-class).
+  //   • imperial legionaries (38–41) → tier 4 (elite-class).
+  //   • roman auxilia → tier 3 (professional-class).
+  { id: "35. greek royal guards",               role: "infantry", tierHint: 4 },
+  { id: "36. greek royal pikes",                role: "infantry", tierHint: 4 },
+  { id: "36B. epigonoi phalangites",            role: "infantry", tierHint: 4 },
+  { id: "37A. roman auxilia (no testudo)",      role: "infantry", tierHint: 3 },
+  { id: "37B. roman auxilia",                   role: "infantry", tierHint: 3 },
+  { id: "38. early imperial legionary",         role: "infantry", tierHint: 4 },
+  { id: "39. early imperial legionary 1st",     role: "infantry", tierHint: 4 },
+  { id: "40. late imperial legionary",          role: "infantry", tierHint: 4 },
+  { id: "41. late imperial legionary 1st",      role: "infantry", tierHint: 4 },
+  // Siege = tier 5 = mic_tier 4.
+  { id: "42. siege",                            role: "siege",    tierHint: 4 },
+  // Ships — left at tier 1 (not MIC-recruited; the existing siege/naval pipeline doesn't use this hint).
   { id: "43. ship",                             role: "naval",    tierHint: 1 },
 ];
 

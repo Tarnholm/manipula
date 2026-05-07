@@ -174,7 +174,10 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
 
       {/* QUALITY CLASS — Grade was removed; EDUMatic's Quality column is the
           single class field. Tier hint from the picked QC pre-fills the
-          mic_tier dials below (still overridable per-unit). */}
+          mic_tier dials AND the GovB / colony defaults below (per the RIS
+          tier guide: tier 1 → GovB on + colony 1, tier 2+ → GovB off +
+          colony 2; tier 2 GovB or colony-1 are manual flips). All values
+          remain overridable per-unit. */}
       <Section title="Quality Class">
         <Field label="Quality Class (from EDUMatic)">
           <select
@@ -183,7 +186,14 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
               const v = e.target.value;
               const q = findQualityClass(v);
               if (q) {
-                set({ qualityClass: v, canonicalMicTier: q.tierHint, homelandMicTier: q.tierHint });
+                const t = q.tierHint;
+                set({
+                  qualityClass: v,
+                  canonicalMicTier: t,
+                  homelandMicTier: t,            // mirror canonical (no homeland bonus until clarified)
+                  emitGovB: t === 1,             // GovB only on tier 1; tier 2+ is manual flip
+                  colonyTier: t === 1 ? 1 : 2,   // tier 1 → 1, tier 2+ → 2 (tier 2's manual flip to 1 is one click below)
+                });
               } else {
                 set({ qualityClass: v });
               }

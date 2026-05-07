@@ -107,8 +107,17 @@ export function migrateV1(u) {
     }
     return next;
   }
-  const inferredGrade = u.minTier <= 1 ? "Standard" : u.minTier === 2 ? "Professional" : "Elite";
-  const def = GRADE_DEFAULTS[inferredGrade];
+  // Per the RIS tier guide (user-confirmed):
+  //   • tier 1 → GovB on, colony 1, homeland mirrors canonical
+  //   • tier 2 → GovB off (manual flip on for the rare tier-2 GovB unit),
+  //              colony 2 (manual flip to 1 case-by-case)
+  //   • tier 3+ → GovB off, colony 2
+  //   • homeland mic_tier always mirrors canonical (no bonus until clarified)
+  // Grade is no longer a UI surface — it's kept on the record for backward
+  // compat, but the tier itself drives every default below.
+  const mic = u.minTier || 1;
+  const tdef = tierDefaults(mic);
+  const inferredGrade = mic <= 1 ? "Standard" : mic === 2 ? "Professional" : "Elite";
   const looksImported = (u.notes || "").toLowerCase().includes("imported");
   return {
     id: u.id,
@@ -116,13 +125,13 @@ export function migrateV1(u) {
     enabled: u.enabled !== false,
     notes: u.notes || "",
     grade: inferredGrade,
-    canonicalMicTier: u.minTier || def.canonicalMicTier,
-    homelandMicTier: u.minTier || def.homelandMicTier,
-    colonyTier: def.colonyTier,
+    canonicalMicTier: mic,
+    homelandMicTier: mic,                 // mirror canonical
+    colonyTier: tdef.colonyTier,
     outsideExtras: [],
-    emitGovB: def.emitGovB,
-    emitGovC: def.emitGovC,
-    emitGovD: def.emitGovD,
+    emitGovB: tdef.emitGovB,
+    emitGovC: tdef.emitGovC,
+    emitGovD: tdef.emitGovD,
     factions: u.factions || [],
     excludeFactions: u.excludeFactions || [],
     commonRequires: u.requires || [],
@@ -132,6 +141,17 @@ export function migrateV1(u) {
       ? { enabled: true, govTier: 1, aorOnly: true, recruitName: u.unit }
       : null,
     writeBack: !looksImported,
+  };
+}
+
+// Tier → default emit/colony shape. Single source of truth so the editor's
+// QC-onChange handler and migrateV1's import path stay in lockstep.
+function tierDefaults(tier) {
+  return {
+    emitGovB: tier === 1,
+    emitGovC: true,
+    emitGovD: true,
+    colonyTier: tier === 1 ? 1 : 2,
   };
 }
 
