@@ -9,7 +9,7 @@ const GRADE_ORDER = { Levy: 1, Standard: 2, Professional: 3, Elite: 4, Veteran: 
 // Map role string → bucket number (mirrors generator.js bucketOf, derived from ROSTER_ROLES).
 const BUCKET_OF_ROLE = Object.fromEntries(ROSTER_ROLES.map((r, i) => [r, i + 1]));
 
-export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, onToggleWriteBack, onShowVariantDiff, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
+export default function UnitList({ units, selectedId, selectedIds, onSelect, onAdd, onDelete, onDuplicate, onCreateFromEDU, onReorder, onInsertNear, onMarkForRemoval, onToggleWriteBack, onShowVariantDiff, onRemoveFactionFromAll, viewMode = "edit", onViewModeChange, modIndex, filter, onFilterChange, eduProject }) {
   // Build a Map of unit name → EDU row, so the badge can show a stat-preview tooltip.
   const eduMap = useMemo(() => {
     if (!eduProject || !Array.isArray(eduProject.units)) return null;
@@ -392,8 +392,15 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
           </div>
         )}
         {filtered.length > 0 && filterMode === "faction" && filterValue && (
-          <div style={{ padding: "6px 12px", fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, background: "rgba(0,0,0,0.15)" }}>
-            Authored — {filtered.length}
+          <div style={{ padding: "6px 12px", fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, background: "rgba(0,0,0,0.15)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <span>Authored — {filtered.length}</span>
+            {onRemoveFactionFromAll && (
+              <button
+                onClick={() => onRemoveFactionFromAll(filterValue)}
+                title={`Strip "${filterValue}" from every unit's recruitment list (factions[] and excludeFactions[]). Use when a faction is being removed from the mod entirely. Recoverable via Ctrl+Z.`}
+                style={{ background: "rgba(232,136,136,0.10)", color: "#e88", border: "1px solid rgba(232,136,136,0.3)", padding: "2px 8px", borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: "pointer", textTransform: "none", letterSpacing: 0 }}
+              >Remove faction from project…</button>
+            )}
           </div>
         )}
         {filteredGroups.map((group, gIdx) => {

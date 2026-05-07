@@ -2192,6 +2192,37 @@ export default function App() {
                   const next = units.map(u => u.id === id ? { ...u, writeBack: !!value, writeBackUserSet: true } : u);
                   persistUnits(next);
                 }}
+                onRemoveFactionFromAll={(faction) => {
+                  // Project-wide cleanup when a faction is being deleted from the
+                  // mod. Walks every unit and strips the faction from BOTH its
+                  // factions[] (positive list) AND excludeFactions[] (negative).
+                  // Units that lose all positive factions stay in place — the user
+                  // can manually mark-for-removal or delete from the sidebar.
+                  if (!faction) return;
+                  const affected = units.filter(u =>
+                    (u.factions || []).includes(faction) ||
+                    (u.excludeFactions || []).includes(faction)
+                  ).length;
+                  if (affected === 0) {
+                    setStatus(`No units reference "${faction}" — nothing to remove.`);
+                    return;
+                  }
+                  if (!window.confirm(
+                    `Strip "${faction}" from ${affected} unit${affected === 1 ? "" : "s"}?\n\n` +
+                    `Removes the faction from every unit's factions[] and excludeFactions[]. ` +
+                    `Units left with an empty factions[] won't recruit anywhere — you'll need to ` +
+                    `mark them for removal or delete them from the sidebar afterwards.\n\n` +
+                    `Recoverable via Ctrl+Z.`
+                  )) return;
+                  const next = units.map(u => {
+                    const fac = (u.factions || []).filter(f => f !== faction);
+                    const ex = (u.excludeFactions || []).filter(f => f !== faction);
+                    if (fac.length === (u.factions || []).length && ex.length === (u.excludeFactions || []).length) return u;
+                    return { ...u, factions: fac, excludeFactions: ex };
+                  });
+                  persistUnits(next);
+                  toast(`Stripped "${faction}" from ${affected} unit${affected === 1 ? "" : "s"}.`, "success");
+                }}
                 onShowVariantDiff={showVariantDiff}
                 viewMode={sidebarMode}
                 onViewModeChange={setSidebarMode}
