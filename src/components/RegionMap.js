@@ -162,11 +162,19 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
   const [showBorders, setShowBorders] = useState(() => {
     try { return localStorage.getItem("rt:mapBorders") !== "0"; } catch { return true; }
   });
+  // Tri-state labels: "off" → no labels, "city" → settlement (Pisae, Roma),
+  // "region" → province key (Etruria Septentrionalis). Matches Provincia's
+  // labels-mode toggle. Migrates the legacy boolean storage ("1" → city).
   const [showLabels, setShowLabels] = useState(() => {
-    try { return localStorage.getItem("rt:mapLabels") !== "0"; } catch { return true; }
+    try {
+      const v = localStorage.getItem("rt:mapLabels");
+      if (v === "off" || v === "city" || v === "region") return v;
+      if (v === "0") return "off";
+      return "city";
+    } catch { return "city"; }
   });
   useEffect(() => { try { localStorage.setItem("rt:mapBorders", showBorders ? "1" : "0"); } catch {} }, [showBorders]);
-  useEffect(() => { try { localStorage.setItem("rt:mapLabels", showLabels ? "1" : "0"); } catch {} }, [showLabels]);
+  useEffect(() => { try { localStorage.setItem("rt:mapLabels", showLabels); } catch {} }, [showLabels]);
   const [compareUnitId, setCompareUnitId] = useState(null);
   const [searchQ, setSearchQ] = useState("");
   const [clickedRegion, setClickedRegion] = useState(null); // when set, shows the side panel
@@ -271,15 +279,18 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
     for (const [key, s] of sums) {
       // area = pixel count, used at draw time to skip tiny slivers
       // that wouldn't have room for a label even at high zoom.
-      // Display name prefers the settlement (Pisae, Roma) over the
-      // descr_regions province key (Etruria_Septentrionalis) — shorter,
-      // matches what Provincia shows; falls back to a humanised region
-      // key if no settlement exists.
+      // Both display options are stored so the renderer can pick based on
+      // the tri-state toggle: city (settlement) or region (province key
+      // with underscores converted to spaces).
       const region = s.regionRecord;
-      const display = (region && region.settlement)
-        ? region.settlement
-        : (region && region.region ? region.region.replace(/_/g, " ") : s.name);
-      out.set(key, { x: s.x / s.count, y: s.y / s.count, name: display, area: s.count });
+      const cityName = region && region.settlement ? region.settlement : null;
+      const regionName = region && region.region ? region.region.replace(/_/g, " ") : s.name;
+      out.set(key, {
+        x: s.x / s.count, y: s.y / s.count,
+        cityName,
+        regionName,
+        area: s.count,
+      });
     }
     return out;
   }, [pixels, lookup]);
@@ -523,10 +534,16 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
             title="Toggle pixelated black borders between regions"
           >Borders</button>
           <button
-            onClick={() => setShowLabels(l => !l)}
-            style={{ ...zoomBtn, fontSize: 10, padding: "2px 8px", background: showLabels ? "#3a3a2a" : "transparent", color: showLabels && zoom >= 1.5 ? "#dca64a" : "#888", borderColor: showLabels && zoom >= 1.5 ? "#5a4a2a" : "#333" }}
-            title={`Toggle region-name labels (only painted at zoom ≥ 1.5× to avoid the wall-of-text overlap at full extent — currently ${zoom.toFixed(1)}×${showLabels && zoom < 1.5 ? "; zoom in to see them" : ""})`}
-          >Labels</button>
+            onClick={() => setShowLabels(l => l === "off" ? "city" : l === "city" ? "region" : "off")}
+            style={{
+              ...zoomBtn, fontSize: 10, padding: "2px 8px",
+              background: showLabels !== "off" ? "#3a3a2a" : "transparent",
+              color: showLabels !== "off" && zoom >= 1.5 ? "#dca64a" : "#888",
+              borderColor: showLabels !== "off" && zoom >= 1.5 ? "#5a4a2a" : "#333",
+              minWidth: 64,
+            }}
+            title={`Cycle labels: off → city → region → off. Only painted at zoom ≥ 1.5× to avoid wall-of-text overlap (currently ${zoom.toFixed(1)}×${showLabels !== "off" && zoom < 1.5 ? "; zoom in to see them" : ""}).`}
+          >Labels: {showLabels === "off" ? "off" : showLabels === "city" ? "city" : "region"}</button>
           <button onClick={() => { const z = Math.max(1, zoom / 1.4); setZoom(z); if (z === 1) setPan({ x: 0, y: 0 }); }} style={zoomBtn} title="Zoom out (or Ctrl + scroll)">−</button>
           <span style={{ fontSize: 10, color: "#888", minWidth: 30, textAlign: "center", fontFamily: "Consolas, monospace" }} title="Ctrl + scroll to zoom">{zoom.toFixed(1)}×</span>
           <button onClick={() => setZoom(z => Math.min(8, z * 1.4))} style={zoomBtn} title="Zoom in (or Ctrl + scroll)">+</button>
@@ -587,7 +604,7 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
               zoom 1.5×. Skipped at low zoom to avoid the wall-of-mush
               overlap and below an adaptive area threshold so tiny
               slivers don't earn a label they wouldn't have room for. */}
-          {showLabels && zoom >= 1.5 && pixels && centroids.size > 0 && (
+          {showLabels !== "off" && zoom >= 1.5 && pixels && centroids.size > 0 && (
             <div style={{
               position: "absolute", left: 8, top: 8,
               width: `calc(100% - 16px)`, height: `calc(100% - 16px)`,
@@ -595,16 +612,20 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
               transformOrigin: "0 0", pointerEvents: "none", overflow: "hidden",
             }}>
               {(() => {
-                // Slivers get suppressed at low zoom (so the labels at
-                // 1.5–2× don't pile up on islands), but at high zoom
-                // every region gets a label — that's the user's "max
-                // zoom should show everything" expectation.
                 const minArea = zoom >= 4 ? 0 : Math.max(20, 400 / (zoom * zoom));
                 const out = [];
+                let i = 0;
                 for (const cd of centroids.values()) {
                   if ((cd.area || 0) < minArea) continue;
+                  // Tri-state pick: city → settlement, falling back to
+                  // region if no settlement; region → humanised province
+                  // key, falling back to settlement.
+                  const text = showLabels === "city"
+                    ? (cd.cityName || cd.regionName)
+                    : (cd.regionName || cd.cityName);
+                  if (!text) continue;
                   out.push(
-                    <div key={cd.name} style={{
+                    <div key={`${cd.regionName}-${i++}`} style={{
                       position: "absolute",
                       left: `${(cd.x / pixels.width) * 100}%`,
                       top: `${(cd.y / pixels.height) * 100}%`,
@@ -618,7 +639,7 @@ export default function RegionMap({ unit, modIndex, allUnits, onAddRequire, onFi
                       textShadow: "0 0 2px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.8), 1px 1px 0 rgba(0,0,0,0.95), -1px -1px 0 rgba(0,0,0,0.95)",
                       letterSpacing: 0.2,
                     }}>
-                      {cd.name}
+                      {text}
                     </div>
                   );
                 }
