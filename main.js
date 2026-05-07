@@ -1486,6 +1486,25 @@ ipcMain.handle("git-pull", async (_e, dir) => {
   return r;
 });
 ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
+// Destructive escape hatch — wipe every local change (tracked + untracked)
+// then pull. Used by the Sync popover's "Discard local + pull" button when
+// the user is stuck with unstageable changes that block the rebase pull
+// and just wants to reset to whatever the remote has. Runs three git
+// commands in sequence; bails on the first failure so the user sees
+// exactly which step failed.
+ipcMain.handle("git-discard-and-pull", async (_e, dir) => {
+  const reset = await runGit(dir, ["reset", "--hard", "HEAD"]);
+  if (!reset.ok) return { ...reset, stderr: "[reset --hard] " + reset.stderr };
+  const clean = await runGit(dir, ["clean", "-fd"]);
+  if (!clean.ok) return { ...clean, stderr: "[clean -fd] " + clean.stderr, stdout: reset.stdout + "\n" + clean.stdout };
+  const pull = await runGit(dir, ["pull", "--rebase"]);
+  return {
+    ok: pull.ok,
+    code: pull.code,
+    stdout: [reset.stdout, clean.stdout, pull.stdout].filter(Boolean).join("\n"),
+    stderr: [reset.stderr, clean.stderr, pull.stderr].filter(Boolean).join("\n"),
+  };
+});
 // Clone a repo into a destination folder. The destination's PARENT must
 // exist; git will create the leaf folder. Used by the in-app "Clone
 // from GitHub" flow so teammates don't need a terminal — they paste a

@@ -3081,6 +3081,32 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                 >
                   Pull {behind ? `(${behind})` : ""}
                 </button>
+                {/* Destructive escape hatch — wipes every local change and
+                    pulls. For when the user is stuck (unstaged changes
+                    block the rebase, or they just want to throw away
+                    local edits and match the remote). Confirm dialog
+                    spells out exactly what dies. */}
+                <button
+                  disabled={busy || !(dirty || (behind || 0) > 0)}
+                  onClick={() => {
+                    if (!api.gitDiscardAndPull) return;
+                    const dirtyCount = (status && status.dirtyCount) || 0;
+                    const ok = window.confirm(
+                      `Discard local changes and pull?\n\n` +
+                      `This will run:\n` +
+                      `  git reset --hard HEAD   ← wipes ${dirtyCount} uncommitted change${dirtyCount === 1 ? "" : "s"} in tracked files\n` +
+                      `  git clean -fd           ← deletes any untracked files\n` +
+                      `  git pull --rebase       ← then pulls from origin\n\n` +
+                      `NOT recoverable. Use this only when you don't care about your local state.`
+                    );
+                    if (!ok) return;
+                    run("Discard + pull", () => api.gitDiscardAndPull(projectDir));
+                  }}
+                  style={{ ...syncBtn("#a44", (dirty || (behind || 0) > 0)), fontWeight: 500 }}
+                  title="git reset --hard HEAD && git clean -fd && git pull --rebase  (destructive — wipes local changes)"
+                >
+                  ⚠ Discard local + pull
+                </button>
                 <button
                   disabled={busy || !dirty}
                   onClick={() => {
