@@ -2194,7 +2194,13 @@ export default function App() {
             </span>
           </div>
           <button
-            onClick={async () => { if (api?.openPath) await api.openPath(`${dataDir}\\export_descr_buildings.txt`); }}
+            onClick={async () => {
+              // openPath lives on window.eduAPI, not window.electronAPI —
+              // the original wiring used `api` (electronAPI) which silently
+              // no-op'd because openPath was undefined there.
+              const opener = (window.eduAPI && window.eduAPI.openPath) || (api && api.openPath);
+              if (opener && dataDir) await opener(`${dataDir}\\export_descr_buildings.txt`);
+            }}
             style={{ background: "rgba(220,166,74,0.15)", color: "#dca64a", border: "1px solid rgba(220,166,74,0.4)", padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer" }}
             title="Open the EDB file in your default text editor to inspect the changes"
           >Open EDB</button>
@@ -2272,6 +2278,10 @@ export default function App() {
             // Optional EDB-side surgical strip — same faction, walks the
             // live EDB recruit lines. Backs up before writing. Reloads
             // mod files after so the project picks up the new EDB state.
+            // Critically: also re-records projectExports.edb.hashAtExport
+            // off the freshly-written file so the drift banner stops
+            // firing on what is, from the user's perspective, a
+            // deliberate Manipula write.
             let edbMsg = "";
             if (alsoStripEdb && window.eduAPI && window.eduAPI.edbStripFaction) {
               try {
@@ -2279,6 +2289,19 @@ export default function App() {
                 if (r && r.ok) {
                   edbMsg = ` · EDB: ${r.removed} removed, ${r.modified} rewritten`;
                   await loadMod();
+                  // Re-fetch the EDB and update the recorded export hash
+                  // so the drift detector treats this as an authorized
+                  // write (same shape as confirmWriteBack does after
+                  // Write to EDB).
+                  try {
+                    if (api && api.readEDB) {
+                      const fresh = await api.readEDB();
+                      if (typeof fresh === "string") {
+                        const { hashOfText } = await import("./projectStore");
+                        setProjectExports(e => ({ ...e, edb: { hashAtExport: hashOfText(fresh), exportedAt: new Date().toISOString(), path: e?.edb?.path || `${dataDir}\\export_descr_buildings.txt` } }));
+                      }
+                    }
+                  } catch {}
                 } else {
                   edbMsg = ` · EDB strip failed: ${(r && r.reason) || "unknown"}`;
                 }
