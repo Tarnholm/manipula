@@ -1297,6 +1297,14 @@ export default function App() {
   // (Show diff / Overwrite anyway) don't have to re-read it. null
   // when no conflict is active.
   const [edbConflict, setEdbConflict] = useState(null);
+  // Per-variant preview modal for the sidebar's "Remove faction from
+  // project" action. null when closed; { faction, entries[], selected:Set }
+  // when open. Each entry carries the proposed action (strip /
+  // convert-to-aor / delete) plus the before/after factions so the user
+  // can opt-out per row before applying. See the sidebar
+  // onRemoveFactionFromAll handler for entry construction and
+  // applyFactionStrip below for the apply step.
+  const [factionStripModal, setFactionStripModal] = useState(null);
   const [edumaticPreview, setEdumaticPreview] = useState(null); // { source, rows, selected: Set } | null
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
@@ -2203,6 +2211,67 @@ export default function App() {
       {variantDiff && (
         <VariantDiffModal variantDiff={variantDiff} onClose={() => setVariantDiff(null)} />
       )}
+      {factionStripModal && (
+        <FactionStripModal
+          state={factionStripModal}
+          onToggle={(id) => {
+            const next = new Set(factionStripModal.selected);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            setFactionStripModal({ ...factionStripModal, selected: next });
+          }}
+          onSelectAll={(filterFn) => {
+            const next = new Set(factionStripModal.selected);
+            for (const e of factionStripModal.entries) if (filterFn(e)) next.add(e.id);
+            setFactionStripModal({ ...factionStripModal, selected: next });
+          }}
+          onDeselectAll={(filterFn) => {
+            const next = new Set(factionStripModal.selected);
+            for (const e of factionStripModal.entries) if (filterFn(e)) next.delete(e.id);
+            setFactionStripModal({ ...factionStripModal, selected: next });
+          }}
+          onCancel={() => setFactionStripModal(null)}
+          onApply={() => {
+            const { faction, entries, selected } = factionStripModal;
+            const byId = new Map(entries.filter(e => selected.has(e.id)).map(e => [e.id, e]));
+            let stripped = 0, converted = 0, deleted = 0;
+            const next = [];
+            for (const u of units) {
+              const e = byId.get(u.id);
+              if (!e) { next.push(u); continue; }
+              if (e.action === "delete") {
+                deleted++;
+                continue;   // drop
+              }
+              if (e.action === "convert-to-aor") {
+                const aorName = (u.aor && u.aor.recruitName) || ("aor " + u.unit);
+                next.push({
+                  ...u,
+                  unit: aorName,
+                  factions: ["all"],
+                  excludeFactions: (u.excludeFactions || []).filter(f => f !== faction),
+                  aor: { ...(u.aor || {}), enabled: true, aorOnly: true, recruitName: aorName },
+                });
+                converted++;
+                continue;
+              }
+              // strip
+              next.push({
+                ...u,
+                factions: e.facsAfter,
+                excludeFactions: (u.excludeFactions || []).filter(f => f !== faction),
+              });
+              stripped++;
+            }
+            persistUnits(next);
+            const parts = [];
+            if (stripped) parts.push(`${stripped} stripped`);
+            if (converted) parts.push(`${converted} converted to AOR-only`);
+            if (deleted) parts.push(`${deleted} deleted`);
+            toast(`"${faction}" cleanup — ${parts.join(", ") || "nothing changed"}.`, "success", 5000);
+            setFactionStripModal(null);
+          }}
+        />
+      )}
       {edbConflict && (
         <EdbConflictModal
           conflict={edbConflict}
@@ -2297,35 +2366,50 @@ export default function App() {
                   persistUnits(next);
                 }}
                 onRemoveFactionFromAll={(faction) => {
-                  // Project-wide cleanup when a faction is being deleted from the
-                  // mod. Walks every unit and strips the faction from BOTH its
-                  // factions[] (positive list) AND excludeFactions[] (negative).
-                  // Units that lose all positive factions stay in place — the user
-                  // can manually mark-for-removal or delete from the sidebar.
+                  // Open a per-variant preview modal instead of stripping
+                  // silently. Each affected entry gets a row showing the
+                  // resulting factions[] and the proposed action:
+                  //   • strip  — entry has other factions; drop just this one
+                  //   • delete — entry's only positive faction; remove the
+                  //              project entry entirely (Write to EDB then
+                  //              prunes the recruit lines on next push)
+                  // The user can opt-out per entry before applying.
                   if (!faction) return;
                   const affected = units.filter(u =>
                     (u.factions || []).includes(faction) ||
                     (u.excludeFactions || []).includes(faction)
-                  ).length;
-                  if (affected === 0) {
+                  );
+                  if (affected.length === 0) {
                     setStatus(`No units reference "${faction}" — nothing to remove.`);
                     return;
                   }
-                  if (!window.confirm(
-                    `Strip "${faction}" from ${affected} unit${affected === 1 ? "" : "s"}?\n\n` +
-                    `Removes the faction from every unit's factions[] and excludeFactions[]. ` +
-                    `Units left with an empty factions[] won't recruit anywhere — you'll need to ` +
-                    `mark them for removal or delete them from the sidebar afterwards.\n\n` +
-                    `Recoverable via Ctrl+Z.`
-                  )) return;
-                  const next = units.map(u => {
-                    const fac = (u.factions || []).filter(f => f !== faction);
-                    const ex = (u.excludeFactions || []).filter(f => f !== faction);
-                    if (fac.length === (u.factions || []).length && ex.length === (u.excludeFactions || []).length) return u;
-                    return { ...u, factions: fac, excludeFactions: ex };
+                  const entries = affected.map(u => {
+                    const facsBefore = u.factions || [];
+                    const facsAfter = facsBefore.filter(f => f !== faction);
+                    // "only positive faction other than 'all' is the target" — after
+                    // stripping, factions[] is empty or contains only "all". The
+                    // unit can't recruit factionally as itself anymore.
+                    const onlyAll = facsAfter.length === 0 || facsAfter.every(f => f === "all");
+                    let action;
+                    if (onlyAll && facsBefore.includes(faction)) {
+                      // If the unit already has an AOR sibling, keep that side
+                      // alive by flipping it to AOR-only. Otherwise delete the
+                      // entry entirely (no recruitment path remains).
+                      action = (u.aor && u.aor.enabled) ? "convert-to-aor" : "delete";
+                    } else {
+                      action = "strip";
+                    }
+                    return {
+                      id: u.id,
+                      unit: u.unit,
+                      factionsBefore: facsBefore,
+                      excludeBefore: u.excludeFactions || [],
+                      facsAfter,
+                      hasAor: !!(u.aor && u.aor.enabled),
+                      action,
+                    };
                   });
-                  persistUnits(next);
-                  toast(`Stripped "${faction}" from ${affected} unit${affected === 1 ? "" : "s"}.`, "success");
+                  setFactionStripModal({ faction, entries, selected: new Set(entries.map(e => e.id)) });
                 }}
                 onShowVariantDiff={showVariantDiff}
                 viewMode={sidebarMode}
@@ -3658,6 +3742,79 @@ function EdbConflictModal({ conflict, onCancel, onShowDiff, onOpenInEditor, onOv
 // sharing a recruit name. Differing rows surface in amber at the top;
 // matching rows are dimmed below so the user can see at-a-glance what
 // keeps two variants from merging cleanly.
+// Per-variant preview modal for "Remove faction from project". Groups
+// the affected entries by proposed action (strip / convert-to-aor /
+// delete) so the user can opt-out per row before applying.
+function FactionStripModal({ state, onToggle, onSelectAll, onDeselectAll, onCancel, onApply }) {
+  const { faction, entries, selected } = state;
+  const groups = {
+    strip: entries.filter(e => e.action === "strip"),
+    "convert-to-aor": entries.filter(e => e.action === "convert-to-aor"),
+    "delete": entries.filter(e => e.action === "delete"),
+  };
+  const selectedCount = entries.filter(e => selected.has(e.id)).length;
+  const headerStyle = { fontSize: 11, color: "#dca64a", textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, padding: "8px 0 4px" };
+  const renderRow = (e) => (
+    <label key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", cursor: "pointer", borderRadius: 3, fontSize: 12, color: "#ddd" }}
+      onMouseEnter={(ev) => ev.currentTarget.style.background = "rgba(220,166,74,0.06)"}
+      onMouseLeave={(ev) => ev.currentTarget.style.background = ""}>
+      <input type="checkbox" checked={selected.has(e.id)} onChange={() => onToggle(e.id)} />
+      <span style={{ flex: 1, fontFamily: "Consolas, monospace" }}>{e.unit}</span>
+      <span style={{ color: "#888", fontSize: 11 }}>
+        [{e.factionsBefore.join(", ")}] →{" "}
+        {e.action === "strip" && <span style={{ color: "#7c9" }}>[{e.facsAfter.join(", ")}]</span>}
+        {e.action === "convert-to-aor" && <span style={{ color: "#dca64a" }}>aor-only (factional dropped, AOR sibling kept)</span>}
+        {e.action === "delete" && <span style={{ color: "#e88" }}>delete entry</span>}
+      </span>
+    </label>
+  );
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 11000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#1c1c1c", border: "1px solid rgba(220,166,74,0.4)", borderRadius: 10, padding: 18, width: "min(960px, 92vw)", maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#dca64a", marginBottom: 4 }}>Remove "{faction}" from project</div>
+        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 10 }}>
+          {entries.length} entr{entries.length === 1 ? "y" : "ies"} reference "{faction}". Each row shows what would happen — uncheck any you want to skip. Recoverable via Ctrl+Z after Apply.
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, fontSize: 11, color: "#999" }}>
+          <button onClick={() => onSelectAll(() => true)} style={{ background: "rgba(255,255,255,0.06)", color: "#ddd", border: "1px solid #333", padding: "3px 10px", borderRadius: 4, cursor: "pointer" }}>Select all</button>
+          <button onClick={() => onDeselectAll(() => true)} style={{ background: "rgba(255,255,255,0.06)", color: "#ddd", border: "1px solid #333", padding: "3px 10px", borderRadius: 4, cursor: "pointer" }}>Deselect all</button>
+          <span style={{ flex: 1 }} />
+          <span>{selectedCount} / {entries.length} selected</span>
+        </div>
+        <div style={{ flex: 1, overflow: "auto", paddingRight: 4 }}>
+          {groups.strip.length > 0 && (
+            <>
+              <div style={{ ...headerStyle, color: "#7c9" }}>Strip "{faction}" only — {groups.strip.length} entr{groups.strip.length === 1 ? "y" : "ies"}</div>
+              {groups.strip.map(renderRow)}
+            </>
+          )}
+          {groups["convert-to-aor"].length > 0 && (
+            <>
+              <div style={{ ...headerStyle, color: "#dca64a" }}>Convert to AOR-only (factional dropped, AOR kept) — {groups["convert-to-aor"].length} entr{groups["convert-to-aor"].length === 1 ? "y" : "ies"}</div>
+              {groups["convert-to-aor"].map(renderRow)}
+            </>
+          )}
+          {groups["delete"].length > 0 && (
+            <>
+              <div style={{ ...headerStyle, color: "#e88" }}>Delete entry (no AOR sibling, no recruitment path remains) — {groups["delete"].length} entr{groups["delete"].length === 1 ? "y" : "ies"}</div>
+              {groups["delete"].map(renderRow)}
+            </>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          <button onClick={onCancel} style={{ background: "rgba(255,255,255,0.06)", color: "#aaa", border: "1px solid #333", padding: "6px 14px", borderRadius: 4, cursor: "pointer" }}>Cancel</button>
+          <button
+            onClick={onApply}
+            disabled={selectedCount === 0}
+            style={{ background: selectedCount > 0 ? "rgba(220,166,74,0.2)" : "rgba(255,255,255,0.04)", color: selectedCount > 0 ? "#dca64a" : "#666", border: "1px solid " + (selectedCount > 0 ? "rgba(220,166,74,0.5)" : "#333"), padding: "6px 14px", borderRadius: 4, fontWeight: 600, cursor: selectedCount > 0 ? "pointer" : "not-allowed" }}
+          >Apply to {selectedCount}</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function VariantDiffModal({ variantDiff, onClose }) {
   const { variants, recruitName } = variantDiff;
   // Field set: union of every key across the variants, minus identity
