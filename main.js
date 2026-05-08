@@ -918,6 +918,96 @@ ipcMain.handle("delete-mod-files", async (_e, relPaths) => {
   return { ok: true, deleted, failed };
 });
 
+// EDB-surgical strip — walks every `recruit "X" N requires factions { ... }
+// ... [and not factions { ... }]` line in export_descr_buildings.txt and
+// removes the named faction from both clauses. Lines whose positive
+// factions list collapses to empty (or just "all") are dropped entirely.
+// dryRun: when true, returns the counts + first ~12 sample changes
+// without touching the file. Otherwise writes a timestamped backup
+// (.bak_<stamp>) before overwriting the live EDB.
+//
+// The line-level transform is intentionally conservative: it only
+// touches recruit lines that already mention the target faction, so
+// lines without it pass through verbatim. An empty `not factions { }`
+// clause is also stripped (the trailing " and " gets cleaned up) so the
+// rewritten line stays syntactically valid.
+ipcMain.handle("edb-strip-faction", async (_e, faction, dryRun) => {
+  if (!faction || typeof faction !== "string") return { ok: false, reason: "missing faction name" };
+  const d = dataDir();
+  const edbPath = path.join(d, "export_descr_buildings.txt");
+  if (!fs.existsSync(edbPath)) return { ok: false, reason: "EDB not found" };
+  const text = readSmart(edbPath);
+  const lines = text.split(/\r?\n/);
+  const eol = /\r\n/.test(text) ? "\r\n" : "\n";
+  const out = [];
+  const samples = [];
+  let removed = 0, modified = 0;
+  // Word-boundary match — "greeks" must be its own token, not a
+  // substring of e.g. "hellenistic_rebels_of_greeks". Identifier
+  // characters are letters / digits / underscore, so the boundary is
+  // [^A-Za-z0-9_].
+  const wordRe = new RegExp(`(^|[^A-Za-z0-9_])${faction.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9_]|$)`);
+  const splitFacs = (raw) => raw.split(",").map(s => s.trim()).filter(Boolean);
+  const joinFacs = (arr) => arr.length === 0 ? "" : arr.join(", ") + ", ";
+
+  for (const line of lines) {
+    if (!wordRe.test(line)) { out.push(line); continue; }
+    const m = line.match(/^(\s*recruit\s+"[^"]+"\s+\d+\s+requires\s+)(.+)$/);
+    if (!m) { out.push(line); continue; }
+    const head = m[1];
+    let req = m[2];
+    const before = line;
+
+    // Strip target from positive factions list.
+    const posMatch = req.match(/factions\s*\{\s*([^}]*)\}/);
+    if (posMatch) {
+      const facs = splitFacs(posMatch[1]).filter(f => f !== faction);
+      // Player line with no positive factions left is invalid → drop.
+      const onlyAll = facs.length === 0 || facs.every(f => f === "all");
+      if (onlyAll && !facs.includes("all")) {
+        // pure empty — drop the whole line
+        if (samples.length < 12) samples.push({ kind: "remove", before, after: null });
+        removed++;
+        continue;
+      }
+      req = req.replace(/factions\s*\{\s*[^}]*\}/, `factions { ${joinFacs(facs)}}`);
+    }
+
+    // Strip target from `not factions { ... }` if present.
+    const negMatch = req.match(/not\s+factions\s*\{\s*([^}]*)\}/);
+    if (negMatch) {
+      const facs = splitFacs(negMatch[1]).filter(f => f !== faction);
+      if (facs.length === 0) {
+        // Drop the empty `not factions { }` clause and clean up the surrounding " and ".
+        req = req.replace(/\s+and\s+not\s+factions\s*\{\s*[^}]*\}/, "");
+        req = req.replace(/^not\s+factions\s*\{\s*[^}]*\}\s+and\s+/, "");
+      } else {
+        req = req.replace(/not\s+factions\s*\{\s*[^}]*\}/, `not factions { ${joinFacs(facs)}}`);
+      }
+    }
+
+    const after = head + req;
+    if (after === before) { out.push(line); continue; }
+    if (samples.length < 12) samples.push({ kind: "modify", before, after });
+    out.push(after);
+    modified++;
+  }
+
+  if (dryRun) {
+    return { ok: true, removed, modified, samples };
+  }
+  // Backup, then write.
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = edbPath + ".bak_" + stamp;
+    fs.copyFileSync(edbPath, backupPath);
+    fs.writeFileSync(edbPath, out.join(eol), "utf8");
+    return { ok: true, removed, modified, backup: backupPath };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
+
 // Strip named `type X` blocks from descr_model_battle.txt. Used by the
 // Validate panel's "Strip N DMB blocks" bulk action. Backs up the
 // original to descr_model_battle.txt.bak_<timestamp> before writing so

@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   listModAssetFiles: (subdirs, exts) => ipcRenderer.invoke("list-mod-asset-files", subdirs, exts),
   deleteModFiles: (relPaths) => ipcRenderer.invoke("delete-mod-files", relPaths),
   stripDmbTypes: (typeNames) => ipcRenderer.invoke("strip-dmb-types", typeNames),
+  edbStripFaction: (faction, dryRun) => ipcRenderer.invoke("edb-strip-faction", faction, dryRun),
   gitClone: (url, dest) => ipcRenderer.invoke("git-clone", url, dest),
   gitDiffStat: (dir) => ipcRenderer.invoke("git-diff-stat", dir),
   gitDiff: (dir) => ipcRenderer.invoke("git-diff", dir),
