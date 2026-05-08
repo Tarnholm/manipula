@@ -2131,44 +2131,6 @@ export default function App() {
         onImportNewFromEDB={importNewFromEDB}
         onImportEdumatic={importFromEdumatic}
         onResetImportsToReferenceOnly={resetImportsToReferenceOnly}
-        onStripFactionFromEdb={async () => {
-          if (!window.eduAPI?.edbStripFaction) { toast("EDB strip IPC unavailable.", "error"); return; }
-          const faction = window.prompt(
-            "Faction id to strip from the live export_descr_buildings.txt:\n\n" +
-            "(e.g. greeks, hellenistic_rebels, gauls, germanics, scythians)\n\n" +
-            "This walks every recruit line, drops lines whose only positive faction is the target, " +
-            "and rewrites lines that have other factions to remove just the target. Backs up the EDB " +
-            "before writing. Use this after a Remove-faction-from-project run to clean up the orphan " +
-            "EDB lines that the deleted entries left behind."
-          );
-          if (!faction) return;
-          const trimmed = faction.trim();
-          if (!trimmed) return;
-          // Dry-run first to show the user what's about to happen.
-          const preview = await window.eduAPI.edbStripFaction(trimmed, true);
-          if (!preview.ok) { toast("Strip preview failed: " + (preview.reason || "unknown"), "error"); return; }
-          if (preview.removed === 0 && preview.modified === 0) {
-            toast(`No EDB lines reference "${trimmed}" — nothing to strip.`, "info");
-            return;
-          }
-          const sample = (preview.samples || []).slice(0, 6).map(s =>
-            s.kind === "remove"
-              ? "  − " + (s.before || "").trim().slice(0, 120)
-              : "  ~ " + (s.after || "").trim().slice(0, 120)
-          ).join("\n");
-          if (!window.confirm(
-            `Strip "${trimmed}" from the live EDB?\n\n` +
-            `${preview.removed} line${preview.removed === 1 ? "" : "s"} will be REMOVED (only positive faction was "${trimmed}").\n` +
-            `${preview.modified} line${preview.modified === 1 ? "" : "s"} will be REWRITTEN (target stripped from positive or 'not factions' list).\n\n` +
-            `Sample of changes:\n${sample}${(preview.samples || []).length > 6 ? "\n  …and more" : ""}\n\n` +
-            `A timestamped backup of the EDB will be written before the file is overwritten. Continue?`
-          )) return;
-          const r = await window.eduAPI.edbStripFaction(trimmed, false);
-          if (!r.ok) { toast("Strip failed: " + (r.reason || "unknown"), "error"); return; }
-          toast(`Stripped "${trimmed}" — ${r.removed} removed, ${r.modified} rewritten. Backup: ${r.backup}`, "success", 7000);
-          // Refresh mod files so the project picks up the new EDB state.
-          await loadMod();
-        }}
         onMarkOrphanUnits={(ids) => {
           if (!ids || !ids.length) return;
           if (!window.confirm(
@@ -2268,7 +2230,7 @@ export default function App() {
             setFactionStripModal({ ...factionStripModal, selected: next });
           }}
           onCancel={() => setFactionStripModal(null)}
-          onApply={() => {
+          onApply={async (alsoStripEdb) => {
             const { faction, entries, selected } = factionStripModal;
             const byId = new Map(entries.filter(e => selected.has(e.id)).map(e => [e.id, e]));
             let stripped = 0, converted = 0, deleted = 0;
@@ -2301,11 +2263,28 @@ export default function App() {
               stripped++;
             }
             persistUnits(next);
-            const parts = [];
-            if (stripped) parts.push(`${stripped} stripped`);
-            if (converted) parts.push(`${converted} converted to AOR-only`);
-            if (deleted) parts.push(`${deleted} deleted`);
-            toast(`"${faction}" cleanup — ${parts.join(", ") || "nothing changed"}.`, "success", 5000);
+            const projectParts = [];
+            if (stripped) projectParts.push(`${stripped} stripped`);
+            if (converted) projectParts.push(`${converted} converted to AOR-only`);
+            if (deleted) projectParts.push(`${deleted} deleted`);
+            const projectMsg = projectParts.join(", ") || "nothing changed";
+
+            // Optional EDB-side surgical strip — same faction, walks the
+            // live EDB recruit lines. Backs up before writing. Reloads
+            // mod files after so the project picks up the new EDB state.
+            let edbMsg = "";
+            if (alsoStripEdb && window.eduAPI && window.eduAPI.edbStripFaction) {
+              try {
+                const r = await window.eduAPI.edbStripFaction(faction, false);
+                if (r && r.ok) {
+                  edbMsg = ` · EDB: ${r.removed} removed, ${r.modified} rewritten`;
+                  await loadMod();
+                } else {
+                  edbMsg = ` · EDB strip failed: ${(r && r.reason) || "unknown"}`;
+                }
+              } catch (e) { edbMsg = ` · EDB strip threw: ${e.message}`; }
+            }
+            toast(`"${faction}" cleanup — project: ${projectMsg}${edbMsg}.`, "success", 6500);
             setFactionStripModal(null);
           }}
         />
@@ -2570,7 +2549,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onStripFactionFromEdb, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -2624,13 +2603,6 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
         title="Set every imported unit to reference-only (writeBack: false). Manually authored units are untouched."
         style={tbtn("#553")}
       >Imports → reference</button>
-      {onStripFactionFromEdb && (
-        <button
-          onClick={onStripFactionFromEdb}
-          title="Walk the live export_descr_buildings.txt and strip a named faction from every recruit line. Drops lines whose only positive faction is the target; rewrites lines that have other factions to remove just the target. Backs up the EDB before writing. Use this after pruning the project (Remove faction from project…) to clean up the orphan EDB lines that the deleted entries left behind."
-          style={tbtn("#754")}
-        >Strip faction from EDB…</button>
-      )}
       {onMarkOrphanUnits && (() => {
         const orphans = (units || []).filter(u => !u.pendingRemoval && (!u.factions || u.factions.length === 0));
         return orphans.length > 0 ? (
@@ -3792,6 +3764,8 @@ function EdbConflictModal({ conflict, onCancel, onShowDiff, onOpenInEditor, onOv
 // delete) so the user can opt-out per row before applying.
 function FactionStripModal({ state, onToggle, onSelectAll, onDeselectAll, onCancel, onApply }) {
   const { faction, entries, selected } = state;
+  const [alsoStripEdb, setAlsoStripEdb] = useState(true);
+  const [busy, setBusy] = useState(false);
   const groups = {
     strip: entries.filter(e => e.action === "strip"),
     "convert-to-aor": entries.filter(e => e.action === "convert-to-aor"),
@@ -3846,13 +3820,18 @@ function FactionStripModal({ state, onToggle, onSelectAll, onDeselectAll, onCanc
             </>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-          <button onClick={onCancel} style={{ background: "rgba(255,255,255,0.06)", color: "#aaa", border: "1px solid #333", padding: "6px 14px", borderRadius: 4, cursor: "pointer" }}>Cancel</button>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#ccc", cursor: "pointer" }} title="Also walk export_descr_buildings.txt and surgically strip every recruit line that mentions this faction. Lines whose only positive faction is the target are removed; lines with other factions are rewritten. Backs up the EDB before writing.">
+            <input type="checkbox" checked={alsoStripEdb} onChange={() => setAlsoStripEdb(v => !v)} />
+            Also strip the live EDB
+          </label>
+          <span style={{ flex: 1 }} />
+          <button disabled={busy} onClick={onCancel} style={{ background: "rgba(255,255,255,0.06)", color: "#aaa", border: "1px solid #333", padding: "6px 14px", borderRadius: 4, cursor: busy ? "not-allowed" : "pointer" }}>Cancel</button>
           <button
-            onClick={onApply}
-            disabled={selectedCount === 0}
-            style={{ background: selectedCount > 0 ? "rgba(220,166,74,0.2)" : "rgba(255,255,255,0.04)", color: selectedCount > 0 ? "#dca64a" : "#666", border: "1px solid " + (selectedCount > 0 ? "rgba(220,166,74,0.5)" : "#333"), padding: "6px 14px", borderRadius: 4, fontWeight: 600, cursor: selectedCount > 0 ? "pointer" : "not-allowed" }}
-          >Apply to {selectedCount}</button>
+            onClick={async () => { setBusy(true); try { await onApply(alsoStripEdb); } finally { setBusy(false); } }}
+            disabled={busy || selectedCount === 0}
+            style={{ background: selectedCount > 0 && !busy ? "rgba(220,166,74,0.2)" : "rgba(255,255,255,0.04)", color: selectedCount > 0 && !busy ? "#dca64a" : "#666", border: "1px solid " + (selectedCount > 0 && !busy ? "rgba(220,166,74,0.5)" : "#333"), padding: "6px 14px", borderRadius: 4, fontWeight: 600, cursor: selectedCount > 0 && !busy ? "pointer" : "not-allowed" }}
+          >{busy ? "Working…" : `Apply to ${selectedCount}`}</button>
         </div>
       </div>
     </div>,
