@@ -391,13 +391,13 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
             {units.length === 0 ? "No units yet — click ＋ New unit to add one." : "No matches."}
           </div>
         )}
-        {filtered.length > 0 && filterMode === "faction" && filterValue && (
+        {filterMode === "faction" && filterValue && (
           <div style={{ padding: "6px 12px", fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, background: "rgba(0,0,0,0.15)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <span>Authored — {filtered.length}</span>
             {onRemoveFactionFromAll && (
               <button
                 onClick={() => onRemoveFactionFromAll(filterValue)}
-                title={`Strip "${filterValue}" from every unit's recruitment list (factions[] and excludeFactions[]). Use when a faction is being removed from the mod entirely. Recoverable via Ctrl+Z.`}
+                title={`Open the per-variant cleanup modal for "${filterValue}". Even if zero project entries are left referencing the faction, this still lets you run the EDB-side surgical strip from the modal's checkbox.`}
                 style={{ background: "rgba(232,136,136,0.10)", color: "#e88", border: "1px solid rgba(232,136,136,0.3)", padding: "2px 8px", borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: "pointer", textTransform: "none", letterSpacing: 0 }}
               >Remove faction from project…</button>
             )}

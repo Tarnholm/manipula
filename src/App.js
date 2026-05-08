@@ -2396,10 +2396,11 @@ export default function App() {
                     (u.factions || []).includes(faction) ||
                     (u.excludeFactions || []).includes(faction)
                   );
-                  if (affected.length === 0) {
-                    setStatus(`No units reference "${faction}" — nothing to remove.`);
-                    return;
-                  }
+                  // Even when zero project entries are left referencing the
+                  // faction (e.g. the user already ran the strip and now
+                  // wants to clean up the live EDB), still open the modal —
+                  // the 'Also strip the live EDB' checkbox + Apply path
+                  // works without any project entries selected.
                   const entries = affected.map(u => {
                     const facsBefore = u.factions || [];
                     const facsAfter = facsBefore.filter(f => f !== faction);
@@ -3801,6 +3802,12 @@ function FactionStripModal({ state, onToggle, onSelectAll, onDeselectAll, onCanc
           <span>{selectedCount} / {entries.length} selected</span>
         </div>
         <div style={{ flex: 1, overflow: "auto", paddingRight: 4 }}>
+          {entries.length === 0 && (
+            <div style={{ padding: "30px 12px", textAlign: "center", color: "#888", fontSize: 12, fontStyle: "italic" }}>
+              No project entries reference "{faction}" — the project's already clean.
+              Tick the "Also strip the live EDB" box below if you want to scrub the live EDB recruit lines anyway.
+            </div>
+          )}
           {groups.strip.length > 0 && (
             <>
               <div style={{ ...headerStyle, color: "#7c9" }}>Strip "{faction}" only — {groups.strip.length} entr{groups.strip.length === 1 ? "y" : "ies"}</div>
@@ -3827,11 +3834,25 @@ function FactionStripModal({ state, onToggle, onSelectAll, onDeselectAll, onCanc
           </label>
           <span style={{ flex: 1 }} />
           <button disabled={busy} onClick={onCancel} style={{ background: "rgba(255,255,255,0.06)", color: "#aaa", border: "1px solid #333", padding: "6px 14px", borderRadius: 4, cursor: busy ? "not-allowed" : "pointer" }}>Cancel</button>
-          <button
-            onClick={async () => { setBusy(true); try { await onApply(alsoStripEdb); } finally { setBusy(false); } }}
-            disabled={busy || selectedCount === 0}
-            style={{ background: selectedCount > 0 && !busy ? "rgba(220,166,74,0.2)" : "rgba(255,255,255,0.04)", color: selectedCount > 0 && !busy ? "#dca64a" : "#666", border: "1px solid " + (selectedCount > 0 && !busy ? "rgba(220,166,74,0.5)" : "#333"), padding: "6px 14px", borderRadius: 4, fontWeight: 600, cursor: selectedCount > 0 && !busy ? "pointer" : "not-allowed" }}
-          >{busy ? "Working…" : `Apply to ${selectedCount}`}</button>
+          {(() => {
+            // Apply is enabled when there's *something* to do: either
+            // selected project entries OR the EDB-strip checkbox is on
+            // (the EDB pass works standalone, e.g. when the project has
+            // already been cleaned but the live EDB still has greek lines).
+            const hasWork = selectedCount > 0 || alsoStripEdb;
+            const label = busy ? "Working…"
+              : selectedCount > 0 && alsoStripEdb ? `Apply to ${selectedCount} + strip EDB`
+              : selectedCount > 0 ? `Apply to ${selectedCount}`
+              : alsoStripEdb ? "Strip EDB only"
+              : "Nothing to apply";
+            return (
+              <button
+                onClick={async () => { setBusy(true); try { await onApply(alsoStripEdb); } finally { setBusy(false); } }}
+                disabled={busy || !hasWork}
+                style={{ background: hasWork && !busy ? "rgba(220,166,74,0.2)" : "rgba(255,255,255,0.04)", color: hasWork && !busy ? "#dca64a" : "#666", border: "1px solid " + (hasWork && !busy ? "rgba(220,166,74,0.5)" : "#333"), padding: "6px 14px", borderRadius: 4, fontWeight: 600, cursor: hasWork && !busy ? "pointer" : "not-allowed" }}
+              >{label}</button>
+            );
+          })()}
         </div>
       </div>
     </div>,
