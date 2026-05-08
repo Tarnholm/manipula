@@ -177,8 +177,12 @@ export function generateAORPlayerLines(unit) {
     "is_player",
     fmtExcludeFactions(exclude),
     `mic_tier_${u.canonicalMicTier}`,                 // AOR uses canonical (no homeland discount)
-    ...(u.commonRequires || []),
-    ...(u.aorRequires || []),                          // AOR-only extras (applies only here, not to faction sibling)
+    // commonRequires (rendered as "Factional requires" in the editor)
+    // is intentionally NOT included on AOR lines. The AOR sibling has
+    // its own aorRequires panel — keeping the two streams separate
+    // prevents factional gates (e.g. "hidden_resource italic") from
+    // bleeding onto AOR lines, and vice versa.
+    ...(u.aorRequires || []),
     `gov_tier_${u.aor.govTier || 1}`,
   ]);
   return [{
@@ -226,9 +230,13 @@ function pushAILinesFor(out, u, isAor) {
       fmtFactions(factions),
       "not is_player",
       fmtExcludeFactions(exclude),
-      ...(u.commonRequires || []),
-      ...(u.aiRequires || []),                 // AI-only extras (regardless of faction / AOR side)
-      ...(isAor ? (u.aorRequires || []) : []), // AOR-only extras only on AOR-side AI lines
+      // Mirror the player-side split: faction-side AI lines inherit the
+      // unit's factional (commonRequires) gates; AOR-side AI lines
+      // inherit the aorRequires gates instead. Without this split AI
+      // lines pulled both streams and the user reported AOR HRs leaking
+      // onto factional AI lines (and vice versa).
+      ...(isAor ? (u.aorRequires || []) : (u.commonRequires || [])),
+      ...(u.aiRequires || []),
       "noisland",
       u.aiHomeland ? "homeland" : "",
     ]);
