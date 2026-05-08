@@ -458,12 +458,31 @@ function checkUnitFactionOwnership(u, ctx, project, push) {
 // the game crashes on load. ctx.dmbModels is the parsed Set<modelId>;
 // we skip the check when DMB wasn't loaded (e.g. running validate from
 // a unit-test fixture).
+//
+// Variation handling: EDU's "unit variation" column tells the export
+// pipeline how many ethnicity-variant model blocks DMB needs to declare.
+//   • variation = 0 → DMB needs one 'type <model id>' block.
+//   • variation ≥ 1 → DMB needs 'type <model id>1' through
+//     'type <model id>N' (capped at 7). Suffix is just the number, no
+//     underscore — matches writeSoldierSlots in compute.js.
 function checkUnitDmbModel(u, ctx, push) {
   if (!ctx.dmbModels) return;
   const modelId = String(u["model id"] || "").trim();
   if (!modelId) return;             // empty is its own structural error
-  if (!ctx.dmbModels.has(modelId)) {
-    push(err(u.name, u.row, `Unit "model id" references "${modelId}" but no matching 'type ${modelId}' block exists in descr_model_battle.txt — game will crash on load.`, "unit-dmb-missing"));
+  const variation = parseInt(u["unit variation"], 10) || 0;
+  if (variation === 0) {
+    if (!ctx.dmbModels.has(modelId)) {
+      push(err(u.name, u.row, `Unit "model id" references "${modelId}" but no matching 'type ${modelId}' block exists in descr_model_battle.txt — game will crash on load.`, "unit-dmb-missing"));
+    }
+    return;
+  }
+  const cap = Math.min(variation, 7);
+  const missing = [];
+  for (let i = 1; i <= cap; i++) {
+    if (!ctx.dmbModels.has(modelId + i)) missing.push(modelId + i);
+  }
+  if (missing.length > 0) {
+    push(err(u.name, u.row, `Unit "unit variation" is ${variation} so DMB needs 'type ${modelId}1' through 'type ${modelId}${cap}'; missing: ${missing.join(", ")} — game will crash on load.`, "unit-dmb-missing"));
   }
 }
 
@@ -516,7 +535,16 @@ function checkDmbOrphanTypes(project, ctx, push) {
   for (const u of project.units) {
     if (u.kind !== "unit") continue;
     const id = String(u["model id"] || "").trim();
-    if (id) used.add(id);
+    if (!id) continue;
+    // Match the variation expansion checkUnitDmbModel uses: variation
+    // ≥ 1 means DMB exports modelId1..modelIdN, not the bare modelId.
+    const variation = parseInt(u["unit variation"], 10) || 0;
+    if (variation === 0) {
+      used.add(id);
+    } else {
+      const cap = Math.min(variation, 7);
+      for (let i = 1; i <= cap; i++) used.add(id + i);
+    }
   }
   // Union in DMB types referenced from outside EDU (descr_character).
   if (ctx.dmbExtraUsage) for (const t of ctx.dmbExtraUsage) used.add(t);
