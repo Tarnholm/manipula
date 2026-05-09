@@ -476,6 +476,27 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
                 </span>
               )}
             </div>
+            {/* Optional: also recruit the FACTIONAL name in the AOR
+                building for the unit's own factions. Common pattern for
+                Greek + Latin shared units (Leves / Rorarii recruitable
+                in Praeneste alongside the AOR variant for everyone
+                else). Adds a second hinterland_region line keyed to
+                u.unit (not "aor X") with factions = u.factions and no
+                'not factions' exclusion. Skipped on AOR-only units. */}
+            {!u.aor.aorOnly && (u.factions || []).length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <Toggle
+                  label="Also recruit factional name in AOR building (shared AOR unit — Greek/Latin pattern)"
+                  checked={!!u.aor.alsoEmitFactionalInAor}
+                  onChange={(v) => set({ aor: { ...u.aor, alsoEmitFactionalInAor: v } })}
+                />
+                {u.aor.alsoEmitFactionalInAor && (
+                  <div style={{ marginTop: 6, padding: "6px 10px", background: "#1c1c1c", border: "1px solid #2a2a2a", borderRadius: 3, fontSize: 11, color: "#9b9", fontFamily: "Consolas, monospace" }}>
+                    Adds a second AOR line: <span style={{ color: "#dca64a" }}>recruit "{u.unit}" 0 requires factions {`{`} {(u.factions || []).join(", ")} {`}`} and is_player and ...</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Section>

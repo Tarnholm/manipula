@@ -1,6 +1,7 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import FactionIcon from "./FactionIcon";
 import { ROSTER_ROLES, categorizeUnit, isNonRecruitable } from "../qualityClasses";
+import { generatePlayerLines, generateAORPlayerLines, generateAILines } from "../generator";
 
 // Roles for which the UI hides the row entirely when the faction has 0 units (camels and elephants
 // are typically only present for a handful of cultures).
@@ -22,6 +23,52 @@ const HIDE_IF_EMPTY = new Set(["camel", "elephant", "siege", "naval"]);
 
 export default function RosterOverview({ units, faction, modIconsDir, modIndex, onUnitClick, onCreateFromEDU }) {
   const grid = useMemo(() => buildGrid(units, faction), [units, faction]);
+  const [showDetailed, setShowDetailed] = useState(false);
+  // Per-unit recruitment table — for each unit recruitable by this
+  // faction, which buildings + tier ranges does it actually emit lines
+  // in? Computed by running the generator and tagging cells. Memoised
+  // off (units, faction) since it scales O(unitsForFaction) with a
+  // generator pass per unit.
+  const recruitTable = useMemo(() => {
+    if (!showDetailed) return null;
+    const ours = units.filter(u => {
+      if (u.enabled === false) return false;
+      if (isNonRecruitable(u)) return false;
+      const f = u.factions || [];
+      return f.includes(faction) || f.includes("all");
+    });
+    return ours.map(u => {
+      let player = [], aor = [], ai = [];
+      try { player = generatePlayerLines(u); } catch {}
+      try { aor = generateAORPlayerLines(u); } catch {}
+      try { ai = generateAILines(u); } catch {}
+      const tierOf = (lvl) => { const m = String(lvl || "").match(/^(?:mic|gov|garrison)_?\+?(\d)/); return m ? parseInt(m[1], 10) : null; };
+      const govTier = (b) => {
+        const lines = player.filter(l => l.building === b);
+        if (!lines.length) return null;
+        const t = lines.map(l => l.text.match(/mic_tier_(\d)/)).filter(Boolean).map(m => parseInt(m[1], 10));
+        return t.length ? Math.min(...t) : "✓";
+      };
+      const tiersIn = (lines, building) => {
+        const filtered = lines.filter(l => l.building === building);
+        const tiers = filtered.map(l => tierOf(l.level)).filter(Number.isFinite);
+        if (!tiers.length) return null;
+        const lo = Math.min(...tiers), hi = Math.max(...tiers);
+        return lo === hi ? String(lo) : `${lo}-${hi}`;
+      };
+      return {
+        id: u.id,
+        unit: u.unit,
+        govB: govTier("governmentB"),
+        govC: govTier("governmentC"),
+        govD: govTier("governmentD"),
+        aor: aor.length > 0 ? "✓" : null,
+        aorBoth: aor.some(l => l.alsoFactional),    // shared AOR (factional + aor lines)
+        mic: tiersIn(ai, "military_industrial_complex"),
+        garrison: tiersIn(ai, "garrison"),
+      };
+    });
+  }, [showDetailed, units, faction]);
   // EDU completeness: every EDU entry that lists this faction in `ownership`, minus the ones
   // already authored. Highlights "you have a unit in EDU but no recruitment line for it yet".
   const eduCoverage = useMemo(() => {
@@ -140,8 +187,68 @@ export default function RosterOverview({ units, faction, modIconsDir, modIndex, 
           )}
         </div>
       )}
+      {/* Per-unit recruitment dashboard. Lazy-rendered behind a toggle
+          because the generator pass per unit has measurable cost on
+          large rosters and the user usually only wants the tier×role
+          summary above. Click to expand → table of every unit × the
+          buildings it recruits in (player gov chain + AOR + AI MIC /
+          garrison). Helps spot lopsided coverage at a glance. */}
+      <div style={{ marginTop: 12 }}>
+        <button
+          onClick={() => setShowDetailed(s => !s)}
+          style={{ background: "rgba(255,255,255,0.04)", color: "#aaa", border: "1px solid rgba(255,255,255,0.08)", padding: "4px 12px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+          title="Toggle the per-unit × per-building recruitment table"
+        >{showDetailed ? "▾ Hide" : "▸ Show"} detailed recruitment table</button>
+      </div>
+      {showDetailed && recruitTable && recruitTable.length > 0 && (
+        <div style={{ marginTop: 8, padding: 8, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, overflow: "auto", maxHeight: 420 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ position: "sticky", top: 0, background: "rgba(28,30,32,0.95)" }}>
+              <tr>
+                <th style={dthStyle}>Unit</th>
+                <th style={dthStyle} title="Player line in governmentB (Indirect Rule); shows the mic_tier requirement">GovB</th>
+                <th style={dthStyle} title="Player line in governmentC (Direct Rule); shows the mic_tier requirement">GovC</th>
+                <th style={dthStyle} title="Player line in governmentD (Homeland); shows the mic_tier requirement">GovD</th>
+                <th style={dthStyle} title="Player AOR sibling line in hinterland_region. ✓ = AOR enabled. ★ = also recruits the factional name in AOR (Greek/Latin shared pattern)">AOR</th>
+                <th style={dthStyle} title="AI lines in the military_industrial_complex building chain; shows the tier range">MIC (AI)</th>
+                <th style={dthStyle} title="AI lines in the garrison building chain; shows the tier range">Gar (AI)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recruitTable.map(r => (
+                <tr key={r.id} onClick={() => onUnitClick && onUnitClick(r.id)} style={{ cursor: onUnitClick ? "pointer" : "default" }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.06)"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = ""}>
+                  <td style={{ ...dtdStyle, color: "#dca64a", fontFamily: "Consolas, monospace" }}>{r.unit}</td>
+                  <td style={dtdStyle}>{cellOf(r.govB)}</td>
+                  <td style={dtdStyle}>{cellOf(r.govC)}</td>
+                  <td style={dtdStyle}>{cellOf(r.govD)}</td>
+                  <td style={dtdStyle}>{r.aor ? <span style={{ color: r.aorBoth ? "#dca64a" : "#7c9", fontWeight: 700 }}>{r.aorBoth ? "★" : "✓"}</span> : <span style={{ color: "#444" }}>—</span>}</td>
+                  <td style={dtdStyle}>{cellOf(r.mic)}</td>
+                  <td style={dtdStyle}>{cellOf(r.garrison)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 6, fontSize: 10, color: "#888", fontStyle: "italic" }}>
+            Cell shows the mic_tier requirement (player Gov columns) or tier range (AI columns). ★ in AOR = shared factional/AOR (Greek/Latin pattern). Click a row to jump to the unit.
+          </div>
+        </div>
+      )}
+      {showDetailed && recruitTable && recruitTable.length === 0 && (
+        <div style={{ marginTop: 8, padding: 12, color: "#888", fontStyle: "italic", fontSize: 12, textAlign: "center" }}>
+          No units in this faction yet — add some via the EDU coverage panel above or the sidebar's + New unit.
+        </div>
+      )}
     </div>
   );
+}
+
+const dthStyle = { padding: "5px 8px", borderBottom: "1px solid rgba(220,166,74,0.18)", fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, textAlign: "center" };
+const dtdStyle = { padding: "4px 8px", borderBottom: "1px solid rgba(255,255,255,0.04)", color: "#bbb", textAlign: "center", fontFamily: "Consolas, monospace" };
+function cellOf(v) {
+  if (v == null) return <span style={{ color: "#444" }}>—</span>;
+  return <span style={{ color: "#dca64a" }}>{v}</span>;
 }
 
 function buildGrid(units, faction) {

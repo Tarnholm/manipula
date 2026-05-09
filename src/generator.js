@@ -161,6 +161,14 @@ export function generatePlayerLines(unit) {
 
 // Public: AOR-sibling player line (one line in hinterland_region/region_base).
 // Only emitted when the unit has an AOR sibling AND it's not a merc unit.
+//
+// When u.aor.alsoEmitFactionalInAor is true, a SECOND line is emitted in
+// the same hinterland_region building using the factional recruit name
+// + the factional factions list (with no 'not factions' exclusion). This
+// is the "factional unit recruitable as AOR for its own factions" case
+// — the unit appears as an AOR option for its own factions inside their
+// AOR-eligible regions, while the standard "aor X" line still covers
+// every other faction.
 export function generateAORPlayerLines(unit) {
   const u = fillGradeDefaults(unit);
   if (!u.enabled) return [];
@@ -185,12 +193,38 @@ export function generateAORPlayerLines(unit) {
     ...(u.aorRequires || []),
     `gov_tier_${u.aor.govTier || 1}`,
   ]);
-  return [{
+  const out = [{
     building: AOR_PLAYER_BUILDING,
     level: AOR_PLAYER_LEVEL,
     text: `                recruit "${aorName}" 0 requires ${requires}`,
     aorVariant: true,
   }];
+
+  // Optional second line: the factional name as AOR for its own factions.
+  // Skipped for AOR-only units (no factional name to emit) and when the
+  // unit has no positive factions (nothing to scope to).
+  if (
+    u.aor.alsoEmitFactionalInAor &&
+    !u.aor.aorOnly &&
+    Array.isArray(u.factions) &&
+    u.factions.length > 0
+  ) {
+    const factionalReq = joinAnd([
+      fmtFactions(u.factions),                // factional faction list, no 'not factions' exclusion
+      "is_player",
+      `mic_tier_${u.canonicalMicTier}`,
+      ...(u.aorRequires || []),
+      `gov_tier_${u.aor.govTier || 1}`,
+    ]);
+    out.push({
+      building: AOR_PLAYER_BUILDING,
+      level: AOR_PLAYER_LEVEL,
+      text: `                recruit "${u.unit}" 0 requires ${factionalReq}`,
+      aorVariant: true,
+      alsoFactional: true,
+    });
+  }
+  return out;
 }
 
 // Public: AI lines for a unit family.
