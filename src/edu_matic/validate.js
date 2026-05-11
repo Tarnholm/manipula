@@ -130,6 +130,11 @@ function validate(project, opts) {
     checkUnitDmbModel(u, ctx, push);
     checkUnitDictionaryTag(u, ctx, push);
   }
+  // Compute the orphan-DMB-type set once — both checkDmbOrphanTypes
+  // (emits the rows) and checkDmbAssetReferences (suppresses missing-
+  // file errors whose parent type is orphan, since deleting the type
+  // makes those texture/model refs moot) need it.
+  ctx.dmbOrphanTypeSet = computeDmbOrphanTypes(project, ctx);
   checkDmbAssetReferences(project, ctx, push);
   checkDmbOrphanTypes(project, ctx, push);
   checkDmbOrphanAssets(ctx, push);
@@ -510,11 +515,20 @@ function checkDmbAssetReferences(project, ctx, push) {
   // Surface one error per (DMB type, missing path) pair so the user can
   // jump to the right block in DMB. The "unit" field carries the model
   // id rather than an EDU unit name, prefixed [DMB] for clarity.
+  //
+  // Skip refs whose parent DMB type is orphan. Those textures/models
+  // aren't really "missing" from the user's perspective — the whole
+  // 'type X' block is dead and the cleanup path is to delete the type
+  // (which dmb-orphan-type already flags), not to add the texture.
+  // Suppressing here keeps the missing-asset list focused on actual
+  // missing files for live DMB blocks.
+  const orphanTypes = ctx.dmbOrphanTypeSet || new Set();
   const seen = new Set();
   const emit = (kind, list) => {
     for (const ref of list || []) {
       if (!ref || !ref.path) continue;
       if (!ctx.dmbAssetMissing.has(ref.path)) continue;
+      if (ref.type && orphanTypes.has(ref.type)) continue;     // suppress noise from orphan types
       const key = `${ref.type}|${ref.path}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -529,15 +543,19 @@ function checkDmbAssetReferences(project, ctx, push) {
 // OR by descr_character.txt's `battle_model X` lines (general / admiral
 // / captain models). Cleanup target — these blocks are dead weight in
 // DMB. Silenced when DMB isn't loaded.
-function checkDmbOrphanTypes(project, ctx, push) {
-  if (!ctx.dmbModels || !project || !Array.isArray(project.units)) return;
+// Build the Set of DMB type names that no EDU unit / officer /
+// general_unit / descr_character battle_model references. Shared by
+// the orphan-type emit and the asset-missing suppression (which skips
+// missing-file errors whose parent DMB type is orphan).
+function computeDmbOrphanTypes(project, ctx) {
+  const orphan = new Set();
+  if (!ctx.dmbModels || !project || !Array.isArray(project.units)) return orphan;
   const used = new Set();
   for (const u of project.units) {
     if (u.kind !== "unit") continue;
     const id = String(u["model id"] || "").trim();
     if (id) {
-      // Match the variation expansion checkUnitDmbModel uses: variation
-      // ≥ 1 means DMB exports modelId1..modelIdN, not the bare modelId.
+      // Match the variation expansion checkUnitDmbModel uses.
       const variation = parseInt(u["unit variation"], 10) || 0;
       if (variation === 0) {
         used.add(id);
@@ -546,22 +564,21 @@ function checkDmbOrphanTypes(project, ctx, push) {
         for (let i = 1; i <= cap; i++) used.add(id + i);
       }
     }
-    // Officers are extra DMB-type references, one per `officer N` slot.
-    // Suffix names like 'hellenic_cav_officer_2' are part of the name,
-    // NOT variation-expanded — add verbatim.
     for (let i = 1; i <= 5; i++) {
       const officer = String(u["officer " + i] || "").trim();
       if (officer) used.add(officer);
     }
-    // general_unit (named generals on certain unit categories) is also
-    // a DMB-type ref. Add it too.
     const generalUnit = String(u["general_unit"] || u.general_unit || "").trim();
     if (generalUnit) used.add(generalUnit);
   }
-  // Union in DMB types referenced from outside EDU (descr_character).
   if (ctx.dmbExtraUsage) for (const t of ctx.dmbExtraUsage) used.add(t);
-  for (const t of ctx.dmbModels) {
-    if (used.has(t)) continue;
+  for (const t of ctx.dmbModels) if (!used.has(t)) orphan.add(t);
+  return orphan;
+}
+
+function checkDmbOrphanTypes(project, ctx, push) {
+  if (!ctx.dmbOrphanTypeSet) return;
+  for (const t of ctx.dmbOrphanTypeSet) {
     push(err(`[DMB] ${t}`, null, `'type ${t}' is declared in descr_model_battle.txt but no EDU unit or descr_character battle_model references it — safe to delete from DMB unless another file references it.`, "dmb-orphan-type"));
   }
 }
