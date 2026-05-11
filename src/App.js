@@ -384,8 +384,15 @@ export default function App() {
       (async () => {
         try {
           const referenced = new Set();
-          for (const t of dmbParse.textures) if (t.path) referenced.add(t.path);
-          for (const m of dmbParse.models) if (m.path) referenced.add(m.path);
+          // Both the original (display) and lowercased path go in: original
+          // for the missing-file lookup (where Windows' case-insensitive
+          // fs.existsSync handles the OS comparison), lowercased for the
+          // orphan diff (compared case-insensitively against on-disk
+          // filenames so e.g. EBUnit_X.cas in DMB matches ebunit_x.cas on
+          // disk and doesn't false-flag as orphan).
+          const referencedLower = new Set();
+          for (const t of dmbParse.textures) if (t.path) { referenced.add(t.path); referencedLower.add(t.path.toLowerCase()); }
+          for (const m of dmbParse.models) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
           let dmbAssetMissing = new Set();
           let dmbAssetOrphans = [];
           if (window.eduAPI && window.eduAPI.checkModPaths && referenced.size > 0) {
@@ -395,7 +402,7 @@ export default function App() {
           if (window.eduAPI && window.eduAPI.listModAssetFiles) {
             const r = await window.eduAPI.listModAssetFiles(["characters"], [".tga", ".cas"]);
             if (r && Array.isArray(r.files)) {
-              for (const f of r.files) if (!referenced.has(f)) dmbAssetOrphans.push(f);
+              for (const f of r.files) if (!referencedLower.has(f.toLowerCase())) dmbAssetOrphans.push(f);
             }
           }
           setModIndex(prev => ({ ...prev, dmbAssetMissing, dmbAssetOrphans }));
