@@ -265,7 +265,7 @@ export function eduValidationIssues(eduProject, validateFn, opts) {
     return errors.map(e => ({
       unitId: `edu:${e.unit}`,
       unit: e.unit,
-      severity: "error",
+      severity: e.severity || "error",     // EDU validator can downgrade specific issues (e.g. dmb-orphan-type-new → warn)
       code: "edu-" + (e.category || "validate"),
       message: `[EDU] ${e.message}`,
       source: "edu",

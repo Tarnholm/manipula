@@ -40,6 +40,7 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
     const edu = eduValidationIssues(eduProject, eduValidate, {
       dmbModels: modIndex && modIndex.dmbModels,
       dmbExtraUsage: modIndex && modIndex.dmbExtraUsage,
+      dmbNewTypes: modIndex && modIndex.dmbNewTypes,
       dmbTextures: modIndex && modIndex.dmbTextures,
       dmbModelFiles: modIndex && modIndex.dmbModelFiles,
       dmbAssetMissing: modIndex && modIndex.dmbAssetMissing,

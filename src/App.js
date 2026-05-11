@@ -362,6 +362,42 @@ export default function App() {
           if (m) dmbExtraUsage.add(m[1]);
         }
       }
+      // Recency tracking — persist a {typeName: ISO firstSeen} map in
+      // localStorage so we can flag DMB types added recently as "likely
+      // WIP" rather than safe-to-delete orphans. The user's workflow:
+      //   1. create models + textures
+      //   2. add to DMB
+      //   3. add to local-only EDU, test
+      //   4. add to repo EDU (often days later)
+      // Steps 2–4 leave the type orphan from the repo's perspective. We
+      // don't want bulk-strip-DMB to nuke a teammate's mid-workflow
+      // additions. NEW_WINDOW_MS = 30 days.
+      const FIRST_SEEN_KEY = "rt:dmbTypesFirstSeen:v1";
+      const NEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+      const dmbNewTypes = new Set();
+      try {
+        let stored = {};
+        try { stored = JSON.parse(localStorage.getItem(FIRST_SEEN_KEY) || "{}") || {}; } catch {}
+        const now = Date.now();
+        const wasEmpty = Object.keys(stored).length === 0;
+        // First-ever run on this machine: seed every current type as
+        // "old" (timestamp pre-window) so the user isn't ambushed by
+        // every existing DMB type being flagged new.
+        const seedNew = new Date(now).toISOString();
+        const seedOld = new Date(now - NEW_WINDOW_MS - 1000).toISOString();
+        for (const t of dmbModels) {
+          if (!stored[t]) {
+            stored[t] = wasEmpty ? seedOld : seedNew;
+            if (!wasEmpty) dmbNewTypes.add(t);
+          } else {
+            const firstSeen = Date.parse(stored[t]);
+            if (Number.isFinite(firstSeen) && (now - firstSeen) < NEW_WINDOW_MS) dmbNewTypes.add(t);
+          }
+        }
+        // Drop types no longer in DMB so the map doesn't grow unbounded.
+        for (const t of Object.keys(stored)) if (!dmbModels.has(t)) delete stored[t];
+        localStorage.setItem(FIRST_SEEN_KEY, JSON.stringify(stored));
+      } catch (e) { console.warn("[dmb-recency] tracking failed:", e && e.message); }
 
       setModIndex(prev => ({
         ...prev,
@@ -369,6 +405,7 @@ export default function App() {
         reforms, scriptFiles,
         dmbModels,
         dmbExtraUsage,
+        dmbNewTypes,
         dmbTextures: dmbParse.textures,
         dmbModelFiles: dmbParse.models,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
@@ -1950,6 +1987,7 @@ export default function App() {
         const errs = validate(eduProject, {
           dmbModels: modIndex.dmbModels,
           dmbExtraUsage: modIndex.dmbExtraUsage,
+          dmbNewTypes: modIndex.dmbNewTypes,
           dmbTextures: modIndex.dmbTextures,
           dmbModelFiles: modIndex.dmbModelFiles,
           dmbAssetMissing: modIndex.dmbAssetMissing,
@@ -1960,7 +1998,7 @@ export default function App() {
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
@@ -1970,11 +2008,20 @@ export default function App() {
     // eduValidationErrors so the topbar tab badge matches the count the Validate panel shows.
     const sum = summarize(validateUnits(units, modIndex, { missingCards, skipCrossUnit: true }));
     const factionIssues = validateFactions(units, modIndex);
-    const eduErrCount = (eduValidationErrors && eduValidationErrors.length) || 0;
+    // EDU validator results carry per-issue severity (default "error").
+    // Recent-orphan-type entries downgrade to "warn" so the badge
+    // counts them under warnings rather than blockers.
+    let eduErrCount = 0, eduWarnCount = 0;
+    for (const e of (eduValidationErrors || [])) {
+      const sev = e.severity || "error";
+      if (sev === "warn") eduWarnCount++;
+      else eduErrCount++;
+    }
     return {
       ...sum,
       error: sum.error + eduErrCount,
-      total: sum.total + eduErrCount,
+      warn: sum.warn + eduWarnCount,
+      total: sum.total + eduErrCount + eduWarnCount,
       factionIssues: factionIssues.length,
     };
   }, [units, modIndex, missingCards, eduValidationErrors]);

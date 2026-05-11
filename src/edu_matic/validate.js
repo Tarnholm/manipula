@@ -110,6 +110,7 @@ function validate(project, opts) {
   const ctx = buildContext(project);
   ctx.dmbModels = (opts && opts.dmbModels instanceof Set) ? opts.dmbModels : null;
   ctx.dmbExtraUsage = (opts && opts.dmbExtraUsage instanceof Set) ? opts.dmbExtraUsage : null;
+  ctx.dmbNewTypes = (opts && opts.dmbNewTypes instanceof Set) ? opts.dmbNewTypes : null;
   ctx.dmbTextures = (opts && Array.isArray(opts.dmbTextures)) ? opts.dmbTextures : null;
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
@@ -578,8 +579,28 @@ function computeDmbOrphanTypes(project, ctx) {
 
 function checkDmbOrphanTypes(project, ctx, push) {
   if (!ctx.dmbOrphanTypeSet) return;
+  // Recency split — types Manipula has only seen in DMB recently are
+  // very likely WIP (the user's workflow: add to DMB → local-only
+  // EDU testing → eventually push to repo EDU). These get warn
+  // severity, a different code (dmb-orphan-type-new) so the user can
+  // filter them, and a message that explicitly says "verify before
+  // deleting". The 30-day window lives in App.js.
+  const newTypes = ctx.dmbNewTypes || new Set();
   for (const t of ctx.dmbOrphanTypeSet) {
-    push(err(`[DMB] ${t}`, null, `'type ${t}' is declared in descr_model_battle.txt but no EDU unit or descr_character battle_model references it — safe to delete from DMB unless another file references it.`, "dmb-orphan-type"));
+    if (newTypes.has(t)) {
+      push(err(
+        `[DMB] ${t}`, null,
+        `'type ${t}' was added to descr_model_battle.txt within the last 30 days and isn't referenced by any EDU unit yet — likely a WIP unit a teammate is mid-workflow on. VERIFY before deleting (the standard pattern is: model+textures → DMB → local-only EDU testing → repo EDU).`,
+        "dmb-orphan-type-new",
+        "warn"
+      ));
+    } else {
+      push(err(
+        `[DMB] ${t}`, null,
+        `'type ${t}' is declared in descr_model_battle.txt but no EDU unit or descr_character battle_model references it — safe to delete from DMB unless another file references it.`,
+        "dmb-orphan-type"
+      ));
+    }
   }
 }
 
@@ -619,8 +640,10 @@ function checkDmbOrphanAssets(ctx, push) {
 
 // ── Utilities ───────────────────────────────────────────────────────
 
-function err(unit, row, message, category) {
-  return { unit, row, message, category };
+function err(unit, row, message, category, severity) {
+  const out = { unit, row, message, category };
+  if (severity) out.severity = severity;
+  return out;
 }
 function toNum(v) {
   if (v === null || v === undefined || v === "") return null;
