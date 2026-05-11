@@ -108,6 +108,7 @@ import { parseEDU, parseEDUAsync } from "./parsers/edu";
 import { parseStrings, parseStringsAsync } from "./parsers/strings";
 import { parseReforms } from "./parsers/reforms";
 import { parseDMB } from "./parsers/dmb";
+import { parseDMS } from "./parsers/dms";
 import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
 import { findQualityClass } from "./qualityClasses";
@@ -393,6 +394,16 @@ export default function App() {
           const referencedLower = new Set();
           for (const t of dmbParse.textures) if (t.path) { referenced.add(t.path); referencedLower.add(t.path.toLowerCase()); }
           for (const m of dmbParse.models) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
+          // DMS (descr_model_strat) references models by bare path —
+          // implicitly expanded on disk into `_lod0.cas` .. `_lod3.cas`
+          // variants. Add each LOD form to the orphan-diff set so the
+          // strat-character LOD files (spies / assassins / diplomats /
+          // generals / captains) don't false-flag as orphans.
+          const dmsParse = f.dms ? parseDMS(f.dms) : { types: new Set(), modelPaths: [] };
+          for (const p of dmsParse.modelPaths) {
+            const base = p.toLowerCase();
+            for (let i = 0; i < 4; i++) referencedLower.add(`${base}_lod${i}.cas`);
+          }
           let dmbAssetMissing = new Set();
           let dmbAssetOrphans = [];
           if (window.eduAPI && window.eduAPI.checkModPaths && referenced.size > 0) {
