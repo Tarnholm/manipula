@@ -1965,11 +1965,19 @@ export default function App() {
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
     // conflict pass. The full validation view (which only mounts when the user opens the tab)
-    // runs the full set including conflicts.
+    // runs the full set including conflicts. EDU-validator errors (which include DMB cross-file
+    // checks: dmb-orphan-asset, dmb-orphan-type, unit-dmb-missing, etc.) are folded in via
+    // eduValidationErrors so the topbar tab badge matches the count the Validate panel shows.
     const sum = summarize(validateUnits(units, modIndex, { missingCards, skipCrossUnit: true }));
     const factionIssues = validateFactions(units, modIndex);
-    return { ...sum, factionIssues: factionIssues.length };
-  }, [units, modIndex, missingCards]);
+    const eduErrCount = (eduValidationErrors && eduValidationErrors.length) || 0;
+    return {
+      ...sum,
+      error: sum.error + eduErrCount,
+      total: sum.total + eduErrCount,
+      factionIssues: factionIssues.length,
+    };
+  }, [units, modIndex, missingCards, eduValidationErrors]);
 
   return (
     <AppErrorBoundary>
