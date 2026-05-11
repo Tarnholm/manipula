@@ -1056,8 +1056,18 @@ ipcMain.handle("check-mod-paths", async (_e, relPaths) => {
     // Strip the leading "data/" or "data\" so the rest is relative to dataDir.
     const rel = p.replace(/^data[\\/]+/i, "").replace(/[\\/]+/g, path.sep);
     const abs = path.join(d, rel);
-    try { if (!fs.existsSync(abs)) missing.push(p); }
-    catch { missing.push(p); }
+    try {
+      let exists = fs.existsSync(abs);
+      // RTW textures are commonly shipped as `<name>.tga.dds` (DDS-format
+      // file with the .tga.dds suffix) rather than the raw .tga the
+      // descr_model_battle line names. The game resolves either; the
+      // missing-asset check should too. Same fallback for any DMB path
+      // that ends with .tga.
+      if (!exists && /\.tga$/i.test(abs)) {
+        exists = fs.existsSync(abs + ".dds");
+      }
+      if (!exists) missing.push(p);
+    } catch { missing.push(p); }
   }
   return { missing };
 });
