@@ -535,16 +535,28 @@ function checkDmbOrphanTypes(project, ctx, push) {
   for (const u of project.units) {
     if (u.kind !== "unit") continue;
     const id = String(u["model id"] || "").trim();
-    if (!id) continue;
-    // Match the variation expansion checkUnitDmbModel uses: variation
-    // ≥ 1 means DMB exports modelId1..modelIdN, not the bare modelId.
-    const variation = parseInt(u["unit variation"], 10) || 0;
-    if (variation === 0) {
-      used.add(id);
-    } else {
-      const cap = Math.min(variation, 7);
-      for (let i = 1; i <= cap; i++) used.add(id + i);
+    if (id) {
+      // Match the variation expansion checkUnitDmbModel uses: variation
+      // ≥ 1 means DMB exports modelId1..modelIdN, not the bare modelId.
+      const variation = parseInt(u["unit variation"], 10) || 0;
+      if (variation === 0) {
+        used.add(id);
+      } else {
+        const cap = Math.min(variation, 7);
+        for (let i = 1; i <= cap; i++) used.add(id + i);
+      }
     }
+    // Officers are extra DMB-type references, one per `officer N` slot.
+    // Suffix names like 'hellenic_cav_officer_2' are part of the name,
+    // NOT variation-expanded — add verbatim.
+    for (let i = 1; i <= 5; i++) {
+      const officer = String(u["officer " + i] || "").trim();
+      if (officer) used.add(officer);
+    }
+    // general_unit (named generals on certain unit categories) is also
+    // a DMB-type ref. Add it too.
+    const generalUnit = String(u["general_unit"] || u.general_unit || "").trim();
+    if (generalUnit) used.add(generalUnit);
   }
   // Union in DMB types referenced from outside EDU (descr_character).
   if (ctx.dmbExtraUsage) for (const t of ctx.dmbExtraUsage) used.add(t);
