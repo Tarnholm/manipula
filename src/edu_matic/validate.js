@@ -554,13 +554,37 @@ function checkDmbOrphanTypes(project, ctx, push) {
   }
 }
 
-// .tga / .cas files in data/characters that no DMB block references.
-// Cleanup target — these are dead asset files the user can prune from
-// the mod once they confirm nothing else points at them.
+// .tga / .cas files in data/characters that no DMB or DMS reference
+// covers. Cleanup target — these are dead asset files the user can
+// prune once they confirm nothing else uses them. Split into three
+// codes so the bulk-action UI can distinguish which referencing file
+// the orphan was 'expected' to live in:
+//
+//   • dmb-texture-orphan-asset — .tga that no DMB pbr_texture / texture
+//     line references.
+//   • dms-model-orphan-asset   — .cas whose basename starts with
+//     'strat_' (the DMS strat-character naming convention) and no DMS
+//     model line covers it (LOD-expanded).
+//   • dmb-model-orphan-asset   — .cas otherwise (battle-model files
+//     keyed off DMB's model_flexi[_m] lines).
 function checkDmbOrphanAssets(ctx, push) {
   if (!ctx.dmbAssetOrphans || ctx.dmbAssetOrphans.length === 0) return;
   for (const p of ctx.dmbAssetOrphans) {
-    push(err(`[asset orphan] ${p}`, null, `File exists in data/characters but no DMB block references it — candidate for deletion if no other system uses it.`, "dmb-orphan-asset"));
+    const ext = p.toLowerCase().match(/\.([a-z0-9]+)$/);
+    const lastSlash = p.lastIndexOf("/");
+    const basename = lastSlash >= 0 ? p.slice(lastSlash + 1).toLowerCase() : p.toLowerCase();
+    let code, kind;
+    if (ext && ext[1] === "tga") {
+      code = "dmb-texture-orphan-asset";
+      kind = "DMB texture (pbr_texture / texture)";
+    } else if (basename.startsWith("strat_")) {
+      code = "dms-model-orphan-asset";
+      kind = "DMS strat-model";
+    } else {
+      code = "dmb-model-orphan-asset";
+      kind = "DMB battle-model (model_flexi)";
+    }
+    push(err(`[asset orphan] ${p}`, null, `File exists in data/characters but no ${kind} reference covers it — candidate for deletion if no other system uses it.`, code));
   }
 }
 
