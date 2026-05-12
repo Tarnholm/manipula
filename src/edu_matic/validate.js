@@ -111,6 +111,8 @@ function validate(project, opts) {
   ctx.dmbModels = (opts && opts.dmbModels instanceof Set) ? opts.dmbModels : null;
   ctx.dmbExtraUsage = (opts && opts.dmbExtraUsage instanceof Set) ? opts.dmbExtraUsage : null;
   ctx.dmbNewTypes = (opts && opts.dmbNewTypes instanceof Set) ? opts.dmbNewTypes : null;
+  ctx.mountTypesLower = (opts && opts.mountTypesLower instanceof Set) ? opts.mountTypesLower : null;
+  ctx.mountModelByType = (opts && opts.mountModelByType instanceof Map) ? opts.mountModelByType : null;
   ctx.dmbTextures = (opts && Array.isArray(opts.dmbTextures)) ? opts.dmbTextures : null;
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
@@ -130,7 +132,10 @@ function validate(project, opts) {
     checkUnitFactionOwnership(u, ctx, project, push);
     checkUnitDmbModel(u, ctx, push);
     checkUnitDictionaryTag(u, ctx, push);
+    checkUnitMount(u, ctx, push);
   }
+  checkMountModelInDmb(ctx, push);
+  checkOrphanMounts(project, ctx, push);
   // Compute the orphan-DMB-type set once — both checkDmbOrphanTypes
   // (emits the rows) and checkDmbAssetReferences (suppresses missing-
   // file errors whose parent type is orphan, since deleting the type
@@ -506,6 +511,51 @@ function checkUnitDictionaryTag(u, ctx, push) {
   push(err(u.name, u.row, `Dictionary tag "${tag}" has no matching {${tag}} entry in text/export_units.txt — the unit's name and description won't display correctly in-game.`, "unit-dict-missing"));
 }
 
+// EDU's `Mount` column points at a `type X` block in descr_mount.txt
+// (which in turn points at a DMB type via its `model Y` line). When
+// the named mount doesn't exist in descr_mount the unit can't be
+// recruited as the mounted variant — flagged. Match is
+// case-insensitive (descr_mount is conventionally lowercase, EDU's
+// Mount column is conventionally TitleCase).
+function checkUnitMount(u, ctx, push) {
+  if (!ctx.mountTypesLower) return;
+  const mount = String(u.Mount || u.mount || "").trim();
+  if (!mount) return;
+  if (!ctx.mountTypesLower.has(mount.toLowerCase())) {
+    push(err(u.name, u.row, `Unit "Mount" references "${mount}" but no matching 'type ${mount}' block exists in descr_mount.txt.`, "unit-mount-missing"));
+  }
+}
+
+// Each descr_mount type's `model Y` line should resolve to a DMB
+// `type Y` block. If not, the mount references a missing battle model.
+function checkMountModelInDmb(ctx, push) {
+  if (!ctx.mountModelByType || !ctx.dmbModels) return;
+  for (const [typeName, modelId] of ctx.mountModelByType) {
+    if (!modelId) continue;
+    if (!ctx.dmbModels.has(modelId)) {
+      push(err(`[descr_mount] ${typeName}`, null, `Mount type '${typeName}' references model "${modelId}" but no matching 'type ${modelId}' block exists in descr_model_battle.txt.`, "mount-dmb-missing"));
+    }
+  }
+}
+
+// descr_mount type that no EDU unit's Mount column references is dead
+// weight. Warn rather than error — these are easy to overlook and
+// might still be referenced by descr_character / strat / etc, but the
+// usual cleanup target.
+function checkOrphanMounts(project, ctx, push) {
+  if (!ctx.mountTypesLower || !project || !Array.isArray(project.units)) return;
+  const used = new Set();
+  for (const u of project.units) {
+    if (u.kind !== "unit") continue;
+    const mount = String(u.Mount || u.mount || "").trim().toLowerCase();
+    if (mount) used.add(mount);
+  }
+  for (const t of ctx.mountTypesLower) {
+    if (used.has(t)) continue;
+    push(err(`[descr_mount] ${t}`, null, `Mount type '${t}' is declared in descr_mount.txt but no EDU unit's Mount column references it — safe to delete from descr_mount unless another file uses it.`, "descr_mount-orphan", "warn"));
+  }
+}
+
 // DMB → mod-data: every `pbr_texture / texture / model_flexi*` path
 // must resolve to a real file under the mod data folder. ctx.dmbAssetMissing
 // is the precomputed set of missing paths (built on the renderer side
@@ -620,21 +670,31 @@ function checkDmbOrphanTypes(project, ctx, push) {
 function checkDmbOrphanAssets(ctx, push) {
   if (!ctx.dmbAssetOrphans || ctx.dmbAssetOrphans.length === 0) return;
   for (const p of ctx.dmbAssetOrphans) {
-    const ext = p.toLowerCase().match(/\.([a-z0-9]+)$/);
+    const lower = p.toLowerCase();
+    const ext = lower.match(/\.([a-z0-9]+)$/);
     const lastSlash = p.lastIndexOf("/");
-    const basename = lastSlash >= 0 ? p.slice(lastSlash + 1).toLowerCase() : p.toLowerCase();
-    let code, kind;
-    if (ext && ext[1] === "tga") {
+    const basename = lastSlash >= 0 ? p.slice(lastSlash + 1).toLowerCase() : lower;
+    let code, kind, location;
+    if (lower.startsWith("data/animals/")) {
+      // Mount textures + model_flexi files keyed off DMB animal blocks
+      // (which descr_mount points at via its `model` field).
+      code = "dmb-animal-orphan-asset";
+      kind = ext && ext[1] === "tga" ? "DMB animal texture" : "DMB animal-model";
+      location = "data/animals";
+    } else if (ext && ext[1] === "tga") {
       code = "dmb-texture-orphan-asset";
       kind = "DMB texture (pbr_texture / texture)";
+      location = "data/characters";
     } else if (basename.startsWith("strat_")) {
       code = "dms-model-orphan-asset";
       kind = "DMS strat-model";
+      location = "data/characters";
     } else {
       code = "dmb-model-orphan-asset";
       kind = "DMB battle-model (model_flexi)";
+      location = "data/characters";
     }
-    push(err(`[asset orphan] ${p}`, null, `File exists in data/characters but no ${kind} reference covers it — candidate for deletion if no other system uses it.`, code));
+    push(err(`[asset orphan] ${p}`, null, `File exists in ${location} but no ${kind} reference covers it — candidate for deletion if no other system uses it.`, code));
   }
 }
 

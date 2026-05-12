@@ -285,6 +285,7 @@ ipcMain.handle("load-mod-files", async () => {
     events: path.join(d, "descr_sm_major_events.txt"),
     dmb: path.join(d, "descr_model_battle.txt"),
     dms: path.join(d, "descr_model_strat.txt"),
+    dmount: path.join(d, "descr_mount.txt"),
     descrCharacter: path.join(d, "descr_character.txt"),
     eventScriptsDir: path.join(d, "major_event_scripts"),
   };

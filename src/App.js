@@ -109,6 +109,7 @@ import { parseStrings, parseStringsAsync } from "./parsers/strings";
 import { parseReforms } from "./parsers/reforms";
 import { parseDMB } from "./parsers/dmb";
 import { parseDMS } from "./parsers/dms";
+import { parseDescrMount } from "./parsers/dmount";
 import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
 import { findQualityClass } from "./qualityClasses";
@@ -362,6 +363,12 @@ export default function App() {
           if (m) dmbExtraUsage.add(m[1]);
         }
       }
+      // descr_mount.txt: every `type X` block's `model Y` line points
+      // at a DMB type. Add those Ys to dmbExtraUsage so the orphan-DMB
+      // check doesn't false-flag mount models (horse_medium, camel,
+      // elephant variants, chariot models, etc).
+      const mountParse = f.dmount ? parseDescrMount(f.dmount) : { types: new Set(), typesLower: new Set(), modelByType: new Map() };
+      for (const m of mountParse.modelByType.values()) dmbExtraUsage.add(m);
       // Recency tracking — persist a {typeName: ISO firstSeen} map in
       // localStorage so we can flag DMB types added recently as "likely
       // WIP" rather than safe-to-delete orphans. The user's workflow:
@@ -406,6 +413,8 @@ export default function App() {
         dmbModels,
         dmbExtraUsage,
         dmbNewTypes,
+        mountTypesLower: mountParse.typesLower,
+        mountModelByType: mountParse.modelByType,
         dmbTextures: dmbParse.textures,
         dmbModelFiles: dmbParse.models,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
@@ -448,7 +457,10 @@ export default function App() {
             if (r && Array.isArray(r.missing)) dmbAssetMissing = new Set(r.missing);
           }
           if (window.eduAPI && window.eduAPI.listModAssetFiles) {
-            const r = await window.eduAPI.listModAssetFiles(["characters"], [".tga", ".cas"]);
+            // data/animals carries mount textures + model_flexi files
+            // referenced by DMB animal blocks (the descr_mount → DMB
+            // chain). Walk it alongside data/characters.
+            const r = await window.eduAPI.listModAssetFiles(["characters", "animals"], [".tga", ".cas"]);
             if (r && Array.isArray(r.files)) {
               for (const f of r.files) if (!referencedLower.has(f.toLowerCase())) dmbAssetOrphans.push(f);
             }
@@ -1988,6 +2000,8 @@ export default function App() {
           dmbModels: modIndex.dmbModels,
           dmbExtraUsage: modIndex.dmbExtraUsage,
           dmbNewTypes: modIndex.dmbNewTypes,
+          mountTypesLower: modIndex.mountTypesLower,
+          mountModelByType: modIndex.mountModelByType,
           dmbTextures: modIndex.dmbTextures,
           dmbModelFiles: modIndex.dmbModelFiles,
           dmbAssetMissing: modIndex.dmbAssetMissing,
@@ -1998,7 +2012,7 @@ export default function App() {
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.mountTypesLower, modIndex.mountModelByType, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
