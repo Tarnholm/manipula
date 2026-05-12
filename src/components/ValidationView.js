@@ -43,6 +43,8 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
       dmbNewTypes: modIndex && modIndex.dmbNewTypes,
       mountTypesLower: modIndex && modIndex.mountTypesLower,
       mountModelByType: modIndex && modIndex.mountModelByType,
+      projectileTypes: modIndex && modIndex.projectileTypes,
+      projectileModelPaths: modIndex && modIndex.projectileModelPaths,
       dmbTextures: modIndex && modIndex.dmbTextures,
       dmbModelFiles: modIndex && modIndex.dmbModelFiles,
       dmbAssetMissing: modIndex && modIndex.dmbAssetMissing,

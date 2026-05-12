@@ -211,6 +211,28 @@ function dataDir() {
   return s.dataDir || DEFAULT_DATA_DIR;
 }
 
+// Vanilla game data dir — for fallback asset resolution when a mod
+// reuses vanilla textures / models / projectiles that aren't shipped
+// inside the mod's data folder. User configures this once via the
+// topbar; we auto-suggest a few standard Steam install locations on
+// first launch but never assume.
+const VANILLA_CANDIDATES = [
+  "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Total War ROME REMASTERED\\Contents\\Resources\\Data\\data",
+  "C:\\Program Files\\Steam\\steamapps\\common\\Total War ROME REMASTERED\\Contents\\Resources\\Data\\data",
+  "D:\\SteamLibrary\\steamapps\\common\\Total War ROME REMASTERED\\Contents\\Resources\\Data\\data",
+  "E:\\SteamLibrary\\steamapps\\common\\Total War ROME REMASTERED\\Contents\\Resources\\Data\\data",
+];
+function vanillaDataDir() {
+  const s = readSettings();
+  if (s.vanillaDataDir) return s.vanillaDataDir;
+  // Auto-detect on first read; persist if found so the user doesn't get
+  // a re-detect on every check.
+  for (const c of VANILLA_CANDIDATES) {
+    try { if (fs.existsSync(c)) { writeSettings({ vanillaDataDir: c }); return c; } } catch {}
+  }
+  return null;
+}
+
 function unitsJsonPath() {
   // Legacy single-file location. Profiles live in profilesDir() instead; this is the migration source.
   return path.join(app.getPath("userData"), "units.json");
@@ -248,6 +270,19 @@ function readSmart(p) {
 
 // ── IPC ──
 ipcMain.handle("get-data-dir", async () => dataDir());
+ipcMain.handle("get-vanilla-data-dir", async () => vanillaDataDir());
+ipcMain.handle("set-vanilla-data-dir", async (_e, dir) => {
+  if (dir === null || dir === "") { writeSettings({ vanillaDataDir: null }); return { ok: true }; }
+  if (!fs.existsSync(dir)) return { ok: false, reason: "Directory does not exist" };
+  writeSettings({ vanillaDataDir: dir });
+  return { ok: true };
+});
+ipcMain.handle("pick-vanilla-data-dir", async () => {
+  const r = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Pick the vanilla 'data' folder (Steam Total War ROME REMASTERED → Contents/Resources/Data/data)" });
+  if (r.canceled || !r.filePaths || !r.filePaths.length) return null;
+  writeSettings({ vanillaDataDir: r.filePaths[0] });
+  return r.filePaths[0];
+});
 
 ipcMain.handle("set-data-dir", async (_e, dir) => {
   if (!dir || !fs.existsSync(dir)) return { ok: false, reason: "Directory does not exist" };
@@ -286,6 +321,7 @@ ipcMain.handle("load-mod-files", async () => {
     dmb: path.join(d, "descr_model_battle.txt"),
     dms: path.join(d, "descr_model_strat.txt"),
     dmount: path.join(d, "descr_mount.txt"),
+    dprojectile: path.join(d, "descr_projectile_new.txt"),
     descrCharacter: path.join(d, "descr_character.txt"),
     eventScriptsDir: path.join(d, "major_event_scripts"),
   };
@@ -1049,26 +1085,31 @@ ipcMain.handle("strip-dmb-types", async (_e, typeNames) => {
 ipcMain.handle("check-mod-paths", async (_e, relPaths) => {
   if (!Array.isArray(relPaths)) return { missing: [] };
   const d = dataDir();
+  const v = vanillaDataDir();         // null when not set / not found
   const seen = new Set();
   const missing = [];
+  // Resolve a single relPath against a base dir, applying the .tga →
+  // .tga.dds fallback. Returns true if the file exists at that base.
+  const resolveAt = (base, rel) => {
+    if (!base) return false;
+    const abs = path.join(base, rel);
+    try {
+      if (fs.existsSync(abs)) return true;
+      if (/\.tga$/i.test(abs) && fs.existsSync(abs + ".dds")) return true;
+    } catch {}
+    return false;
+  };
   for (const p of relPaths) {
     if (typeof p !== "string" || !p || seen.has(p)) continue;
     seen.add(p);
     // Strip the leading "data/" or "data\" so the rest is relative to dataDir.
     const rel = p.replace(/^data[\\/]+/i, "").replace(/[\\/]+/g, path.sep);
-    const abs = path.join(d, rel);
-    try {
-      let exists = fs.existsSync(abs);
-      // RTW textures are commonly shipped as `<name>.tga.dds` (DDS-format
-      // file with the .tga.dds suffix) rather than the raw .tga the
-      // descr_model_battle line names. The game resolves either; the
-      // missing-asset check should too. Same fallback for any DMB path
-      // that ends with .tga.
-      if (!exists && /\.tga$/i.test(abs)) {
-        exists = fs.existsSync(abs + ".dds");
-      }
-      if (!exists) missing.push(p);
-    } catch { missing.push(p); }
+    // First check the mod data dir; if not there, fall back to the
+    // vanilla dir (so vanilla-shipped assets like data/models_missile/
+    // weapon_arrow.cas don't false-flag for mods that reuse them).
+    if (resolveAt(d, rel)) continue;
+    if (resolveAt(v, rel)) continue;
+    missing.push(p);
   }
   return { missing };
 });

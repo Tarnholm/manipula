@@ -110,6 +110,7 @@ import { parseReforms } from "./parsers/reforms";
 import { parseDMB } from "./parsers/dmb";
 import { parseDMS } from "./parsers/dms";
 import { parseDescrMount } from "./parsers/dmount";
+import { parseDescrProjectile } from "./parsers/dprojectile";
 import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
 import { findQualityClass } from "./qualityClasses";
@@ -369,6 +370,11 @@ export default function App() {
       // elephant variants, chariot models, etc).
       const mountParse = f.dmount ? parseDescrMount(f.dmount) : { types: new Set(), typesLower: new Set(), modelByType: new Map() };
       for (const m of mountParse.modelByType.values()) dmbExtraUsage.add(m);
+      // descr_projectile_new.txt — projectile type names for EDU's
+      // 'pri missile type' / 'sec missile type' fields. Each block
+      // declares one or more `model <path>` LOD lines (under
+      // data/models_missile/) we'll asset-check.
+      const projectileParse = f.dprojectile ? parseDescrProjectile(f.dprojectile) : { types: new Set(), modelPaths: [] };
       // Recency tracking — persist a {typeName: ISO firstSeen} map in
       // localStorage so we can flag DMB types added recently as "likely
       // WIP" rather than safe-to-delete orphans. The user's workflow:
@@ -415,6 +421,8 @@ export default function App() {
         dmbNewTypes,
         mountTypesLower: mountParse.typesLower,
         mountModelByType: mountParse.modelByType,
+        projectileTypes: projectileParse.types,
+        projectileModelPaths: projectileParse.modelPaths,
         dmbTextures: dmbParse.textures,
         dmbModelFiles: dmbParse.models,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
@@ -450,6 +458,12 @@ export default function App() {
             const base = p.toLowerCase();
             for (let i = 0; i < 4; i++) referencedLower.add(`${base}_lod${i}.cas`);
           }
+          // Projectile model paths from descr_projectile_new — each
+          // block has one or more `model data/models_missile/...cas`
+          // lines, paths are fully-qualified including the .cas. Add
+          // for both missing-check (mod or vanilla fallback) and
+          // orphan diff.
+          for (const m of projectileParse.modelPaths) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
           let dmbAssetMissing = new Set();
           let dmbAssetOrphans = [];
           if (window.eduAPI && window.eduAPI.checkModPaths && referenced.size > 0) {
@@ -457,10 +471,11 @@ export default function App() {
             if (r && Array.isArray(r.missing)) dmbAssetMissing = new Set(r.missing);
           }
           if (window.eduAPI && window.eduAPI.listModAssetFiles) {
-            // data/animals carries mount textures + model_flexi files
-            // referenced by DMB animal blocks (the descr_mount → DMB
-            // chain). Walk it alongside data/characters.
-            const r = await window.eduAPI.listModAssetFiles(["characters", "animals"], [".tga", ".cas"]);
+            // data/animals carries mount textures + model_flexi files;
+            // data/models_missile carries projectile LOD models. Walk
+            // both alongside data/characters so orphans in any of the
+            // three subtrees surface.
+            const r = await window.eduAPI.listModAssetFiles(["characters", "animals", "models_missile"], [".tga", ".cas"]);
             if (r && Array.isArray(r.files)) {
               for (const f of r.files) if (!referencedLower.has(f.toLowerCase())) dmbAssetOrphans.push(f);
             }
@@ -2002,6 +2017,8 @@ export default function App() {
           dmbNewTypes: modIndex.dmbNewTypes,
           mountTypesLower: modIndex.mountTypesLower,
           mountModelByType: modIndex.mountModelByType,
+          projectileTypes: modIndex.projectileTypes,
+          projectileModelPaths: modIndex.projectileModelPaths,
           dmbTextures: modIndex.dmbTextures,
           dmbModelFiles: modIndex.dmbModelFiles,
           dmbAssetMissing: modIndex.dmbAssetMissing,
@@ -2012,7 +2029,7 @@ export default function App() {
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.mountTypesLower, modIndex.mountModelByType, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.mountTypesLower, modIndex.mountModelByType, modIndex.projectileTypes, modIndex.projectileModelPaths, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit
@@ -2689,6 +2706,7 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       <QuickSearch units={units} eduProject={eduProject} onJumpToUnit={onJumpToUnit} onJumpToEdu={onJumpToEdu} />
       <button onClick={onPick} style={tbtn("#3a4a5a")}>Mod data folder…</button>
       <span style={{ color: "#999", fontSize: 12, fontFamily: "Consolas, monospace" }}>{dataDir}</span>
+      <VanillaDirControl />
       <button onClick={onReload} disabled={loading} style={tbtn("#446")}>{loading ? "Loading…" : "Reload"}</button>
       <button onClick={onImport} style={tbtn("#665")} title="Replace every authored entry with a fresh parse of the current EDB. Destructive — loses any hand-tuned authoring.">Import from EDB</button>
       <button onClick={onImportNewFromEDB} style={tbtn("#566")} title="Add authored entries only for unit names that exist in the EDB but have no entry in this project yet. Existing authored entries are not touched.">Import new from EDB</button>
@@ -3060,6 +3078,48 @@ function Tabs({ activeTab, onChange, validationSummary }) {
 
 function tbtn(color) {
   return { background: color, color: "#fff", border: "none", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 500 };
+}
+
+// Topbar control for the vanilla data dir setting. Used by the asset-
+// existence check (check-mod-paths) as a fallback so vanilla-shipped
+// files (data/models_missile/weapon_arrow.cas etc) the mod reuses
+// without copying don't false-flag as missing. Auto-detects common
+// Steam paths on first launch via the IPC; user can override via the
+// folder picker. Compact display: just the basename of the dir + a
+// short button. null state shows 'set vanilla dir…' to encourage setup.
+function VanillaDirControl() {
+  const [dir, setDir] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (window.eduAPI && window.eduAPI.getVanillaDataDir) {
+          const v = await window.eduAPI.getVanillaDataDir();
+          if (!cancelled) setDir(v);
+        }
+      } finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const pick = async () => {
+    if (!window.eduAPI || !window.eduAPI.pickVanillaDataDir) return;
+    const v = await window.eduAPI.pickVanillaDataDir();
+    if (v !== null) setDir(v);
+  };
+  if (loading) return null;
+  const tail = dir ? dir.split(/[\\/]/).slice(-3).join("\\") : null;
+  return (
+    <button
+      onClick={pick}
+      style={{ ...tbtn(dir ? "#3a4a3a" : "#3a3a4a"), fontSize: 11 }}
+      title={dir
+        ? `Vanilla data dir: ${dir}\n\nUsed as a fallback when checking whether DMB / projectile asset paths exist on disk. Click to change.`
+        : "No vanilla data dir set — vanilla-shipped assets (e.g. data/models_missile/weapon_arrow.cas) will false-flag as missing. Click to pick the Steam install's Total War ROME REMASTERED → Contents/Resources/Data/data folder."}
+    >
+      {dir ? `Vanilla: …\\${tail}` : "Set vanilla dir…"}
+    </button>
+  );
 }
 
 // Sync-dropdown action button. Enabled buttons get the active colour;

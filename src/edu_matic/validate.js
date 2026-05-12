@@ -113,6 +113,8 @@ function validate(project, opts) {
   ctx.dmbNewTypes = (opts && opts.dmbNewTypes instanceof Set) ? opts.dmbNewTypes : null;
   ctx.mountTypesLower = (opts && opts.mountTypesLower instanceof Set) ? opts.mountTypesLower : null;
   ctx.mountModelByType = (opts && opts.mountModelByType instanceof Map) ? opts.mountModelByType : null;
+  ctx.projectileTypes = (opts && opts.projectileTypes instanceof Set) ? opts.projectileTypes : null;
+  ctx.projectileModelPaths = (opts && Array.isArray(opts.projectileModelPaths)) ? opts.projectileModelPaths : null;
   ctx.dmbTextures = (opts && Array.isArray(opts.dmbTextures)) ? opts.dmbTextures : null;
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
@@ -133,9 +135,12 @@ function validate(project, opts) {
     checkUnitDmbModel(u, ctx, push);
     checkUnitDictionaryTag(u, ctx, push);
     checkUnitMount(u, ctx, push);
+    checkUnitProjectile(u, ctx, push);
   }
   checkMountModelInDmb(ctx, push);
   checkOrphanMounts(project, ctx, push);
+  checkProjectileAssetReferences(ctx, push);
+  checkOrphanProjectiles(project, ctx, push);
   // Compute the orphan-DMB-type set once — both checkDmbOrphanTypes
   // (emits the rows) and checkDmbAssetReferences (suppresses missing-
   // file errors whose parent type is orphan, since deleting the type
@@ -553,6 +558,59 @@ function checkOrphanMounts(project, ctx, push) {
   for (const t of ctx.mountTypesLower) {
     if (used.has(t)) continue;
     push(err(`[descr_mount] ${t}`, null, `Mount type '${t}' is declared in descr_mount.txt but no EDU unit's Mount column references it — safe to delete from descr_mount unless another file uses it.`, "descr_mount-orphan", "warn"));
+  }
+}
+
+// EDU's `pri missile type` and `sec missile type` columns reference
+// a `projectile X` block in descr_projectile_new.txt. Skip empty /
+// "no" / "none" sentinels (melee-only weapons).
+function checkUnitProjectile(u, ctx, push) {
+  if (!ctx.projectileTypes) return;
+  const skip = (v) => !v || /^(no|none)$/i.test(v);
+  for (const slot of ["pri missile type", "sec missile type"]) {
+    const proj = String(u[slot] || "").trim();
+    if (skip(proj)) continue;
+    if (!ctx.projectileTypes.has(proj)) {
+      push(err(u.name, u.row, `Unit "${slot}" references "${proj}" but no matching 'projectile ${proj}' block exists in descr_projectile_new.txt.`, "unit-projectile-missing"));
+    }
+  }
+}
+
+// Each descr_projectile_new block's `model X` line(s) point at a
+// data/models_missile/...cas file. The asset audit's check-mod-paths
+// IPC has the vanilla-data-dir fallback baked in (so reused vanilla
+// models like data/models_missile/weapon_arrow.cas don't fire); we
+// just emit one error per actually-missing path here. Skipped when
+// dmbAssetMissing isn't loaded (no asset audit ran).
+function checkProjectileAssetReferences(ctx, push) {
+  if (!ctx.dmbAssetMissing || ctx.dmbAssetMissing.size === 0) return;
+  if (!ctx.projectileModelPaths) return;
+  const seen = new Set();
+  for (const ref of ctx.projectileModelPaths) {
+    if (!ref || !ref.path) continue;
+    if (!ctx.dmbAssetMissing.has(ref.path)) continue;
+    const key = `${ref.type}|${ref.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    push(err(`[projectile] ${ref.type || "(no type)"}`, null, `Projectile model "${ref.path}" — file not found in mod data folder OR vanilla data folder. Set the vanilla data dir via the topbar if this is a vanilla projectile.`, "projectile-model-missing"));
+  }
+}
+
+// descr_projectile_new types that no EDU unit's pri/sec missile type
+// references. Warn severity — easy to clean from descr_projectile.
+function checkOrphanProjectiles(project, ctx, push) {
+  if (!ctx.projectileTypes || !project || !Array.isArray(project.units)) return;
+  const used = new Set();
+  for (const u of project.units) {
+    if (u.kind !== "unit") continue;
+    for (const slot of ["pri missile type", "sec missile type"]) {
+      const v = String(u[slot] || "").trim();
+      if (v && !/^(no|none)$/i.test(v)) used.add(v);
+    }
+  }
+  for (const t of ctx.projectileTypes) {
+    if (used.has(t)) continue;
+    push(err(`[projectile] ${t}`, null, `'projectile ${t}' is declared in descr_projectile_new.txt but no EDU unit's pri/sec missile type references it — safe to delete unless another file uses it.`, "projectile-orphan", "warn"));
   }
 }
 
