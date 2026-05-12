@@ -29,7 +29,11 @@ export function parseDescrProjectile(text) {
     if (tm) { currentType = tm[1]; types.add(currentType); continue; }
     const mm = line.match(/^model\s+([^,\s]+(?:\s[^,]*)?)\s*,/i);
     if (mm && currentType) {
-      modelPaths.push({ type: currentType, path: mm[1].trim() });
+      // Some entries write `/data/models_missile/foo.cas` (leading
+      // slash) — the game tolerates it but our path-resolver and the
+      // on-disk walk both produce `data/...`, so normalize here.
+      const p = mm[1].trim().replace(/^[\\/]+/, "");
+      modelPaths.push({ type: currentType, path: p });
     }
   }
   return { types, modelPaths };

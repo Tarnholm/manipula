@@ -455,29 +455,66 @@ export default function App() {
           // filenames so e.g. EBUnit_X.cas in DMB matches ebunit_x.cas on
           // disk and doesn't false-flag as orphan).
           const referencedLower = new Set();
-          for (const t of dmbParse.textures) if (t.path) { referenced.add(t.path); referencedLower.add(t.path.toLowerCase()); }
-          for (const m of dmbParse.models) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
-          // DMS (descr_model_strat) references models by bare path —
-          // implicitly expanded on disk into `_lod0.cas` .. `_lod3.cas`
-          // variants. Add each LOD form to the orphan-diff set so the
-          // strat-character LOD files (spies / assassins / diplomats /
-          // generals / captains) don't false-flag as orphans.
-          const dmsParse = f.dms ? parseDMS(f.dms) : { types: new Set(), modelPaths: [] };
-          for (const p of dmsParse.modelPaths) {
-            const base = p.toLowerCase();
+          // Normalize away accidental leading slashes (some RIS lines
+          // are written as `/data/models_missile/foo.cas` instead of
+          // `data/...`). The on-disk walker emits `data/...` form, so
+          // unnormalized refs would orphan-flag every such file.
+          const norm = (p) => String(p || "").replace(/^[\\/]+/, "");
+          const addRef = (p) => { if (!p) return; const n = norm(p); referenced.add(n); referencedLower.add(n.toLowerCase()); };
+          for (const t of dmbParse.textures) addRef(t.path);
+          for (const m of dmbParse.models) addRef(m.path);
+          // DMB bare-model form (`model African data/characters/foo`
+          // with no .cas / _lodN suffix — legacy RIS form used by e.g.
+          // light_infantry_longshield). Game implicitly LOD-expands;
+          // mirror that here so pontus/parni/slave _lodN.cas files
+          // don't false-flag as orphan.
+          for (const m of (dmbParse.bareModels || [])) {
+            const base = norm(m.path).toLowerCase();
+            if (!base) continue;
             for (let i = 0; i < 4; i++) referencedLower.add(`${base}_lod${i}.cas`);
           }
+          // DMS (descr_model_strat). Two forms — bare paths (LOD-
+          // expanded) and DMB-style model_flexi[_m] + texture lines
+          // used by sm_*_general / sm_*_captain blocks (fully qualified
+          // paths, no expansion needed).
+          const dmsParse = f.dms ? parseDMS(f.dms) : { types: new Set(), modelPaths: [], flexiModels: [], textures: [] };
+          for (const p of dmsParse.modelPaths) {
+            const base = norm(p).toLowerCase();
+            for (let i = 0; i < 4; i++) referencedLower.add(`${base}_lod${i}.cas`);
+          }
+          for (const m of (dmsParse.flexiModels || [])) addRef(m.path);
+          for (const t of (dmsParse.textures || [])) addRef(t.path);
           // Projectile model paths from descr_projectile_new — each
           // block has one or more `model data/models_missile/...cas`
           // lines, paths are fully-qualified including the .cas. Add
           // for both missing-check (mod or vanilla fallback) and
           // orphan diff.
-          for (const m of projectileParse.modelPaths) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
+          for (const m of projectileParse.modelPaths) addRef(m.path);
           // Engine model paths from descr_engines — collision /
           // outline / engine_model / engine_platforms / missile_model.
           // Same pattern as projectiles (mod-or-vanilla resolution +
           // orphan diff).
-          for (const m of engineParse.modelPaths) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
+          for (const m of engineParse.modelPaths) addRef(m.path);
+          // Implicit texture prefixes — for projectile + engine models,
+          // textures are *not* declared in their text files; the game
+          // looks for sibling .tga files in `<modelDir>/textures/` keyed
+          // off the model's basename (foo.cas → foo_pbr.tga, foo_n.tga,
+          // foo_s.tga, …). Build a prefix set so the orphan filter can
+          // mark every matching .tga as implicitly referenced rather
+          // than false-flagging the projectile/engine texture set.
+          const implicitTexturePrefixes = new Set();
+          const addImplicitFromModel = (path) => {
+            const lower = norm(path).toLowerCase();
+            const slash = lower.lastIndexOf("/");
+            const dot = lower.lastIndexOf(".");
+            if (slash < 0 || dot <= slash) return;
+            const dir = lower.slice(0, slash);
+            const stem = lower.slice(slash + 1, dot);
+            if (!stem) return;
+            implicitTexturePrefixes.add(`${dir}/textures/${stem}`);
+          };
+          for (const m of projectileParse.modelPaths) addImplicitFromModel(m.path);
+          for (const m of engineParse.modelPaths) addImplicitFromModel(m.path);
           let dmbAssetMissing = new Set();
           let dmbAssetOrphans = [];
           if (window.eduAPI && window.eduAPI.checkModPaths && referenced.size > 0) {
@@ -485,13 +522,20 @@ export default function App() {
             if (r && Array.isArray(r.missing)) dmbAssetMissing = new Set(r.missing);
           }
           if (window.eduAPI && window.eduAPI.listModAssetFiles) {
-            // data/animals carries mount textures + model_flexi files;
-            // data/models_missile carries projectile LOD models. Walk
-            // both alongside data/characters so orphans in any of the
-            // three subtrees surface.
+            // Walk data/characters, data/animals, data/models_missile
+            // and data/models_engine recursively (textures/ subfolders
+            // are included by the recursive walker).
             const r = await window.eduAPI.listModAssetFiles(["characters", "animals", "models_missile", "models_engine"], [".tga", ".cas"]);
             if (r && Array.isArray(r.files)) {
-              for (const f of r.files) if (!referencedLower.has(f.toLowerCase())) dmbAssetOrphans.push(f);
+              for (const f of r.files) {
+                const lower = f.toLowerCase();
+                if (referencedLower.has(lower)) continue;
+                let implicit = false;
+                for (const pfx of implicitTexturePrefixes) {
+                  if (lower.startsWith(pfx)) { implicit = true; break; }
+                }
+                if (!implicit) dmbAssetOrphans.push(f);
+              }
             }
           }
           setModIndex(prev => ({ ...prev, dmbAssetMissing, dmbAssetOrphans }));
