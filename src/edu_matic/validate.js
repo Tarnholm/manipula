@@ -115,6 +115,9 @@ function validate(project, opts) {
   ctx.mountModelByType = (opts && opts.mountModelByType instanceof Map) ? opts.mountModelByType : null;
   ctx.projectileTypes = (opts && opts.projectileTypes instanceof Set) ? opts.projectileTypes : null;
   ctx.projectileModelPaths = (opts && Array.isArray(opts.projectileModelPaths)) ? opts.projectileModelPaths : null;
+  ctx.engineTypes = (opts && opts.engineTypes instanceof Set) ? opts.engineTypes : null;
+  ctx.engineProjectileByType = (opts && opts.engineProjectileByType instanceof Map) ? opts.engineProjectileByType : null;
+  ctx.engineModelPaths = (opts && Array.isArray(opts.engineModelPaths)) ? opts.engineModelPaths : null;
   ctx.dmbTextures = (opts && Array.isArray(opts.dmbTextures)) ? opts.dmbTextures : null;
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
@@ -136,11 +139,15 @@ function validate(project, opts) {
     checkUnitDictionaryTag(u, ctx, push);
     checkUnitMount(u, ctx, push);
     checkUnitProjectile(u, ctx, push);
+    checkUnitEngine(u, ctx, push);
   }
   checkMountModelInDmb(ctx, push);
   checkOrphanMounts(project, ctx, push);
   checkProjectileAssetReferences(ctx, push);
   checkOrphanProjectiles(project, ctx, push);
+  checkEngineProjectileRefs(ctx, push);
+  checkEngineAssetReferences(ctx, push);
+  checkOrphanEngines(project, ctx, push);
   // Compute the orphan-DMB-type set once — both checkDmbOrphanTypes
   // (emits the rows) and checkDmbAssetReferences (suppresses missing-
   // file errors whose parent type is orphan, since deleting the type
@@ -614,6 +621,69 @@ function checkOrphanProjectiles(project, ctx, push) {
   }
 }
 
+// EDU's `Engine` column points at a `type X` block in
+// descr_engines.txt (siege engines, ladders, rams, towers). Empty
+// is fine for non-engine units — checkUnitConditionalFields already
+// flags missing engine when Category=Engine; we just verify the name
+// resolves when set.
+function checkUnitEngine(u, ctx, push) {
+  if (!ctx.engineTypes) return;
+  const eng = String(u.Engine || u.engine || "").trim();
+  if (!eng) return;
+  if (!ctx.engineTypes.has(eng)) {
+    push(err(u.name, u.row, `Unit "Engine" references "${eng}" but no matching 'type ${eng}' block exists in descr_engines.txt.`, "unit-engine-missing"));
+  }
+}
+
+// Each descr_engines `type X` block has a `projectile Y` line that
+// must resolve to a `projectile Y` block in descr_projectile_new.txt.
+// Without it the engine has no missile to fire and CTDs on first shot.
+function checkEngineProjectileRefs(ctx, push) {
+  if (!ctx.engineProjectileByType || !ctx.projectileTypes) return;
+  for (const [engineType, projectile] of ctx.engineProjectileByType) {
+    if (!projectile) continue;
+    if (!ctx.projectileTypes.has(projectile)) {
+      push(err(`[descr_engines] ${engineType}`, null, `Engine '${engineType}' references projectile "${projectile}" but no matching 'projectile ${projectile}' block exists in descr_projectile_new.txt.`, "engine-projectile-missing"));
+    }
+  }
+}
+
+// Engine model paths — engine_collision / engine_outline /
+// engine_model / engine_platforms / missile_model — must exist on
+// disk (mod or vanilla). Reuses the dmbAssetMissing set populated by
+// the renderer-side bulk fs check (which has the .tga.dds + vanilla
+// fallback baked in).
+function checkEngineAssetReferences(ctx, push) {
+  if (!ctx.dmbAssetMissing || ctx.dmbAssetMissing.size === 0) return;
+  if (!ctx.engineModelPaths) return;
+  const seen = new Set();
+  for (const ref of ctx.engineModelPaths) {
+    if (!ref || !ref.path) continue;
+    if (!ctx.dmbAssetMissing.has(ref.path)) continue;
+    const key = `${ref.type}|${ref.path}|${ref.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    push(err(`[descr_engines] ${ref.type || "(no type)"}`, null, `Engine ${ref.kind} "${ref.path}" — file not found in mod data folder OR vanilla data folder. Set the vanilla data dir via the topbar if this is a vanilla engine.`, "engine-model-missing"));
+  }
+}
+
+// descr_engines types that no EDU unit's Engine column references.
+// Warn severity — orphan engine blocks waste load time but don't
+// crash. Cleanup target.
+function checkOrphanEngines(project, ctx, push) {
+  if (!ctx.engineTypes || !project || !Array.isArray(project.units)) return;
+  const used = new Set();
+  for (const u of project.units) {
+    if (u.kind !== "unit") continue;
+    const eng = String(u.Engine || u.engine || "").trim();
+    if (eng) used.add(eng);
+  }
+  for (const t of ctx.engineTypes) {
+    if (used.has(t)) continue;
+    push(err(`[descr_engines] ${t}`, null, `Engine type '${t}' is declared in descr_engines.txt but no EDU unit's Engine column references it — safe to delete unless another file uses it.`, "engine-orphan", "warn"));
+  }
+}
+
 // DMB → mod-data: every `pbr_texture / texture / model_flexi*` path
 // must resolve to a real file under the mod data folder. ctx.dmbAssetMissing
 // is the precomputed set of missing paths (built on the renderer side
@@ -739,6 +809,17 @@ function checkDmbOrphanAssets(ctx, push) {
       code = "dmb-animal-orphan-asset";
       kind = ext && ext[1] === "tga" ? "DMB animal texture" : "DMB animal-model";
       location = "data/animals";
+    } else if (lower.startsWith("data/models_missile/")) {
+      // Projectile LOD models keyed off descr_projectile_new `model` lines.
+      code = "projectile-model-orphan-asset";
+      kind = "projectile model";
+      location = "data/models_missile";
+    } else if (lower.startsWith("data/models_engine/")) {
+      // Engine collision/outline/model + missile_model files keyed off
+      // descr_engines `engine_*` / `missile_model` lines.
+      code = "engine-model-orphan-asset";
+      kind = "engine model";
+      location = "data/models_engine";
     } else if (ext && ext[1] === "tga") {
       code = "dmb-texture-orphan-asset";
       kind = "DMB texture (pbr_texture / texture)";

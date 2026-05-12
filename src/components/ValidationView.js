@@ -252,16 +252,16 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
         //   • dmb-orphan-type → strip 'type X' blocks from DMB
         // Need codeFilter to be exactly one of those (otherwise mixing
         // selections would be ambiguous about what action to run).
-        const actionableCodes = new Set(["dmb-orphan-asset", "dmb-texture-orphan-asset", "dmb-model-orphan-asset", "dms-model-orphan-asset", "dmb-animal-orphan-asset", "dmb-orphan-type"]);
+        const actionableCodes = new Set(["dmb-orphan-asset", "dmb-texture-orphan-asset", "dmb-model-orphan-asset", "dms-model-orphan-asset", "dmb-animal-orphan-asset", "projectile-model-orphan-asset", "engine-model-orphan-asset", "dmb-orphan-type"]);
         const onlyCode = codeFilter.size === 1 ? [...codeFilter][0] : null;
         if (!onlyCode || !actionableCodes.has(onlyCode)) return null;
         const visibleIds = [...groups.keys()];
         const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedUnitIds.has(id));
         const selectionCount = visibleIds.filter(id => selectedUnitIds.has(id)).length;
-        // The three asset-orphan codes (legacy + the v0.36.41 split)
-        // share the same delete-from-disk action; type-orphan uses the
-        // DMB strip-block path. assetCodes covers them in one place.
-        const assetCodes = new Set(["dmb-orphan-asset", "dmb-texture-orphan-asset", "dmb-model-orphan-asset", "dms-model-orphan-asset", "dmb-animal-orphan-asset"]);
+        // All asset-orphan codes share the delete-from-disk action;
+        // type-orphan uses the DMB strip-block path. assetCodes covers
+        // every orphan-asset variant we know about.
+        const assetCodes = new Set(["dmb-orphan-asset", "dmb-texture-orphan-asset", "dmb-model-orphan-asset", "dms-model-orphan-asset", "dmb-animal-orphan-asset", "projectile-model-orphan-asset", "engine-model-orphan-asset"]);
         const isAssetCode = assetCodes.has(onlyCode);
         const labelFor = isAssetCode
           ? `Delete ${selectionCount} orphan file${selectionCount === 1 ? "" : "s"} from disk`
@@ -342,7 +342,7 @@ function renderGroup(unitId, issuesForUnit, units, modIndex, onJump, selectedUni
   const heading = u
     ? (display || u.unit)
     : (issuesForUnit[0] && issuesForUnit[0].unit) || unitId;
-  const actionableCodes = new Set(["dmb-orphan-asset", "dmb-texture-orphan-asset", "dmb-model-orphan-asset", "dms-model-orphan-asset", "dmb-animal-orphan-asset", "dmb-orphan-type"]);
+  const actionableCodes = new Set(["dmb-orphan-asset", "dmb-texture-orphan-asset", "dmb-model-orphan-asset", "dms-model-orphan-asset", "dmb-animal-orphan-asset", "projectile-model-orphan-asset", "engine-model-orphan-asset", "dmb-orphan-type"]);
   const showCheckbox = codeFilter && codeFilter.size === 1 && actionableCodes.has([...codeFilter][0]);
   const isSelected = selectedUnitIds && selectedUnitIds.has(unitId);
   return (

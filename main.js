@@ -322,6 +322,7 @@ ipcMain.handle("load-mod-files", async () => {
     dms: path.join(d, "descr_model_strat.txt"),
     dmount: path.join(d, "descr_mount.txt"),
     dprojectile: path.join(d, "descr_projectile_new.txt"),
+    dengine: path.join(d, "descr_engines.txt"),
     descrCharacter: path.join(d, "descr_character.txt"),
     eventScriptsDir: path.join(d, "major_event_scripts"),
   };

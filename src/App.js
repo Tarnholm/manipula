@@ -111,6 +111,7 @@ import { parseDMB } from "./parsers/dmb";
 import { parseDMS } from "./parsers/dms";
 import { parseDescrMount } from "./parsers/dmount";
 import { parseDescrProjectile } from "./parsers/dprojectile";
+import { parseDescrEngine } from "./parsers/dengine";
 import { renderAllPreview, applyUnitsToEDB, diffEDB, verifyRoundTrip } from "./generator";
 import { migrateV1 } from "./grades";
 import { findQualityClass } from "./qualityClasses";
@@ -375,6 +376,11 @@ export default function App() {
       // declares one or more `model <path>` LOD lines (under
       // data/models_missile/) we'll asset-check.
       const projectileParse = f.dprojectile ? parseDescrProjectile(f.dprojectile) : { types: new Set(), modelPaths: [] };
+      // descr_engines.txt — engine type names + their projectile +
+      // every model_/missile_ path. EDU's `engine` column references
+      // the type names; engines' projectile field references
+      // descr_projectile_new.
+      const engineParse = f.dengine ? parseDescrEngine(f.dengine) : { types: new Set(), projectileByType: new Map(), modelPaths: [] };
       // Recency tracking — persist a {typeName: ISO firstSeen} map in
       // localStorage so we can flag DMB types added recently as "likely
       // WIP" rather than safe-to-delete orphans. The user's workflow:
@@ -423,6 +429,9 @@ export default function App() {
         mountModelByType: mountParse.modelByType,
         projectileTypes: projectileParse.types,
         projectileModelPaths: projectileParse.modelPaths,
+        engineTypes: engineParse.types,
+        engineProjectileByType: engineParse.projectileByType,
+        engineModelPaths: engineParse.modelPaths,
         dmbTextures: dmbParse.textures,
         dmbModelFiles: dmbParse.models,
         strings: { ...prev.strings, buildings: buildingStrings, expandedBi },
@@ -464,6 +473,11 @@ export default function App() {
           // for both missing-check (mod or vanilla fallback) and
           // orphan diff.
           for (const m of projectileParse.modelPaths) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
+          // Engine model paths from descr_engines — collision /
+          // outline / engine_model / engine_platforms / missile_model.
+          // Same pattern as projectiles (mod-or-vanilla resolution +
+          // orphan diff).
+          for (const m of engineParse.modelPaths) if (m.path) { referenced.add(m.path); referencedLower.add(m.path.toLowerCase()); }
           let dmbAssetMissing = new Set();
           let dmbAssetOrphans = [];
           if (window.eduAPI && window.eduAPI.checkModPaths && referenced.size > 0) {
@@ -475,7 +489,7 @@ export default function App() {
             // data/models_missile carries projectile LOD models. Walk
             // both alongside data/characters so orphans in any of the
             // three subtrees surface.
-            const r = await window.eduAPI.listModAssetFiles(["characters", "animals", "models_missile"], [".tga", ".cas"]);
+            const r = await window.eduAPI.listModAssetFiles(["characters", "animals", "models_missile", "models_engine"], [".tga", ".cas"]);
             if (r && Array.isArray(r.files)) {
               for (const f of r.files) if (!referencedLower.has(f.toLowerCase())) dmbAssetOrphans.push(f);
             }
