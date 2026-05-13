@@ -381,6 +381,42 @@ export default function App() {
       // the type names; engines' projectile field references
       // descr_projectile_new.
       const engineParse = f.dengine ? parseDescrEngine(f.dengine) : { types: new Set(), projectileByType: new Map(), modelPaths: [] };
+      // descr_model_strat.txt — strat-map character models. Parsed
+      // up-front (not just inside the asset audit) because some sm_*
+      // blocks reuse DMB-declared battle models via a shared `.cas`
+      // path (e.g. sm_illyrian_general's model_flexi line points at
+      // data/characters/illyria_officer_lod0.cas, the same file DMB's
+      // `type illyria_officer` declares). Without crediting that DMB
+      // type as "in use via DMS", it false-flags as orphan even though
+      // deleting it would break the strat character.
+      const dmsParse = f.dms ? parseDMS(f.dms) : { types: new Set(), modelPaths: [], flexiModels: [], textures: [] };
+      // Map every DMB model_flexi/bare-model path → its declaring DMB
+      // type. Used to translate DMS path-references into DMB-type
+      // references so dmbExtraUsage can include them.
+      const dmbPathToType = new Map();
+      for (const m of dmbParse.models) {
+        if (m.path && m.type) dmbPathToType.set(m.path.toLowerCase(), m.type);
+      }
+      for (const m of (dmbParse.bareModels || [])) {
+        if (!m.path || !m.type) continue;
+        const base = m.path.toLowerCase();
+        for (let i = 0; i < 4; i++) dmbPathToType.set(`${base}_lod${i}.cas`, m.type);
+      }
+      // Credit DMB types used by DMS — flexi-form (path → direct
+      // lookup) and bare-form (LOD-expand and try each variant).
+      for (const m of (dmsParse.flexiModels || [])) {
+        if (!m.path) continue;
+        const t = dmbPathToType.get(m.path.toLowerCase().replace(/^[\\/]+/, ""));
+        if (t) dmbExtraUsage.add(t);
+      }
+      for (const p of (dmsParse.modelPaths || [])) {
+        if (!p) continue;
+        const base = p.toLowerCase().replace(/^[\\/]+/, "");
+        for (let i = 0; i < 4; i++) {
+          const t = dmbPathToType.get(`${base}_lod${i}.cas`);
+          if (t) dmbExtraUsage.add(t);
+        }
+      }
       // Recency tracking — persist a {typeName: ISO firstSeen} map in
       // localStorage so we can flag DMB types added recently as "likely
       // WIP" rather than safe-to-delete orphans. The user's workflow:
@@ -476,8 +512,8 @@ export default function App() {
           // DMS (descr_model_strat). Two forms — bare paths (LOD-
           // expanded) and DMB-style model_flexi[_m] + texture lines
           // used by sm_*_general / sm_*_captain blocks (fully qualified
-          // paths, no expansion needed).
-          const dmsParse = f.dms ? parseDMS(f.dms) : { types: new Set(), modelPaths: [], flexiModels: [], textures: [] };
+          // paths, no expansion needed). dmsParse is hoisted above so
+          // its DMB-type linkage feeds into dmbExtraUsage.
           for (const p of dmsParse.modelPaths) {
             const base = norm(p).toLowerCase();
             for (let i = 0; i < 4; i++) referencedLower.add(`${base}_lod${i}.cas`);
