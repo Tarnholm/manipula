@@ -324,12 +324,38 @@ function ModInfoScreen({ project, setProject }) {
         </div>
       </div>
       <h3 style={{ marginTop: 24 }}>Globals ({Object.keys(g).length})</h3>
-      <DataTable
-        columns={["Name", "Value"]}
-        rows={Object.entries(g).sort(([a],[b]) => NATURAL_COLLATOR.compare(a, b)).map(([k, v]) => [k, v])}
-        maxHeight="60vh"
-        searchable
-      />
+      {(() => {
+        const sortedKeys = Object.keys(g).sort((a, b) => NATURAL_COLLATOR.compare(a, b));
+        const rows = sortedKeys.map((k) => [k, g[k]]);
+        const onEditGlobal = (key, columnKey, newValue) => {
+          // Only the Value column is editable — Name is the lookup key
+          // the validator + compute pipeline reference, renaming would
+          // silently break required-global checks.
+          if (columnKey !== "Value") return;
+          if (String(g[key] ?? "") === String(newValue ?? "")) return;
+          // Coerce numeric strings back to Number so downstream
+          // arithmetic doesn't string-concat. Empty/non-numeric stays
+          // as-is (some globals may legitimately be text in the future).
+          let v = newValue;
+          if (typeof v === "string") {
+            const trimmed = v.trim();
+            if (trimmed !== "" && !Number.isNaN(Number(trimmed))) v = Number(trimmed);
+            else v = trimmed;
+          }
+          setProject({ ...project, globals: { ...g, [key]: v } });
+        };
+        return (
+          <DataTable
+            columns={["Name", "Value"]}
+            rows={rows}
+            rowIds={sortedKeys}
+            onEdit={onEditGlobal}
+            editable
+            maxHeight="60vh"
+            searchable
+          />
+        );
+      })()}
     </div>
   );
 }
