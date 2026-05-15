@@ -467,18 +467,18 @@ function CoreDataScreen({ project, setProject }) {
         rowIds={rows.map((_, i) => i)}
         searchPersistKey={`edu-coredata-${active}`}
         onEdit={onEdit}
-        editable={unlocked}
+        editable
         maxHeight="65vh"
         searchable
-        onAddRow={unlocked ? addBlank : null}
-        onDuplicateRow={unlocked ? duplicateRow : null}
-        onDeleteRow={unlocked ? deleteRow : null}
+        onAddRow={addBlank}
+        onDuplicateRow={duplicateRow}
+        onDeleteRow={deleteRow}
         addRowLabel="+ New row"
-        bulkActions={unlocked ? [
+        bulkActions={[
           { label: "Set field on selected…", setField: { onApply: bulkSetCoreData } },
           { label: "Duplicate selected", onClick: bulkDuplicateCoreData },
           { label: "Delete selected", destructive: true, onClick: bulkDeleteCoreData },
-        ] : null}
+        ]}
       />
     </div>
   );
