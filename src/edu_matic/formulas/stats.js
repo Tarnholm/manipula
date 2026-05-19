@@ -73,13 +73,20 @@ function computeStats(r, mr, project, unitPriArmour) {
   // v0.7.0 renamed the dwelling heat column from "Heat mdf" to "heat modifier".
   const dwelHeat = num((r.dwel && r.dwel["heat modifier"]) ?? (r.dwel && r.dwel["Heat mdf"]), 0);
 
+  // Mounted heat splits horse-mass burden and rider-mass burden. The two
+  // weight multipliers were hard-coded to 1 and 0.7 in the original VBA;
+  // surfacing them as globals lets mods tune cavalry overheating without
+  // touching code. Defaults preserve the VBA numbers.
+  const horseMassHeatMdf = num(globals.HorseMassHeatModifier, 1);
+  const riderMassHeatMdf = num(globals.RiderMassHeatModifier, 0.7);
+
   let heat;
   if (cat === "foot" || cat === "foot missile" || cat === "handler" || cat === "engine") {
     heat = cint(mr.armour.heatMdf * ((mr.soldierMass - manMass) / extraMassPerHeat))
          + qualHeat + dwelHeat;
   } else if (cat === "mounted" || cat === "mounted missile") {
-    heat = cint(mr.armour.heatMdf * (((mr.horseMass + mr.soldierMass) / baseHorseMass) +
-                                     0.7 * ((mr.soldierMass - manMass) / extraMassPerHeat)))
+    heat = cint(mr.armour.heatMdf * (horseMassHeatMdf * ((mr.horseMass + mr.soldierMass) / baseHorseMass) +
+                                     riderMassHeatMdf * ((mr.soldierMass - manMass) / extraMassPerHeat)))
          + qualHeat + dwelHeat;
   } else if (cat === "special" || cat === "chariot") {
     const spMass = num(r.spMount && r.spMount["Mount mass"], 0);
@@ -94,9 +101,21 @@ function computeStats(r, mr, project, unitPriArmour) {
   out["heat"] = clamp(cint(heat), -2, heatMax);
 
   // ── Cases 170–173 ground effects (scrub/sand/forest/snow) ─
+  // Sand and snow include a mass-effect term not in the original VBA:
+  //   final = baseBonus + Constant − (Modifier × SoldierMass)
+  // The Constant lets a mod set the zero-effect mass point (e.g. a 2.4
+  // constant with a 3.0 modifier zeroes out at SoldierMass ≈ 0.8, so
+  // light units gain and heavy units lose). All four globals default
+  // to 0, which keeps pre-existing projects byte-identical to VBA.
   const meleeFrac = num(globals.MeleeFraction, 0.5);
+  const massSandMdf   = num(globals.MassSandModifier, 0);
+  const massSandConst = num(globals.MassSandConstant, 0);
+  const massSnowMdf   = num(globals.MassSnowModifier, 0);
+  const massSnowConst = num(globals.MassSnowConstant, 0);
   for (const k of ["scrub", "sand", "forest", "snow"]) {
-    const v = groundBonus(r, k, isM2, meleeFrac);
+    let v = groundBonus(r, k, isM2, meleeFrac);
+    if (k === "sand") v += massSandConst - massSandMdf * mr.soldierMass;
+    else if (k === "snow") v += massSnowConst - massSnowMdf * mr.soldierMass;
     out[k] = clamp(cint(v), -8, 8);
   }
 

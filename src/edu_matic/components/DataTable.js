@@ -639,9 +639,11 @@ export default function DataTable({
                 const isPinned = pinned.has(c);
                 const w = colWidths[c];
                 const sortIcon = sortBy && sortBy.key === c ? (sortBy.dir === "asc" ? " ▲" : " ▼") : "";
-                const style = {};
+                // Always sticky-top so the column headings stay visible during
+                // vertical scroll. Pinned (left-sticky) columns add their own
+                // left offset + higher z so the corner cell wins both axes.
+                const style = { position: "sticky", top: 0, zIndex: 3 };
                 if (isPinned) {
-                  style.position = "sticky";
                   style.left = colLeftOffsets[c] || 0;
                   style.zIndex = 5;
                   style.background = "var(--bg-elev2)";

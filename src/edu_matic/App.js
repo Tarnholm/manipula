@@ -25,6 +25,20 @@ import DataTable from "./components/DataTable";
 // produces. Reused across the Mod Info and Core Data screens.
 const NATURAL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
+// Globals that the new heat / sand / snow formulas read but that legacy
+// xlsm projects don't carry as defined names. Seeded into project.globals
+// the first time a project is loaded so they show up — editable — in the
+// Mod Info Globals table. The defaults reproduce the original VBA result
+// (heat: 1.0 / 0.7 multipliers; sand/snow: no mass effect at all).
+const NEW_HEAT_TERRAIN_GLOBALS = {
+  HorseMassHeatModifier: 1,
+  RiderMassHeatModifier: 0.7,
+  MassSandModifier: 0,
+  MassSandConstant: 0,
+  MassSnowModifier: 0,
+  MassSnowConstant: 0,
+};
+
 const VIEWS = [
   { key: "project",  label: "Project",        hint: "Load / save"          },
   { key: "modinfo",  label: "Mod Info",       hint: "Name, platform, era"  },
@@ -250,6 +264,20 @@ function ProjectScreen({ project, onImport, projectDir }) {
 function ModInfoScreen({ project, setProject }) {
   const [hookStatus, setHookStatus] = useState(null);
   const [hookBusy, setHookBusy] = useState(false);
+  // Backfill any missing heat/terrain tuning globals so they show up in
+  // the table for projects imported before these knobs existed. One-shot
+  // because once seeded the keys are in project.globals and the next
+  // pass finds nothing to add.
+  useEffect(() => {
+    if (!project || !project.globals) return;
+    const missing = {};
+    for (const [k, v] of Object.entries(NEW_HEAT_TERRAIN_GLOBALS)) {
+      if (!(k in project.globals)) missing[k] = v;
+    }
+    if (Object.keys(missing).length > 0) {
+      setProject({ ...project, globals: { ...project.globals, ...missing } });
+    }
+  }, [project, setProject]);
   if (!project) return <EmptyScreen />;
   const mi = project.modInfo;
   const g = project.globals;
