@@ -10,7 +10,7 @@
 // compute). File I/O (file dialogs, binary reads, EDU writes) goes
 // through window.eduAPI (see preload.js).
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import "./App.css";
 import { importXlsmBuffer } from "./xlsmImporter";
 import { validate, diagnose } from "./validate";
@@ -396,13 +396,37 @@ function CoreDataScreen({ project, setProject }) {
   // Defer early-returns until after every hook below has been called.
   // Same Rules-of-Hooks fix as UnitsScreen / ArmourScreen.
   const rows = tables[active] || [];
-  // Order columns by union of keys in this table's rows so a sparse row
-  // with missing keys doesn't drop the columns entirely.
+  // Lock column order per table for the lifetime of the screen mount.
+  // Editing a cell mutates each row's key insertion order (delete + add),
+  // and the previous union-of-keys recompute on every render reflected
+  // that, shuffling columns mid-type — most painfully the ground-effect
+  // group (scrub/sand/forest/snow) splitting around "special ability".
+  // Now: take the first observed table's column order from the xlsm
+  // (which preserves the spreadsheet layout) and never reorder. New
+  // keys discovered later are appended at the end so we don't silently
+  // hide them.
+  const colOrderRef = useRef({});
   const columns = useMemo(() => {
-    const s = new Set();
-    for (const r of rows) for (const k of Object.keys(r)) s.add(k);
-    return [...s];
-  }, [rows]);
+    if (!active) return [];
+    const present = new Set();
+    for (const r of rows) for (const k of Object.keys(r)) present.add(k);
+    const cached = colOrderRef.current[active];
+    if (cached && cached.length) {
+      const out = [...cached];
+      for (const k of present) if (!out.includes(k)) out.push(k);
+      if (out.length !== cached.length) colOrderRef.current[active] = out;
+      return colOrderRef.current[active];
+    }
+    // Seed from the union but in the order rows expose the keys (which
+    // matches the xlsm column order at import time, since rows[0] was
+    // built in that order). Take the first row's keys as the spine and
+    // append anything found only in later rows.
+    const seed = rows[0] ? Object.keys(rows[0]) : [];
+    const out = [...seed];
+    for (const k of present) if (!out.includes(k)) out.push(k);
+    colOrderRef.current[active] = out;
+    return out;
+  }, [active, rows]);
 
   // Core Data is freely editable — the password lock the screen used to
   // gate edits behind has been removed. (modInfo.coreDataLockHash may
@@ -475,6 +499,31 @@ function CoreDataScreen({ project, setProject }) {
     setProject({ ...project, coreData: { ...tables, [active]: next } });
   }, [tables, active, project, setProject]);
 
+  // Per-table column edit metadata. Currently used to swap the free-text
+  // editor for a dropdown on a handful of well-known enum columns —
+  // most importantly the specialties table's three "special ability"
+  // slots, which only accept a fixed set of RTW attribute keywords.
+  // Options are derived from the values already present in the column
+  // so user-added attributes appear in the picker next time.
+  const coreDataColumnMeta = useMemo(() => {
+    const meta = {};
+    const t = tables[active];
+    if (!Array.isArray(t) || t.length === 0) return meta;
+    if (active === "specialties") {
+      const SA_COLS = ["special ability", "special ability 2", "special ability 3"];
+      const seen = new Set();
+      for (const row of t) {
+        for (const c of SA_COLS) {
+          const v = row && row[c];
+          if (v != null && v !== "") seen.add(String(v));
+        }
+      }
+      const opts = ["", ...Array.from(seen).sort()];
+      for (const c of SA_COLS) meta[c] = { type: "select", options: opts };
+    }
+    return meta;
+  }, [tables, active]);
+
   // Add a brand-new core data table. Used when a teammate needs a
   // category set the xlsm didn't ship with — e.g. a new specialMounts
   // row. Tables are arrays of objects keyed by column name; we seed
@@ -519,6 +568,7 @@ function CoreDataScreen({ project, setProject }) {
         columns={columns}
         rows={rows.map((r) => columns.map((c) => r[c]))}
         rowIds={rows.map((_, i) => i)}
+        columnMeta={coreDataColumnMeta}
         searchPersistKey={`edu-coredata-${active}`}
         onEdit={onEdit}
         editable
@@ -783,6 +833,14 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // Build the column order: explicit HEAD list, then per-faction availability
   // columns + slave, then 4 ownership_N columns, then TAIL list, then any
   // remaining unrecognised keys at the end so we never silently drop one.
+  //
+  // The trailing "remaining keys" bucket was the order-shifting culprit:
+  // editing a cell mutates a unit's own key insertion order (delete + add),
+  // and Set iteration walks units row-by-row, so a single edit could reshuffle
+  // unknown-key columns mid-session. We cache the first-computed order in a
+  // ref and only append genuinely new keys at the end thereafter — the user
+  // sees a stable column layout no matter what they type.
+  const allKeysRef = useRef([]);
   const allKeys = useMemo(() => {
     const present = new Set();
     let hasAvailability = false;
@@ -795,6 +853,14 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         present.add(k);
       }
     }
+    const cached = allKeysRef.current;
+    if (cached && cached.length) {
+      // Keep stable order; only append keys we've never seen.
+      const out = [...cached];
+      for (const k of present) if (!out.includes(k)) out.push(k);
+      if (out.length !== cached.length) allKeysRef.current = out;
+      return allKeysRef.current;
+    }
     const ordered = [];
     for (const k of UNITS_HEAD) if (present.has(k)) { ordered.push(k); present.delete(k); }
     if (hasAvailability) {
@@ -804,6 +870,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
     for (const k of UNITS_TAIL) if (present.has(k)) { ordered.push(k); present.delete(k); }
     for (const k of present) ordered.push(k);
+    allKeysRef.current = ordered;
     return ordered;
   }, [units, factionKeys]);
 

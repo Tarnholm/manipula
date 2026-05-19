@@ -1209,6 +1209,14 @@ function SectionLabel({ text, editable, onCommit }) {
 // Cell — owns its own editing state. Memoized so only the clicked cell (or a
 // cell whose underlying value just changed) re-renders. Without this, a click
 // on one cell would re-render the whole 25k-cell table.
+//
+// One-editor invariant: clicking another cell sometimes fails to blur the
+// previously focused input (DOM event ordering races during state updates),
+// leaving multiple cells stuck in editing state with no way to escape via
+// keyboard. We additionally broadcast a "dtable-edit-start" CustomEvent every
+// time a cell opens its editor; every other editing cell listens and force-
+// commits + closes itself. A document-level Escape handler does the same so
+// the user always has a keyboard escape hatch when something goes sideways.
 const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove, stickyStyle }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -1218,6 +1226,9 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
   // commit captures `draft`, and commit gets the stale prior value).
   const draftRef = useRef("");
   const touchedRef = useRef(false);
+  // Identity used by the broadcast — "row|col" so the listener can compare
+  // without an object equality check.
+  const myKey = `${rowOrigIdx}|${columnKey}`;
   const text = value != null ? String(value) : "";
   const startEdit = (e) => {
     // Modifier-click is row selection (handled at the tr level); skip
@@ -1230,6 +1241,8 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     setDraft(initial);
     draftRef.current = initial;
     touchedRef.current = false;
+    // Tell any other cell currently editing to close itself before we open.
+    try { document.dispatchEvent(new CustomEvent("dtable-edit-start", { detail: { key: myKey } })); } catch {}
     setEditing(true);
   };
   // Auto-enter edit mode when the parent flagged this cell as the
@@ -1241,6 +1254,7 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       setDraft(initial);
       draftRef.current = initial;
       touchedRef.current = false;
+      try { document.dispatchEvent(new CustomEvent("dtable-edit-start", { detail: { key: myKey } })); } catch {}
       setEditing(true);
       onAutoEnterConsumed && onAutoEnterConsumed();
     }
@@ -1253,6 +1267,27 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     if (final !== text) onCommit(rowOrigIdx, columnKey, final);
   };
   const cancel = () => setEditing(false);
+  // Force-close on broadcast (another cell is opening) and on Escape (so the
+  // user can always bail out even if their click never landed on this cell).
+  useEffect(() => {
+    if (!editing) return;
+    const onOtherEditStart = (e) => {
+      const k = e && e.detail && e.detail.key;
+      if (k && k !== myKey) commit();
+    };
+    const onEscape = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        cancel();
+      }
+    };
+    document.addEventListener("dtable-edit-start", onOtherEditStart);
+    document.addEventListener("keydown", onEscape, true);
+    return () => {
+      document.removeEventListener("dtable-edit-start", onOtherEditStart);
+      document.removeEventListener("keydown", onEscape, true);
+    };
+  }, [editing, myKey]);
   const onDraftChange = (v) => { touchedRef.current = true; draftRef.current = v; setDraft(v); };
   // Flag dot — small coloured circle in the leftmost cell of any row
   // that has an error / warn / info / recruit-line linkage. Severity
