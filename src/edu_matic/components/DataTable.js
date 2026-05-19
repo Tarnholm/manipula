@@ -353,6 +353,27 @@ export default function DataTable({
   // automatically. Resolved through navRef so the callback always reads
   // the freshest visible-cell layout (refs survive memoization).
   const [autoEditTarget, setAutoEditTarget] = useState(null);
+  // After +New Row is clicked, the parent appends a row to its array and
+  // we'd otherwise add silently — the grid is faint enough that users
+  // can't tell anything happened. Wrapping onAddRow records the pre-add
+  // length; when rows next grows past that, we autoEditTarget the new
+  // row's first column so its editor opens (which focuses the input,
+  // and the browser auto-scrolls it into view).
+  const [pendingAddRow, setPendingAddRow] = useState(null);  // null | { before: number }
+  const wrappedOnAddRow = useCallback(() => {
+    if (!onAddRow) return;
+    setPendingAddRow({ before: rows.length });
+    onAddRow();
+  }, [onAddRow, rows.length]);
+  useEffect(() => {
+    if (!pendingAddRow) return;
+    if (rows.length > pendingAddRow.before) {
+      const newOrigIdx = rows.length - 1;
+      const firstCol = columns[0];
+      if (firstCol) setAutoEditTarget({ rowOrigIdx: newOrigIdx, columnKey: firstCol });
+      setPendingAddRow(null);
+    }
+  }, [rows.length, pendingAddRow, columns]);
   const navRef = useRef({ dataRowIdxs: [], colKeys: [] });
   const moveCell = useCallback((fromRowIdx, fromCol, dir) => {
     const { dataRowIdxs, colKeys } = navRef.current;
@@ -525,8 +546,8 @@ export default function DataTable({
             <button
               type="button"
               className="btn"
-              onClick={onAddRow}
-              title="Append a new blank row at the end"
+              onClick={wrappedOnAddRow}
+              title="Append a new blank row at the end and open its first cell for editing"
               style={{ marginLeft: 4 }}
             >
               {addRowLabel}
