@@ -3307,19 +3307,29 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
     // activity panel below the action buttons. Only fired when the
     // dropdown is open, so we don't run a child process every 5s for
     // a panel the user isn't looking at.
-    if (api.gitLogFile && s && s.isRepo) {
+    if (api.gitLogRecent && s && s.isRepo) {
       try {
-        const r = await api.gitLogFile(projectDir, ".", 8);
+        const r = await api.gitLogRecent(projectDir, 8);
         if (r && r.ok) {
-          const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
-          setActivity(lines.map(l => {
-            // git-log-file emits %h|%an|%ar|%s — rejoin anything past index 2
-            // so commit subjects containing literal pipes survive intact.
-            const parts = l.split("|");
+          // Format: per commit, a header line "hash|author|age" followed by
+          // %B (subject + body, possibly multi-line) and a sentinel line
+          // "<<<MANIPULA-COMMIT-END>>>". Split on the sentinel, then within
+          // each chunk peel the first line as the metadata strip and treat
+          // the rest as the message body.
+          const chunks = (r.stdout || "").split(/<<<MANIPULA-COMMIT-END>>>\r?\n?/);
+          const commits = [];
+          for (const chunk of chunks) {
+            if (!chunk.trim()) continue;
+            const lines = chunk.replace(/^\r?\n+/, "").split("\n");
+            const head = lines[0] || "";
+            const body = lines.slice(1).join("\n").trim();
+            const parts = head.split("|");
             const [hash, author, age] = parts;
-            const subject = parts.slice(3).join("|");
-            return { hash, author, age, subject };
-          }));
+            const subject = body.split("\n", 1)[0] || "";
+            const rest = body.slice(subject.length).replace(/^\r?\n+/, "");
+            commits.push({ hash, author, age, subject, body: rest });
+          }
+          setActivity(commits);
         }
       } catch { setActivity([]); }
     } else { setActivity([]); }
@@ -3468,6 +3478,10 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
             padding: 14, width: 320, zIndex: 10000,
             fontFamily: "Consolas, monospace", fontSize: 12, color: "#bbb",
             boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+            // Cap height so multi-paragraph commit bodies in Recent activity
+            // don't push the popover off the bottom of the viewport — the
+            // inner content scrolls instead.
+            maxHeight: "calc(100vh - 80px)", overflow: "auto",
           }}
         >
           {!status?.isRepo ? (
@@ -3734,23 +3748,30 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                 <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #2a2a2a" }}>
                   <div style={{ color: "#888", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Recent activity</div>
                   {activity.map((c, i) => (
-                    // Two-line entry per commit: top row is the existing
-                    // hash / author / age strip, second row holds the commit
-                    // subject so users can see WHAT each push contained. The
-                    // subject is the most useful bit when scanning recent
-                    // activity but on a 320-wide popover it'd squeeze out
-                    // hash+author+age if we kept everything on one line.
-                    <div key={i} style={{ fontSize: 11, color: "#bbb", padding: "3px 0", borderBottom: i < activity.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                    // One entry per commit: metadata strip, then subject
+                    // (wraps to as many lines as it needs — no ellipsis), then
+                    // the body if there is one. We give the whole panel a
+                    // generous max-height + scroll so long messages can
+                    // expand vertically without the popover overflowing the
+                    // viewport.
+                    <div key={i} style={{ fontSize: 11, color: "#bbb", padding: "4px 0", borderBottom: i < activity.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
                       <div style={{ display: "flex", gap: 8 }}>
                         <span style={{ color: "#888", fontFamily: "Consolas, monospace" }}>{c.hash}</span>
                         <span style={{ color: "#dca64a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.author}</span>
                         <span style={{ color: "#666" }}>{c.age}</span>
                       </div>
                       {c.subject && (
-                        <div
-                          title={c.subject}
-                          style={{ color: "#ccc", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingLeft: 2 }}
-                        >{c.subject}</div>
+                        <div style={{ color: "#ccc", marginTop: 2, paddingLeft: 2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          {c.subject}
+                        </div>
+                      )}
+                      {c.body && (
+                        <pre style={{
+                          color: "#999", marginTop: 3, marginBottom: 0, paddingLeft: 8,
+                          borderLeft: "2px solid rgba(220,166,74,0.25)",
+                          whiteSpace: "pre-wrap", wordBreak: "break-word",
+                          fontFamily: "inherit", fontSize: 10.5, lineHeight: 1.4,
+                        }}>{c.body}</pre>
                       )}
                     </div>
                   ))}

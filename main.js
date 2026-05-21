@@ -1755,6 +1755,20 @@ ipcMain.handle("git-log-file", async (_e, dir, relPath, n) => {
   const limit = Math.max(1, Math.min(20, parseInt(n, 10) || 5));
   return runGit(dir, ["log", `--format=%h|%an|%ar|%s`, `-n`, String(limit), "--", relPath]);
 });
+// Recent activity panel — full multi-line commit messages. Same hash /
+// author / date header as git-log-file's first line, then %B (subject
+// + body) until a sentinel that can't appear in real commit text. The
+// sentinel approach is simpler than -z (which uses NUL and tends to
+// confuse the stdout->string pipeline) and survives commit messages
+// with arbitrary line breaks, pipes, or quotes.
+ipcMain.handle("git-log-recent", async (_e, dir, n) => {
+  const limit = Math.max(1, Math.min(20, parseInt(n, 10) || 8));
+  return runGit(dir, [
+    "log",
+    `--format=%h|%an|%ar%n%B%n<<<MANIPULA-COMMIT-END>>>`,
+    "-n", String(limit),
+  ]);
+});
 // Bulk per-file blame — one git log call, --name-only, with a sentinel
 // separator on each commit. Renderer parses the output into a
 // Map<relPath, mostRecentCommit> in O(commits + files) so a 800-unit

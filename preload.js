@@ -106,6 +106,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   gitDiffStat: (dir) => ipcRenderer.invoke("git-diff-stat", dir),
   gitDiff: (dir) => ipcRenderer.invoke("git-diff", dir),
   gitLogFile: (dir, relPath, n) => ipcRenderer.invoke("git-log-file", dir, relPath, n),
+  gitLogRecent: (dir, n) => ipcRenderer.invoke("git-log-recent", dir, n),
   gitLogBulk: (dir) => ipcRenderer.invoke("git-log-bulk", dir),
   appendExportUnitsStub: (modDataDir, unitKey, displayName) => ipcRenderer.invoke("append-export-units-stub", modDataDir, unitKey, displayName),
   syncExportUnitsOrder: (modDataDir, orderedKeys) => ipcRenderer.invoke("sync-export-units-order", modDataDir, orderedKeys),
