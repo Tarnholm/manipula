@@ -2254,6 +2254,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         projectDir={projectDir}
         projectDirty={projectDirty}
+        onReloadFromDisk={() => projectDir && loadProjectFromDir(projectDir)}
         onShowShortcuts={() => setShortcutOpen(true)}
         unitsCount={units.length}
         units={units}
@@ -2771,7 +2772,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, onReloadFromDisk, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -2818,6 +2819,9 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
         validationErrors={eduValidationErrors}
         onViewValidation={() => { setEduView("validate"); setActiveTab("edu"); }}
         webhookUrl={(eduProject && eduProject.modInfo && eduProject.modInfo.webhookUrl) || ""}
+        projectDirty={projectDirty || eduDirty}
+        onReloadFromDisk={onReloadFromDisk}
+        onSaveProject={onSaveProject}
       />
 
       <button onClick={onFindReplace} title="Bulk find/replace across all units' requires" style={tbtn("#564")}>Find/Replace…</button>
@@ -3245,7 +3249,7 @@ function syncBtn(activeColor, isActive) {
 // stays out of the way unless it can actually help. Real merges,
 // branch ops, history review etc. are out of scope; users open their
 // usual git tool for those.
-function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewValidation = null, webhookUrl = "" }) {
+function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewValidation = null, webhookUrl = "", projectDirty = false, onReloadFromDisk = null, onSaveProject = null }) {
   const validationErrorCount = validationErrors.length;
   const api = window.eduAPI;
   const [open, setOpen] = useState(false);
@@ -3445,10 +3449,11 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
   const run = async (label, fn) => {
     setBusy(true);
     setLog(label + "…");
+    let result = null;
     try {
-      const r = await fn();
-      const out = (r.stdout || "") + (r.stderr ? "\n" + r.stderr : "");
-      setLog(`${label} ${r.ok ? "✓" : "✗"}\n${out.trim() || "(no output)"}`);
+      result = await fn();
+      const out = (result.stdout || "") + (result.stderr ? "\n" + result.stderr : "");
+      setLog(`${label} ${result.ok ? "✓" : "✗"}\n${out.trim() || "(no output)"}`);
       // Fetch-then-status so the behind count is fresh after the action —
       // critical when push fails with "fetch first": the user needs Pull to
       // un-grey before they can actually unblock themselves.
@@ -3456,6 +3461,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
     } catch (e) {
       setLog(`${label} ✗\n${e.message}`);
     } finally { setBusy(false); }
+    return result;
   };
 
   return (
@@ -3506,6 +3512,21 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                   <span style={{ color: (behind || 0) > 0 ? "#4f8fd6" : "#666" }}>↓ {behind ?? 0} behind</span>
                   {validationErrorCount > 0 && <span style={{ color: "#d66c6c" }}>⚠ {validationErrorCount} errors</span>}
                 </div>
+                {projectDirty && (
+                  // Edits in memory that haven't been Save Project'd to
+                  // disk yet — git can't see them, so Commit + Push won't
+                  // include them. Surface this prominently because every
+                  // missed sync we've seen traces back to this.
+                  <div style={{ marginTop: 6, padding: "6px 8px", background: "rgba(220,166,74,0.10)", border: "1px solid rgba(220,166,74,0.30)", borderRadius: 4, fontSize: 11, color: "#dca64a", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span>⚠ Unsaved edits — git can't see them yet</span>
+                    {onSaveProject && (
+                      <button
+                        onClick={async () => { try { await onSaveProject(); } catch {} }}
+                        style={{ background: "#dca64a", color: "#1a1a1a", border: "none", padding: "2px 8px", borderRadius: 3, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                      >Save Project</button>
+                    )}
+                  </div>
+                )}
                 {dirty && diffStat && (
                   <>
                     <pre style={{ margin: "8px 0 0", padding: 6, background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, fontSize: 10, color: "#bbb", maxHeight: 120, overflow: "auto", whiteSpace: "pre" }}>
@@ -3588,9 +3609,28 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <button
                   disabled={busy || (behind || 0) === 0}
-                  onClick={() => run("Pull", () => api.gitPull(projectDir))}
+                  onClick={async () => {
+                    // Warn before pulling if the user has unsaved in-memory
+                    // edits — the post-pull reload re-reads project JSONs
+                    // from disk and would silently drop anything that
+                    // hadn't been Saved yet.
+                    if (projectDirty) {
+                      const ok = window.confirm(
+                        `You have unsaved project changes. Pulling now will reload the project from disk and discard those edits.\n\n` +
+                        `Save Project first (Ctrl+S) if you want to keep them. Continue anyway?`
+                      );
+                      if (!ok) return;
+                    }
+                    const r = await run("Pull", () => api.gitPull(projectDir));
+                    // The root cause of "I pulled but didn't see his
+                    // changes" — git pull updates JSONs on disk but
+                    // Manipula's in-memory state stays stale. Re-read the
+                    // whole project so units / armour / factions /
+                    // coreData mirror what's now on disk.
+                    if (r && r.ok && onReloadFromDisk) await onReloadFromDisk();
+                  }}
                   style={syncBtn("#4f8fd6", (behind || 0) > 0)}
-                  title="git pull --rebase  (per-file JSON layout makes this silent in nearly all cases — your local commits replay cleanly on top of the remote)"
+                  title="git pull --rebase, then reload the project from disk so the new state is visible immediately."
                 >
                   Pull {behind ? `(${behind})` : ""}
                 </button>
@@ -3601,7 +3641,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                     spells out exactly what dies. */}
                 <button
                   disabled={busy || !(dirty || (behind || 0) > 0)}
-                  onClick={() => {
+                  onClick={async () => {
                     if (!api.gitDiscardAndPull) return;
                     const dirtyCount = (status && status.dirtyCount) || 0;
                     const ok = window.confirm(
@@ -3613,7 +3653,8 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                       `NOT recoverable. Use this only when you don't care about your local state.`
                     );
                     if (!ok) return;
-                    run("Discard + pull", () => api.gitDiscardAndPull(projectDir));
+                    const r = await run("Discard + pull", () => api.gitDiscardAndPull(projectDir));
+                    if (r && r.ok && onReloadFromDisk) await onReloadFromDisk();
                   }}
                   style={{ ...syncBtn("#a44", (dirty || (behind || 0) > 0)), fontWeight: 500 }}
                   title="git reset --hard HEAD && git clean -fd && git pull --rebase  (destructive — wipes local changes)"
