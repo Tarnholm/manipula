@@ -16,7 +16,7 @@ import { importXlsmBuffer } from "./xlsmImporter";
 import { validate, diagnose } from "./validate";
 import { compute } from "./compute";
 import { formatEdu } from "./format";
-import { formatMerc } from "./merc";
+import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -25,11 +25,13 @@ import DataTable from "./components/DataTable";
 // produces. Reused across the Mod Info and Core Data screens.
 const NATURAL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-// Globals that the new heat / sand / snow formulas read but that legacy
-// xlsm projects don't carry as defined names. Seeded into project.globals
-// the first time a project is loaded so they show up — editable — in the
-// Mod Info Globals table. The defaults reproduce the original VBA result
-// (heat: 1.0 / 0.7 multipliers; sand/snow: no mass effect at all).
+// Globals that the new heat / sand / snow / merc formulas read but that
+// legacy xlsm projects don't carry as defined names. Seeded into
+// project.globals the first time a project is loaded so they show up —
+// editable — in the Mod Info Globals table. The defaults reproduce the
+// original VBA result (heat: 1.0 / 0.7 multipliers; sand/snow: no mass
+// effect at all; merc: 1.8× the EDU base cost, matching the prior
+// hardcoded merc.js multiplier).
 const NEW_HEAT_TERRAIN_GLOBALS = {
   HorseMassHeatModifier: 1,
   RiderMassHeatModifier: 0.7,
@@ -37,6 +39,7 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   MassSandConstant: 0,
   MassSnowModifier: 0,
   MassSnowConstant: 0,
+  MercCostMultiplier: 1.8,
 };
 
 const VIEWS = [
@@ -175,7 +178,7 @@ export default function App({ externalProject = null, onProjectChange, controlle
         {view === "units"    && <UnitsScreen    project={project} setProject={setProject} modDataDir={modDataDir} recruitUnits={recruitUnits} lastImportedSnapshot={lastImportedSnapshot} onJumpToRecruit={onJumpToRecruit} projectBlame={projectBlame} />}
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
         {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} projectBlame={projectBlame} />}
-        {view === "merc"     && <MercScreen     project={project} modDataDir={modDataDir} />}
+        {view === "merc"     && <MercScreen     project={project} setProject={setProject} modDataDir={modDataDir} />}
         {view === "validate" && <ValidateScreen project={project} onView={setView} />}
         {view === "preview"  && <PreviewScreen  project={project} />}
         {view === "export"   && <ExportScreen   project={project} onExport={exportEdu} modDataDir={modDataDir} />}
@@ -382,26 +385,45 @@ function ModInfoScreen({ project, setProject }) {
           const facMatch = /^Faction(\d+)$/.exec(key);
           if (facMatch) {
             const idx = parseInt(facMatch[1], 10) - 1;
-            const oldTag = String(g[key] ?? "").trim();
+            // Authoritative old tag is whatever the units actually carry
+            // — pull it from project.factions[idx] (which the xlsm import
+            // populated), falling back to the global if that's empty.
+            // Without this, a global typed with different casing from the
+            // unit availability keys (e.g. global "Rhaetians" vs unit
+            // availability key "rhaetians") meant the migration matched
+            // nothing.
+            const fromFactions = Array.isArray(project.factions) ? String(project.factions[idx] ?? "").trim() : "";
+            const fromGlobals  = String(g[key] ?? "").trim();
+            const oldTag = fromFactions || fromGlobals;
             const newTag = String(v ?? "").trim();
             if (oldTag && newTag && oldTag !== newTag) {
               const nextFactions = Array.isArray(project.factions) ? project.factions.slice() : [];
               while (nextFactions.length <= idx) nextFactions.push(null);
               nextFactions[idx] = newTag;
+              const oldTagLc = oldTag.toLowerCase();
               const nextUnits = (project.units || []).map((u) => {
                 if (!u || u.kind !== "unit") return u;
                 let touched = false;
                 let nextAvail = u.availability;
-                if (u.availability && Object.prototype.hasOwnProperty.call(u.availability, oldTag)) {
-                  nextAvail = { ...u.availability };
-                  nextAvail[newTag] = nextAvail[oldTag];
-                  delete nextAvail[oldTag];
-                  touched = true;
+                if (u.availability) {
+                  // Case-insensitive search — the user's global could be
+                  // capitalised differently from the actual key on each
+                  // unit and we still want to migrate them all.
+                  const match = Object.keys(u.availability).find((k) => k.toLowerCase() === oldTagLc);
+                  if (match) {
+                    nextAvail = { ...u.availability };
+                    nextAvail[newTag] = nextAvail[match];
+                    delete nextAvail[match];
+                    touched = true;
+                  }
                 }
                 let nextOwn = u.ownership;
-                if (Array.isArray(u.ownership) && u.ownership.includes(oldTag)) {
-                  nextOwn = u.ownership.map((x) => (x === oldTag ? newTag : x));
-                  touched = true;
+                if (Array.isArray(u.ownership)) {
+                  const hit = u.ownership.some((x) => typeof x === "string" && x.toLowerCase() === oldTagLc);
+                  if (hit) {
+                    nextOwn = u.ownership.map((x) => (typeof x === "string" && x.toLowerCase() === oldTagLc ? newTag : x));
+                    touched = true;
+                  }
                 }
                 return touched ? { ...u, availability: nextAvail, ownership: nextOwn } : u;
               });
@@ -889,10 +911,12 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // The trailing "remaining keys" bucket was the order-shifting culprit:
   // editing a cell mutates a unit's own key insertion order (delete + add),
   // and Set iteration walks units row-by-row, so a single edit could reshuffle
-  // unknown-key columns mid-session. We cache the first-computed order in a
-  // ref and only append genuinely new keys at the end thereafter — the user
-  // sees a stable column layout no matter what they type.
-  const allKeysRef = useRef([]);
+  // unknown-key columns mid-session. We cache ONLY the structural columns
+  // (head / tail / extras) — never the avail:* faction columns, which must
+  // follow the current factionKeys so a Mod Info rename ("rhaetians" →
+  // "breuni") propagates to the column header + data lookup immediately
+  // instead of leaving avail:<oldTag> frozen in the cache forever.
+  const allKeysRef = useRef(null);
   const allKeys = useMemo(() => {
     const present = new Set();
     let hasAvailability = false;
@@ -905,24 +929,35 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         present.add(k);
       }
     }
-    const cached = allKeysRef.current;
-    if (cached && cached.length) {
-      // Keep stable order; only append keys we've never seen.
-      const out = [...cached];
-      for (const k of present) if (!out.includes(k)) out.push(k);
-      if (out.length !== cached.length) allKeysRef.current = out;
-      return allKeysRef.current;
+    let cache = allKeysRef.current;
+    if (cache) {
+      // Append any newly-seen structural keys (e.g. a freshly-templated
+      // unit introducing a column the cache didn't know about). Stable
+      // positions for everything else.
+      const known = new Set([...cache.head, ...cache.tail, ...cache.extras]);
+      const newExtras = [];
+      for (const k of present) if (!known.has(k)) newExtras.push(k);
+      if (newExtras.length) {
+        cache = { ...cache, extras: [...cache.extras, ...newExtras] };
+        allKeysRef.current = cache;
+      }
+    } else {
+      const head = [], tail = [], extras = [];
+      const used = new Set();
+      for (const k of UNITS_HEAD) if (present.has(k)) { head.push(k); used.add(k); }
+      for (const k of UNITS_TAIL) if (present.has(k)) { tail.push(k); used.add(k); }
+      for (const k of present) if (!used.has(k)) extras.push(k);
+      cache = { head, tail, extras };
+      allKeysRef.current = cache;
     }
-    const ordered = [];
-    for (const k of UNITS_HEAD) if (present.has(k)) { ordered.push(k); present.delete(k); }
+    const ordered = [...cache.head];
     if (hasAvailability) {
       for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
       ordered.push(AVAIL_PREFIX + "slave");
     }
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
-    for (const k of UNITS_TAIL) if (present.has(k)) { ordered.push(k); present.delete(k); }
-    for (const k of present) ordered.push(k);
-    allKeysRef.current = ordered;
+    ordered.push(...cache.tail);
+    ordered.push(...cache.extras);
     return ordered;
   }, [units, factionKeys]);
 
@@ -2594,6 +2629,54 @@ function MercScreen({ project: rawProject, setProject, modDataDir }) {
     setProject({ ...project, merc: next });
   }, [rows, project, setProject]);
 
+  // One-time import: replace the project's merc pools with the
+  // structure of the game's descr_mercenaries.txt (pool names, regions,
+  // unit roster, per-unit exp/replenish/max/initial). Cost is left
+  // blank on purpose — formatMerc derives it from EDU price ×
+  // MercCostMultiplier so unit stat tweaks flow through automatically.
+  // Confirmation gate because it wipes the existing project.merc array.
+  const [importStatus, setImportStatus] = useState(null);
+  const importPoolsFromGameFile = useCallback(async () => {
+    if (!modDataDir || !window.eduAPI?.readDescrMercenaries) {
+      setImportStatus({ ok: false, msg: "modDataDir not set or IPC unavailable" });
+      return;
+    }
+    const r = await window.eduAPI.readDescrMercenaries(modDataDir);
+    if (!r || !r.ok) { setImportStatus({ ok: false, msg: r?.reason || "read failed" }); return; }
+    const parsed = parseDescrMercenaries(r.text || "");
+    const poolCount = parsed.filter(x => x.kind === "pool").length;
+    const unitCount = parsed.filter(x => x.kind === "unit").length;
+    const existing = (project.merc || []).length;
+    const proceed = existing === 0
+      ? true
+      : window.confirm(
+          `Replace the project's ${existing} merc row(s) with ${poolCount} pool(s) and ${unitCount} unit(s) parsed from descr_mercenaries.txt?\n\n` +
+          `Per-unit cost stays blank — formatMerc will recompute it as EDU price × MercCostMultiplier on every export.`
+        );
+    if (!proceed) return;
+    setProject({ ...project, merc: parsed });
+    setImportStatus({ ok: true, msg: `✓ Imported ${poolCount} pools · ${unitCount} units from ${r.path}` });
+  }, [modDataDir, project, setProject]);
+
+  const refreshRegionsFromGameFile = useCallback(async () => {
+    if (!modDataDir || !window.eduAPI?.readDescrMercenaries) {
+      setImportStatus({ ok: false, msg: "modDataDir not set or IPC unavailable" });
+      return;
+    }
+    const r = await window.eduAPI.readDescrMercenaries(modDataDir);
+    if (!r || !r.ok) { setImportStatus({ ok: false, msg: r?.reason || "read failed" }); return; }
+    const result = refreshRegionsFromFile(project.merc || [], r.text || "");
+    if (result.updated === 0 && result.missing.length === 0) {
+      setImportStatus({ ok: true, msg: `✓ All regions already match descr_mercenaries.txt` });
+      return;
+    }
+    setProject({ ...project, merc: result.merc });
+    const missingNote = result.missing.length
+      ? ` · skipped ${result.missing.length} pool(s) absent from file: ${result.missing.slice(0, 4).join(", ")}${result.missing.length > 4 ? "…" : ""}`
+      : "";
+    setImportStatus({ ok: true, msg: `✓ Updated regions on ${result.updated} pool(s)${missingNote}` });
+  }, [modDataDir, project, setProject]);
+
   // Cross-check the project's merc rows against the on-disk
   // descr_mercenaries.txt. Surfaces:
   //   - Pools / regions present in one source but not the other
@@ -2677,6 +2760,25 @@ function MercScreen({ project: rawProject, setProject, modDataDir }) {
     <div className="screen">
       <h2>Mercenaries <span className="dim">({rows.filter(r => r && r.kind === "unit").length} units across {pools.length} pools)</span></h2>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <button
+          className="btn"
+          onClick={importPoolsFromGameFile}
+          disabled={!modDataDir}
+          title={modDataDir
+            ? "Read descr_mercenaries.txt from the mod folder and seed pools / regions / unit roster from it. Cost is left blank — formatMerc recomputes it on export from EDU price × MercCostMultiplier so unit stat edits flow through automatically."
+            : "Set the mod data folder first"}
+        >Import pools from game file…</button>
+        <button
+          className="btn"
+          onClick={refreshRegionsFromGameFile}
+          disabled={!modDataDir || (project.merc || []).length === 0}
+          title={modDataDir
+            ? "Pull the latest regions list for each existing pool from descr_mercenaries.txt. Doesn't touch unit roster, replenish, max, or initial — use Import for that."
+            : "Set the mod data folder first"}
+        >Refresh regions from game file</button>
+        {importStatus && (
+          <span style={{ fontSize: 11, color: importStatus.ok ? "#7c9" : "#d66c6c" }}>{importStatus.msg}</span>
+        )}
         <button className="btn" onClick={runMercCrossCheck} disabled={!modDataDir} title={modDataDir ? "Compare project's pools / regions / unit cost against the on-disk descr_mercenaries.txt" : "Set the mod data folder first"}>
           Cross-check descr_mercenaries.txt
         </button>
