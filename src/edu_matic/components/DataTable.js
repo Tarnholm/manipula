@@ -302,9 +302,13 @@ export default function DataTable({
   // default (140px) — wide enough for short labels without being
   // dramatic for long ones.
   const DEFAULT_COL_PX = 160;
+  // Width of the leftmost row-number gutter (Excel-style row headers). The
+  // gutter is itself sticky-left at 0, so the first pinned column starts
+  // after it.
+  const GUTTER_W = 46;
   const colLeftOffsets = useMemo(() => {
     const out = {};
-    let acc = 0;
+    let acc = GUTTER_W;
     for (const c of orderedColumns) {
       if (!pinned.has(c)) break;
       out[c] = acc;
@@ -312,6 +316,17 @@ export default function DataTable({
     }
     return out;
   }, [orderedColumns, pinned, colWidths]);
+  // Sequential 1-based row numbers for the gutter, assigned across the
+  // visible (rendered) data rows in order. Keyed by origIdx so the body
+  // render can look each up.
+  const rowNumberByOrigIdx = useMemo(() => {
+    const m = new Map();
+    let n = 0;
+    for (const e of visibleEntries) {
+      if (Array.isArray(e.row)) { n++; m.set(e.origIdx, n); }
+    }
+    return m;
+  }, [visibleEntries]);
   // Update the navigation snapshot for moveCell. Uses filteredEntries
   // so search filtering also limits Tab navigation to visible rows.
   useEffect(() => {
@@ -399,6 +414,10 @@ export default function DataTable({
   // survives table re-renders / search filtering. Click a row to select
   // (replace), shift-click to range-select, ctrl/cmd-click to toggle.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Rows whose data is currently on the clipboard — highlighted with a
+  // dashed "marching ants"-ish border (Excel cue) so the user can see
+  // what a Ctrl+V will paste. Cleared on the next copy.
+  const [copiedIds, setCopiedIds] = useState(() => new Set());
   // Notify the parent when the selection changes. Ref stored to dedupe
   // — only fire when the prop actually changes shape.
   const lastSelectionRef = useRef(null);
@@ -520,6 +539,7 @@ export default function DataTable({
             navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
               if (window.toast) window.toast(`Copied ${objs.length} row${objs.length === 1 ? "" : "s"} to clipboard`, "ok", 1500);
             }).catch(() => {});
+            setCopiedIds(new Set(ids));
           }
         }
         return;
@@ -706,6 +726,12 @@ export default function DataTable({
         <table className="dtable">
           <thead>
             <tr>
+              <th
+                className="dtable-gutter dtable-gutter-head"
+                style={{ position: "sticky", top: 0, left: 0, zIndex: 6, width: GUTTER_W, minWidth: GUTTER_W, textAlign: "center" }}
+                title="Row numbers — click to select a whole row (Ctrl-click to add, Shift-click for a range)"
+                onClick={() => { if (selectedIds.size) setSelectedIds(new Set()); }}
+              >#</th>
               {orderedColumns.map((c) => {
                 const label = (columnLabels && columnLabels[c]) || c;
                 const isPinned = pinned.has(c);
@@ -772,7 +798,7 @@ export default function DataTable({
             <tbody key={`g${gi}`}>
               {g.section && (
                 <tr key={`s${g.section.origIdx}`} className="dtable-section">
-                  <td colSpan={visibleColumns.length}>
+                  <td colSpan={visibleColumns.length + 1}>
                     <SectionLabel
                       text={g.section.row.section}
                       editable={!!onEditSection}
@@ -785,7 +811,7 @@ export default function DataTable({
                 if (isSeparator(row)) {
                   return (
                     <tr key={`d${origIdx}`} className="dtable-separator" aria-hidden="true">
-                      <td colSpan={visibleColumns.length} />
+                      <td colSpan={visibleColumns.length + 1} />
                     </tr>
                   );
                 }
@@ -813,6 +839,12 @@ export default function DataTable({
                 }
                 if (isBeingDragged) {
                   bgStyle = { ...(bgStyle || {}), opacity: 0.4 };
+                }
+                // Rows currently on the clipboard get a dashed amber outline
+                // (Excel "marching ants" cue) so the user can see what a
+                // Ctrl+V will paste.
+                if (copiedIds.has(rowId)) {
+                  bgStyle = { ...(bgStyle || {}), outline: "1px dashed #dca64a", outlineOffset: "-1px" };
                 }
                 return (
                   <tr
@@ -882,6 +914,40 @@ export default function DataTable({
                       setCtxMenu({ x: e.clientX, y: e.clientY, rowOrigIdx: origIdx });
                     } : undefined}
                   >
+                    <td
+                      className="dtable-gutter"
+                      style={{
+                        position: "sticky", left: 0, zIndex: 2,
+                        width: GUTTER_W, minWidth: GUTTER_W, textAlign: "center",
+                        cursor: "pointer", userSelect: "none",
+                        background: isSelected ? "rgba(220,166,74,0.30)" : "var(--bg-elev2)",
+                        color: isSelected ? "#dca64a" : "#777", fontSize: 10,
+                      }}
+                      title="Click to select this row · Ctrl-click to add/remove · Shift-click for a range"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (e.shiftKey && lastClickedRowIdRef.current != null) {
+                            const visibleIds = filteredEntries
+                              .filter((en) => Array.isArray(en.row))
+                              .map((en) => rowIds ? rowIds[en.origIdx] : en.origIdx);
+                            const a = visibleIds.indexOf(lastClickedRowIdRef.current);
+                            const b = visibleIds.indexOf(rowId);
+                            if (a >= 0 && b >= 0) { const lo = Math.min(a, b), hi = Math.max(a, b); for (let k = lo; k <= hi; k++) next.add(visibleIds[k]); }
+                            else next.add(rowId);
+                          } else if (e.ctrlKey || e.metaKey) {
+                            if (next.has(rowId)) next.delete(rowId); else next.add(rowId);
+                          } else {
+                            // Plain click on the gutter selects ONLY this row
+                            // (Excel row-header behaviour).
+                            next.clear(); next.add(rowId);
+                          }
+                          lastClickedRowIdRef.current = rowId;
+                          return next;
+                        });
+                      }}
+                    >{rowNumberByOrigIdx.get(origIdx) ?? ""}</td>
                     {orderedColIndices.map((origColIdx, j) => {
                       const c = columns[origColIdx];
                       const autoEnter = !!(autoEditTarget && autoEditTarget.rowOrigIdx === origIdx && autoEditTarget.columnKey === c);
@@ -919,14 +985,14 @@ export default function DataTable({
           ))}
           {filteredEntries.length === 0 && (
             <tbody>
-              <tr><td className="dim" colSpan={visibleColumns.length} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
+              <tr><td className="dim" colSpan={visibleColumns.length + 1} style={{ textAlign: "center", padding: 20 }}>No rows.</td></tr>
             </tbody>
           )}
           {hiddenRowCount > 0 && (
             <tbody>
               <tr>
                 <td
-                  colSpan={visibleColumns.length}
+                  colSpan={visibleColumns.length + 1}
                   ref={(el) => {
                     // IntersectionObserver sentinel — when this row scrolls
                     // into view (or near it via rootMargin), bump the
@@ -1028,6 +1094,7 @@ export default function DataTable({
                 if (!objs.length) { setCtxMenu(null); return; }
                 const payload = objs.length === 1 ? objs[0] : objs;
                 try { await navigator.clipboard.writeText(JSON.stringify(payload, null, 2)); } catch {}
+                setCopiedIds(new Set(ids));
                 setCtxMenu(null);
                 if (window.toast) window.toast(`Copied ${objs.length} row${objs.length === 1 ? "" : "s"} (Ctrl+V to paste)`, "ok", 2000);
               }}

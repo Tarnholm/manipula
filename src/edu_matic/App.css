@@ -413,6 +413,22 @@ body {
 }
 .dtable tr:hover td { background: var(--bg-elev2); }
 
+/* Row-number gutter (Excel-style row headers). Tight padding, monospace
+ * numerals, and a hover cue so it reads as clickable. The body cell's
+ * background / selection tint are set inline (they depend on row state);
+ * this just covers layout + the hover affordance. */
+.dtable .dtable-gutter {
+  padding: 1px 4px;
+  font-family: var(--mono);
+  border-right: 1px solid var(--border-strong);
+  user-select: none;
+}
+.dtable td.dtable-gutter:hover {
+  background: rgba(220, 166, 74, 0.22) !important;
+  color: var(--accent, #dca64a) !important;
+}
+.dtable th.dtable-gutter-head { color: #777; font-weight: 700; }
+
 /* Section-divider row — full-width gold band echoing the spreadsheet's faction
  * separators (#MACEDON / #EPIRUS / …). Scrolls naturally with content.
  * Sticky-LEFT only, so the label stays anchored at the left edge during
