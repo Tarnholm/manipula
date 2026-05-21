@@ -17,6 +17,7 @@ import { validate, diagnose } from "./validate";
 import { compute } from "./compute";
 import { formatEdu } from "./format";
 import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
+import { sortByEduFactionOrder } from "./factionOrder";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -952,7 +953,11 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     }
     const ordered = [...cache.head];
     if (hasAvailability) {
-      for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
+      // Availability columns always follow the canonical EDU faction
+      // order (factionOrder.js), not the xlsm's Faction1..N order, so the
+      // mod team sees the same column layout every time. slave is always
+      // last. Unknown tags fall to the end of the faction block.
+      for (const f of sortByEduFactionOrder(factionKeys)) ordered.push(AVAIL_PREFIX + f);
       ordered.push(AVAIL_PREFIX + "slave");
     }
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
@@ -1346,10 +1351,11 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       const nextAvail = { ...(cur.availability || {}) };
       if (newValue === "" || newValue == null) delete nextAvail[f];
       else nextAvail[f] = newValue;
-      // Re-derive factionalOwnership from the Y cells. Order follows
-      // factionKeys (i.e. project.factions order) with slave at the end
-      // — matches the order the EDU spreadsheet exported.
-      const ownList = factionKeys.filter((k) => nextAvail[k] === "Y");
+      // Re-derive factionalOwnership from the Y cells, in the canonical
+      // EDU faction order (factionOrder.js) with slave at the end — so
+      // the ownership string the EDU emits is consistently ordered no
+      // matter which faction the user toggled.
+      const ownList = sortByEduFactionOrder(factionKeys.filter((k) => nextAvail[k] === "Y"));
       if (nextAvail.slave === "Y") ownList.push("slave");
       const next = { ...cur, availability: nextAvail, factionalOwnership: ownList.join(", ") };
       const nextUnits = project.units.slice();

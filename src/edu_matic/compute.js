@@ -33,6 +33,7 @@ import { computeSecondary } from "./formulas/secondary";
 import { computeVS } from "./formulas/vs";
 import { computeTertiary } from "./formulas/tertiary";
 import { computeCosts } from "./formulas/cost";
+import { reorderOwnershipString } from "./factionOrder";
 
 /** @typedef {import("./xlsmImporter").Project} Project */
 
@@ -323,13 +324,18 @@ function writeOwnership(out, unit, entryType) {
             : entryType === "Merc" ? unit.mercOwnership
             : unit.factionalOwnership;
   if (pre !== undefined && pre !== null) {
-    out.ownershipString = String(pre);
+    // "all" (AoR) and merc strings pass through untouched; a factional
+    // list gets reordered into the canonical EDU faction order so the
+    // emitted ownership line is consistent regardless of how the stored
+    // string happened to be ordered (xlsm import order, hand edits, …).
+    const s = String(pre);
+    out.ownershipString = (entryType === "AoR" || entryType === "Merc") ? s : reorderOwnershipString(s);
     return;
   }
   if (unit.ownership && Object.keys(unit.ownership).length > 0) {
     const tags = Object.keys(unit.ownership).filter((k) => k !== "slave");
     if (unit.ownership.slave) tags.push("slave");
-    if (tags.length) out.ownershipString = tags.join(", ");
+    if (tags.length) out.ownershipString = reorderOwnershipString(tags.join(", "));
   }
 }
 
