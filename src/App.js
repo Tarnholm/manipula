@@ -3313,8 +3313,12 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
         if (r && r.ok) {
           const lines = (r.stdout || "").trim().split("\n").filter(Boolean);
           setActivity(lines.map(l => {
-            const [hash, author, age] = l.split("|");
-            return { hash, author, age };
+            // git-log-file emits %h|%an|%ar|%s — rejoin anything past index 2
+            // so commit subjects containing literal pipes survive intact.
+            const parts = l.split("|");
+            const [hash, author, age] = parts;
+            const subject = parts.slice(3).join("|");
+            return { hash, author, age, subject };
           }));
         }
       } catch { setActivity([]); }
@@ -3730,10 +3734,24 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                 <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #2a2a2a" }}>
                   <div style={{ color: "#888", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Recent activity</div>
                   {activity.map((c, i) => (
-                    <div key={i} style={{ fontSize: 11, color: "#bbb", padding: "2px 0", display: "flex", gap: 8 }}>
-                      <span style={{ color: "#888", fontFamily: "Consolas, monospace" }}>{c.hash}</span>
-                      <span style={{ color: "#dca64a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.author}</span>
-                      <span style={{ color: "#666" }}>{c.age}</span>
+                    // Two-line entry per commit: top row is the existing
+                    // hash / author / age strip, second row holds the commit
+                    // subject so users can see WHAT each push contained. The
+                    // subject is the most useful bit when scanning recent
+                    // activity but on a 320-wide popover it'd squeeze out
+                    // hash+author+age if we kept everything on one line.
+                    <div key={i} style={{ fontSize: 11, color: "#bbb", padding: "3px 0", borderBottom: i < activity.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <span style={{ color: "#888", fontFamily: "Consolas, monospace" }}>{c.hash}</span>
+                        <span style={{ color: "#dca64a", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.author}</span>
+                        <span style={{ color: "#666" }}>{c.age}</span>
+                      </div>
+                      {c.subject && (
+                        <div
+                          title={c.subject}
+                          style={{ color: "#ccc", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingLeft: 2 }}
+                        >{c.subject}</div>
+                      )}
                     </div>
                   ))}
                 </div>

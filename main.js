@@ -1745,11 +1745,15 @@ ipcMain.handle("git-diff-stat", async (_e, dir) => runGit(dir, ["diff", "--stat"
 // back to the stat-only view).
 ipcMain.handle("git-diff", async (_e, dir) => runGit(dir, ["diff", "HEAD"]));
 // Per-file blame summary — last N commits touching a path. Used to
-// surface "last edited by X (3h ago)" tooltips on rows. Returns
-// pipe-delimited "shortHash|author|relativeDate" lines.
+// surface "last edited by X (3h ago)" tooltips on rows AND the Sync
+// popover's Recent Activity panel. Returns pipe-delimited lines
+// "shortHash|author|relativeDate|subject" — callers that only need
+// the first three fields can destructure and ignore the rest, and
+// the subject can include literal pipes (rejoin everything past
+// index 2 on the renderer side, see SyncButton refresh()).
 ipcMain.handle("git-log-file", async (_e, dir, relPath, n) => {
   const limit = Math.max(1, Math.min(20, parseInt(n, 10) || 5));
-  return runGit(dir, ["log", `--format=%h|%an|%ar`, `-n`, String(limit), "--", relPath]);
+  return runGit(dir, ["log", `--format=%h|%an|%ar|%s`, `-n`, String(limit), "--", relPath]);
 });
 // Bulk per-file blame — one git log call, --name-only, with a sentinel
 // separator on each commit. Renderer parses the output into a
