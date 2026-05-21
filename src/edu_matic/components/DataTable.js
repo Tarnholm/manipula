@@ -80,6 +80,11 @@ export default function DataTable({
   // right-clicked row's record. The handler decides which fields to
   // copy in (typically a structural merge) and calls setProject.
   onPasteRow = null,         // (rowId, parsedJSON) => void
+  // Ctrl+V paste-as-new-rows. Receives the parsed clipboard payload
+  // (always an array of row objects) plus the rowId the paste should
+  // land after (or null = append at end). Distinct from onPasteRow,
+  // which overwrites a single existing row.
+  onPasteRowsAsNew = null,   // (rowsArray, afterRowId|null) => void
   // Per-row flag indicators for inline validation. Map keyed by ROWID
   // (not row index): { [rowId]: { error?: string, warn?: string } }.
   // First column gets a small dot showing the highest severity; the
@@ -483,6 +488,52 @@ export default function DataTable({
           dup.onClick([...selectedIds]);
           return;
         }
+      }
+    }
+    // Ctrl+C / Ctrl+V — copy selected whole rows to the clipboard as JSON,
+    // paste them back as NEW rows. Only fires when not editing a cell and
+    // when the host wired the row-JSON resolvers, so plain text copy still
+    // works inside editors and in tables without row ops.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
+      if (isText) return;
+      if (selectedIds.size && rowToJSON) {
+        e.preventDefault();
+        // Preserve document order: numeric rowIds (Units/Armour/Merc/
+        // Core Data all use array indices) sort ascending; fall back to
+        // selection order otherwise.
+        const ids = [...selectedIds].sort((a, b) =>
+          (typeof a === "number" && typeof b === "number") ? a - b : 0);
+        const objs = ids.map((id) => rowToJSON(id)).filter(Boolean);
+        if (objs.length) {
+          const payload = objs.length === 1 ? objs[0] : objs;
+          navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
+            if (window.toast) window.toast(`Copied ${objs.length} row${objs.length === 1 ? "" : "s"} to clipboard`, "ok", 1500);
+          }).catch(() => {});
+        }
+        return;
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
+      if (isText) return;
+      if (onPasteRowsAsNew) {
+        e.preventDefault();
+        navigator.clipboard.readText().then((txt) => {
+          if (!txt || !txt.trim()) { if (window.toast) window.toast("Clipboard is empty", "warn", 2000); return; }
+          let parsed;
+          try { parsed = JSON.parse(txt); }
+          catch { if (window.toast) window.toast("Clipboard isn't valid row JSON", "warn", 2500); return; }
+          const arr = Array.isArray(parsed) ? parsed : [parsed];
+          const numericSel = [...selectedIds].filter((x) => typeof x === "number");
+          const afterId = numericSel.length ? Math.max(...numericSel) : null;
+          onPasteRowsAsNew(arr, afterId);
+        }).catch(() => {});
+        return;
       }
     }
     // Don't hijack the arrows while editing a cell.
@@ -1037,6 +1088,20 @@ export default function DataTable({
             { label: "Sort A → Z",         onClick: () => setSortBy({ key: headerMenu.columnKey, dir: "asc" }) },
             { label: "Sort Z → A",         onClick: () => setSortBy({ key: headerMenu.columnKey, dir: "desc" }) },
             { label: "Reset sort",         onClick: () => setSortBy(null) },
+            // Copy every visible (search-filtered) row's value for this
+            // column, newline-separated — paste straight into a spreadsheet
+            // column or back into another column via the editor.
+            { label: "Copy column values", onClick: async () => {
+              const colIdx = columns.indexOf(headerMenu.columnKey);
+              if (colIdx < 0) return;
+              const vals = filteredEntries
+                .filter((e) => Array.isArray(e.row))
+                .map((e) => { const v = e.row[colIdx]; return v == null ? "" : String(v); });
+              try {
+                await navigator.clipboard.writeText(vals.join("\n"));
+                if (window.toast) window.toast(`Copied ${vals.length} value${vals.length === 1 ? "" : "s"} from "${(columnLabels && columnLabels[headerMenu.columnKey]) || headerMenu.columnKey}"`, "ok", 1800);
+              } catch {}
+            } },
             { label: pinned.has(headerMenu.columnKey) ? "Unpin column" : "Pin to left", onClick: () => setPinned((cur) => { const n = new Set(cur); if (n.has(headerMenu.columnKey)) n.delete(headerMenu.columnKey); else n.add(headerMenu.columnKey); return n; }) },
             (colWidths[headerMenu.columnKey] != null) ? { label: "Reset width", onClick: () => setColWidths((cur) => { const n = { ...cur }; delete n[headerMenu.columnKey]; return n; }) } : null,
             columnsToggleable ? { label: "Hide column", onClick: () => setHiddenCols((cur) => { const n = new Set(cur); n.add(headerMenu.columnKey); return n; }) } : null,

@@ -538,6 +538,18 @@ function CoreDataScreen({ project, setProject }) {
     const next = t.slice(); next.splice(idx, 1);
     setProject({ ...project, coreData: { ...tables, [active]: next } });
   }, [tables, active, project, setProject]);
+  const onPasteCoreDataAsNew = useCallback((parsedRows, afterRowId) => {
+    if (!Array.isArray(parsedRows) || !parsedRows.length) return;
+    const t = tables[active] || [];
+    const newRows = parsedRows.filter((p) => p && typeof p === "object").map((p) => ({ ...p }));
+    if (!newRows.length) return;
+    const next = t.slice();
+    let insertAt = next.length;
+    if (typeof afterRowId === "number" && afterRowId >= 0 && afterRowId < next.length) insertAt = afterRowId + 1;
+    next.splice(insertAt, 0, ...newRows);
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+    if (window.toast) window.toast(`Pasted ${newRows.length} row${newRows.length === 1 ? "" : "s"}`, "ok", 2000);
+  }, [tables, active, project, setProject]);
 
   // Bulk operations on selected rows of the active core-data table.
   const bulkSetCoreData = useCallback((rowIdxs, column, value) => {
@@ -652,6 +664,8 @@ function CoreDataScreen({ project, setProject }) {
         onAddRow={addBlank}
         onDuplicateRow={duplicateRow}
         onDeleteRow={deleteRow}
+        rowToJSON={(idx) => rows[idx] || null}
+        onPasteRowsAsNew={onPasteCoreDataAsNew}
         addRowLabel="+ New row"
         bulkActions={[
           { label: "Set field on selected…", setField: { onApply: bulkSetCoreData } },
@@ -1292,6 +1306,30 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     nextUnits[unitIdx] = next;
     setProject({ ...project, units: nextUnits });
   }, [project, setProject]);
+  // Ctrl+V paste-as-new — insert the copied unit row(s) right after the
+  // anchor (last selected row), or at the end. unit id / dictionary_tag
+  // are cleared and the name gets a "(copy)" suffix so an in-project
+  // paste doesn't instantly fail validation with duplicate ids; the user
+  // fills those back in. (Same dedup the Duplicate action uses.)
+  const onPasteUnitsAsNew = useCallback((parsedRows, afterRowId) => {
+    if (!Array.isArray(parsedRows) || !parsedRows.length) return;
+    const newUnits = parsedRows
+      .filter((p) => p && typeof p === "object")
+      .map((p) => {
+        const u = { ...p, kind: "unit", row: 0 };
+        if (u.name) u.name = String(u.name) + " (copy)";
+        if (u["unit id"]) u["unit id"] = "";
+        if (u["dictionary_tag"]) u["dictionary_tag"] = "";
+        return u;
+      });
+    if (!newUnits.length) return;
+    const arr = project.units.slice();
+    let insertAt = arr.length;
+    if (typeof afterRowId === "number" && afterRowId >= 0 && afterRowId < arr.length) insertAt = afterRowId + 1;
+    arr.splice(insertAt, 0, ...newUnits);
+    setProject({ ...project, units: arr });
+    if (window.toast) window.toast(`Pasted ${newUnits.length} unit${newUnits.length === 1 ? "" : "s"}`, "ok", 2000);
+  }, [project, setProject]);
   // Move a row up or down within project.units. Skips section/comment
   // rows so the move feels like a 1-row jump in the visible table even
   // when the underlying array has interleaved comment markers.
@@ -1692,6 +1730,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         searchPersistKey="edu-units"
         rowToJSON={(idx) => project.units[idx] || null}
         onPasteRow={onPasteUnit}
+        onPasteRowsAsNew={onPasteUnitsAsNew}
         onEditSection={renameSectionHeader}
         onSelectionChange={setSelectedRowIdxs}
         rowMenuExtras={[
@@ -2119,19 +2158,45 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
       const sep = rest.indexOf(":");
       const slot = rest.slice(0, sep);
       const field = rest.slice(sep + 1);
-      const slotObj = cur[slot] || { instances: 1 };
+      // Compare against the ACTUAL stored value (undefined → "") rather
+      // than a defaulted slot. The old `|| { instances: 1 }` meant that
+      // for a slot with no stored instances, typing "1" matched the
+      // phantom default and the edit was dropped — the cell shows blank,
+      // so it looked like "can't type 1".
+      const slotObj = cur[slot] || {};
       if (String(slotObj[field] ?? "") === String(newValue ?? "")) return;
+
+      if (field === "instances") {
+        // One soldier wears head + torso + shield + … as a single set,
+        // so the instance count is per-soldier-group, not per-body-part.
+        // Editing any slot's instances propagates the value to every
+        // populated slot in the row.
+        let inst;
+        if (newValue === "" || newValue == null) inst = 1;
+        else { const n = Number(newValue); inst = Number.isFinite(n) ? n : 1; }
+        const nextRow = { ...cur };
+        for (const k of Object.keys(nextRow)) {
+          const sv = nextRow[k];
+          if (sv && typeof sv === "object" && Object.prototype.hasOwnProperty.call(sv, "instances")) {
+            nextRow[k] = { ...sv, instances: inst };
+          }
+        }
+        // Make sure the edited slot exists + carries the new count even
+        // if it had no instances key before.
+        nextRow[slot] = { ...(cur[slot] || {}), instances: inst };
+        const nextRows = rows.slice(); nextRows[rowIdx] = nextRow;
+        setProject({ ...project, armour: nextRows });
+        return;
+      }
+
       const nextSlot = { ...slotObj };
       if (newValue === "" || newValue == null) {
-        // For instances, leaving blank means "default to 1" (the VBA
-        // fallback). Persist as 1 explicitly so the JSON round-trips
-        // cleanly instead of storing null and surprising the formula.
-        nextSlot[field] = field === "instances" ? 1 : null;
-      } else if (field === "instances") {
-        const n = Number(newValue);
-        nextSlot[field] = Number.isFinite(n) ? n : 1;
+        nextSlot[field] = null;
       } else {
         nextSlot[field] = newValue;
+        // A freshly-created slot needs an instances count so the armour
+        // formula has something to work with.
+        if (nextSlot.instances == null) nextSlot.instances = 1;
       }
       const nextRow = { ...cur, [slot]: nextSlot };
       const nextRows = rows.slice(); nextRows[rowIdx] = nextRow;
@@ -2208,6 +2273,17 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     const nextRows = rows.slice();
     nextRows[idx] = next;
     setProject({ ...project, armour: nextRows });
+  }, [rows, project, setProject]);
+  const onPasteArmourAsNew = useCallback((parsedRows, afterRowId) => {
+    if (!Array.isArray(parsedRows) || !parsedRows.length) return;
+    const newRows = parsedRows.filter((p) => p && typeof p === "object").map((p) => ({ ...p, row: 0 }));
+    if (!newRows.length) return;
+    const arr = rows.slice();
+    let insertAt = arr.length;
+    if (typeof afterRowId === "number" && afterRowId >= 0 && afterRowId < arr.length) insertAt = afterRowId + 1;
+    arr.splice(insertAt, 0, ...newRows);
+    setProject({ ...project, armour: arr });
+    if (window.toast) window.toast(`Pasted ${newRows.length} armour row${newRows.length === 1 ? "" : "s"}`, "ok", 2000);
   }, [rows, project, setProject]);
   const addArmourFromTemplate = useCallback((tplKey) => {
     const tpl = ARMOUR_TEMPLATES.find(t => t.key === tplKey);
@@ -2357,6 +2433,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         rowFlags={rowFlags}
         rowToJSON={(idx) => rows[idx] || null}
         onPasteRow={onPasteArmour}
+        onPasteRowsAsNew={onPasteArmourAsNew}
         onEditSection={renameArmourSection}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveArmour(idx, "up") },
