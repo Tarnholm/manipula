@@ -33,7 +33,7 @@ import { computeSecondary } from "./formulas/secondary";
 import { computeVS } from "./formulas/vs";
 import { computeTertiary } from "./formulas/tertiary";
 import { computeCosts } from "./formulas/cost";
-import { reorderOwnershipString } from "./factionOrder";
+import { reorderOwnershipString, sortByEduFactionOrder } from "./factionOrder";
 
 /** @typedef {import("./xlsmImporter").Project} Project */
 
@@ -139,8 +139,12 @@ function computeUnit(unit, idx, project, isM2, entryType) {
         if (String(avail[tag] || "").toUpperCase() === "Y") tags.push(tag);
       }
     }
-    if (unit.ownership && unit.ownership.slave) tags.push("slave");
-    out.ethnicityTags = tags;
+    // Emit the ethnicity lines in the canonical EDU faction order, not the
+    // xlsm's Faction1..N order. slave is always last — append it after the
+    // sort so unknown tags (not in the canonical list) can't push past it.
+    const ordered = sortByEduFactionOrder(tags);
+    if (unit.ownership && unit.ownership.slave) ordered.push("slave");
+    out.ethnicityTags = ordered;
   }
   writeRecruitPriority(out, unit, entryType, project.globals);
 
