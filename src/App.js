@@ -3259,6 +3259,20 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
   //   commitPrompt = null      → no prompt active
   //                  string    → prompt is showing with that as the draft
   const [commitPrompt, setCommitPrompt] = useState(null);
+  // Ref + effect to keep the commit input focused as long as the prompt is
+  // open. The plain `autoFocus` attribute only fires once on mount; users
+  // reported the input would stop accepting keystrokes after they cleared
+  // the default text (some intermittent focus loss inside the portal-
+  // rendered popover that we couldn't pin down). Re-focusing on every
+  // commitPrompt change is a no-op while the input is already focused and
+  // a one-call rescue when something has stolen focus mid-edit.
+  const commitInputRef = useRef(null);
+  useEffect(() => {
+    if (commitPrompt === null) return;
+    if (!commitInputRef.current) return;
+    if (document.activeElement === commitInputRef.current) return;
+    commitInputRef.current.focus();
+  }, [commitPrompt]);
   // Anchor coordinates for the portal-rendered popover. The popover
   // can't live inside the topbar's DOM tree because the tabs row below
   // has its own stacking context (backdrop-filter / sticky) that clips
@@ -3612,6 +3626,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                   <div style={{ background: "#0e0e0e", border: "1px solid #2a2a2a", borderRadius: 4, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                     <div style={{ color: "#dca64a", fontSize: 11 }}>Commit message</div>
                     <input
+                      ref={commitInputRef}
                       autoFocus
                       type="text"
                       value={commitPrompt}
