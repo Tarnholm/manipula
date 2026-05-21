@@ -473,69 +473,6 @@ export default function DataTable({
   const onKeyDown = (e) => {
     const sc = scrollRef.current;
     if (!sc) return;
-    // Ctrl+D = duplicate selected rows. Only fires when no editor cell
-    // currently has focus (the document.activeElement is the scroll
-    // container itself or another scroll-bound element).
-    if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
-      const ae = document.activeElement;
-      const aeTag = (ae && ae.tagName) || "";
-      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
-      if (isText) return;
-      if (selectedIds.size && bulkActions) {
-        const dup = bulkActions.find((b) => /duplicate/i.test(b.label || ""));
-        if (dup && dup.onClick) {
-          e.preventDefault();
-          dup.onClick([...selectedIds]);
-          return;
-        }
-      }
-    }
-    // Ctrl+C / Ctrl+V — copy selected whole rows to the clipboard as JSON,
-    // paste them back as NEW rows. Only fires when not editing a cell and
-    // when the host wired the row-JSON resolvers, so plain text copy still
-    // works inside editors and in tables without row ops.
-    if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
-      const ae = document.activeElement;
-      const aeTag = (ae && ae.tagName) || "";
-      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
-      if (isText) return;
-      if (selectedIds.size && rowToJSON) {
-        e.preventDefault();
-        // Preserve document order: numeric rowIds (Units/Armour/Merc/
-        // Core Data all use array indices) sort ascending; fall back to
-        // selection order otherwise.
-        const ids = [...selectedIds].sort((a, b) =>
-          (typeof a === "number" && typeof b === "number") ? a - b : 0);
-        const objs = ids.map((id) => rowToJSON(id)).filter(Boolean);
-        if (objs.length) {
-          const payload = objs.length === 1 ? objs[0] : objs;
-          navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
-            if (window.toast) window.toast(`Copied ${objs.length} row${objs.length === 1 ? "" : "s"} to clipboard`, "ok", 1500);
-          }).catch(() => {});
-        }
-        return;
-      }
-    }
-    if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
-      const ae = document.activeElement;
-      const aeTag = (ae && ae.tagName) || "";
-      const isText = aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable);
-      if (isText) return;
-      if (onPasteRowsAsNew) {
-        e.preventDefault();
-        navigator.clipboard.readText().then((txt) => {
-          if (!txt || !txt.trim()) { if (window.toast) window.toast("Clipboard is empty", "warn", 2000); return; }
-          let parsed;
-          try { parsed = JSON.parse(txt); }
-          catch { if (window.toast) window.toast("Clipboard isn't valid row JSON", "warn", 2500); return; }
-          const arr = Array.isArray(parsed) ? parsed : [parsed];
-          const numericSel = [...selectedIds].filter((x) => typeof x === "number");
-          const afterId = numericSel.length ? Math.max(...numericSel) : null;
-          onPasteRowsAsNew(arr, afterId);
-        }).catch(() => {});
-        return;
-      }
-    }
     // Don't hijack the arrows while editing a cell.
     const ae = document.activeElement;
     if (ae && ae !== sc && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT")) return;
@@ -544,6 +481,69 @@ export default function DataTable({
     else if (e.key === "Home")       { sc.scrollLeft = 0; e.preventDefault(); }
     else if (e.key === "End")        { sc.scrollLeft = sc.scrollWidth; e.preventDefault(); }
   };
+
+  // Row copy / paste / duplicate keyboard shortcuts. Attached at the
+  // document level rather than to the scroll container because selecting
+  // rows (Ctrl/Shift-click a cell) doesn't move keyboard focus to the
+  // scroll container, so a container-scoped handler silently never fired.
+  // Scope so we only act for the table the user is actually working with:
+  //   - copy / duplicate need a row selection
+  //   - paste needs a selection OR this table's scroll container focused
+  // and always bail when a cell editor (input/select) holds focus so the
+  // native cell-level copy/paste keeps working.
+  useEffect(() => {
+    const onDocKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = (e.key || "").toLowerCase();
+      if (k !== "c" && k !== "v" && k !== "d") return;
+      const ae = document.activeElement;
+      const aeTag = (ae && ae.tagName) || "";
+      if (aeTag === "INPUT" || aeTag === "TEXTAREA" || aeTag === "SELECT" || (ae && ae.isContentEditable)) return;
+      const sc = scrollRef.current;
+      const focused = !!(sc && ae && sc.contains(ae));
+      const hasSel = selectedIds.size > 0;
+      if (k === "d") {
+        if (hasSel && bulkActions) {
+          const dup = bulkActions.find((b) => /duplicate/i.test(b.label || ""));
+          if (dup && dup.onClick) { e.preventDefault(); dup.onClick([...selectedIds]); }
+        }
+        return;
+      }
+      if (k === "c") {
+        if (hasSel && rowToJSON) {
+          e.preventDefault();
+          const ids = [...selectedIds].sort((a, b) =>
+            (typeof a === "number" && typeof b === "number") ? a - b : 0);
+          const objs = ids.map((id) => rowToJSON(id)).filter(Boolean);
+          if (objs.length) {
+            const payload = objs.length === 1 ? objs[0] : objs;
+            navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
+              if (window.toast) window.toast(`Copied ${objs.length} row${objs.length === 1 ? "" : "s"} to clipboard`, "ok", 1500);
+            }).catch(() => {});
+          }
+        }
+        return;
+      }
+      if (k === "v") {
+        if (onPasteRowsAsNew && (hasSel || focused)) {
+          e.preventDefault();
+          navigator.clipboard.readText().then((txt) => {
+            if (!txt || !txt.trim()) { if (window.toast) window.toast("Clipboard is empty", "warn", 2000); return; }
+            let parsed;
+            try { parsed = JSON.parse(txt); }
+            catch { if (window.toast) window.toast("Clipboard isn't valid row JSON — copy rows with Ctrl+C first", "warn", 2800); return; }
+            const arr = Array.isArray(parsed) ? parsed : [parsed];
+            const numericSel = [...selectedIds].filter((x) => typeof x === "number");
+            const afterId = numericSel.length ? Math.max(...numericSel) : null;
+            onPasteRowsAsNew(arr, afterId);
+          }).catch(() => {});
+        }
+        return;
+      }
+    };
+    document.addEventListener("keydown", onDocKey);
+    return () => document.removeEventListener("keydown", onDocKey);
+  }, [selectedIds, rowToJSON, onPasteRowsAsNew, bulkActions]);
 
   const showToolbar = searchable || columnsToggleable || onAddRow || findReplace || (bulkActions && bulkActions.length);
   const selectionArr = useMemo(() => [...selectedIds], [selectedIds]);
@@ -1014,14 +1014,43 @@ export default function DataTable({
               onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
               onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
               onClick={async () => {
-                const rowId = rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx;
-                const obj = rowToJSON(rowId);
-                if (obj == null) return;
-                try { await navigator.clipboard.writeText(JSON.stringify(obj, null, 2)); } catch {}
+                // Copy the whole selection when the right-clicked row is
+                // part of it; otherwise just the row under the cursor.
+                const clickedId = rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx;
+                let ids;
+                if (selectedIds.has(clickedId) && selectedIds.size > 1) {
+                  ids = [...selectedIds].sort((a, b) =>
+                    (typeof a === "number" && typeof b === "number") ? a - b : 0);
+                } else {
+                  ids = [clickedId];
+                }
+                const objs = ids.map((id) => rowToJSON(id)).filter(Boolean);
+                if (!objs.length) { setCtxMenu(null); return; }
+                const payload = objs.length === 1 ? objs[0] : objs;
+                try { await navigator.clipboard.writeText(JSON.stringify(payload, null, 2)); } catch {}
                 setCtxMenu(null);
-                if (typeof window !== "undefined" && window.toast) window.toast("Row JSON copied to clipboard", "ok", 2000);
+                if (window.toast) window.toast(`Copied ${objs.length} row${objs.length === 1 ? "" : "s"} (Ctrl+V to paste)`, "ok", 2000);
               }}
-            >Copy row as JSON</div>
+            >{(selectedIds.size > 1 && rowIds && selectedIds.has(rowIds[ctxMenu.rowOrigIdx])) ? `Copy ${selectedIds.size} rows` : "Copy row"}</div>
+          )}
+          {onPasteRowsAsNew && (
+            <div
+              style={{ padding: "6px 12px", cursor: "pointer", borderRadius: 4, color: "#ddd" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(220,166,74,0.18)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              onClick={async () => {
+                const clickedId = rowIds ? rowIds[ctxMenu.rowOrigIdx] : ctxMenu.rowOrigIdx;
+                setCtxMenu(null);
+                let txt = "";
+                try { txt = await navigator.clipboard.readText(); } catch {}
+                if (!txt || !txt.trim()) { if (window.toast) window.toast("Clipboard is empty.", "warn", 2500); return; }
+                let parsed;
+                try { parsed = JSON.parse(txt); }
+                catch { if (window.toast) window.toast("Clipboard isn't valid row JSON — Copy a row first.", "warn", 2800); return; }
+                const arr = Array.isArray(parsed) ? parsed : [parsed];
+                onPasteRowsAsNew(arr, typeof clickedId === "number" ? clickedId : null);
+              }}
+            >Paste copied row(s) below</div>
           )}
           {onPasteRow && (
             <div
@@ -1043,10 +1072,11 @@ export default function DataTable({
                   if (window.toast) window.toast("Clipboard isn't valid JSON: " + e.message, "error");
                   return;
                 }
-                onPasteRow(rowId, parsed);
-                if (window.toast) window.toast("Row updated from clipboard JSON.", "ok", 2500);
+                // Overwrite-paste only makes sense from a single row object.
+                onPasteRow(rowId, Array.isArray(parsed) ? parsed[0] : parsed);
+                if (window.toast) window.toast("Row overwritten from clipboard.", "ok", 2500);
               }}
-            >Paste row from JSON</div>
+            >Overwrite this row from clipboard</div>
           )}
           {rowMenuExtras && rowMenuExtras.map((item, i) => (
             <div
