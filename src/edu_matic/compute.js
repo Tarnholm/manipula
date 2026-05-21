@@ -127,11 +127,17 @@ function computeUnit(unit, idx, project, isM2, entryType) {
       ? Math.min(fq + 1, allFactions.length)
       : allFactions.length;
     const avail = unit.availability || {};
+    // "all" ownership (AoR entries, or a factional unit whose ownership
+    // string is literally "all") means the unit is available to every
+    // faction — so list every faction in the ethnicity block, not just
+    // the Y-flagged ones. writeOwnership ran just above, so
+    // out.ownershipString is already resolved here.
+    const ownAll = String(out.ownershipString || "").trim().toLowerCase() === "all";
     const tags = [];
     for (let k = 0; k < cap; k++) {
       const tag = allFactions[k];
       if (!tag) continue;
-      if (entryType === "AoR") {
+      if (ownAll || entryType === "AoR") {
         tags.push(tag);
       } else if (entryType === "Merc") {
         if (String(avail[tag] || "").toUpperCase() === "M") tags.push(tag);
