@@ -1401,11 +1401,22 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel, onMove }) {
   const ref = useRef(null);
   // Auto-focus + select-all so the user can immediately type to filter or
-  // overwrite.
+  // overwrite. The retry on the next tick handles an Electron focus race
+  // observed when a sibling editor was unmounting at the same time: the
+  // focus() call appeared to succeed (cell looked editable) but keystrokes
+  // went nowhere until the user clicked outside the window and back. A
+  // belated check + re-focus turns out to be enough to dislodge it.
   useEffect(() => {
     if (!ref.current) return;
     ref.current.focus();
     if (ref.current.select) { try { ref.current.select(); } catch {} }
+    const t1 = setTimeout(() => {
+      if (ref.current && document.activeElement !== ref.current) ref.current.focus();
+    }, 0);
+    const t2 = setTimeout(() => {
+      if (ref.current && document.activeElement !== ref.current) ref.current.focus();
+    }, 30);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
   const onKeyDown = (e) => {
     if (e.key === "Enter") {
@@ -1483,6 +1494,17 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
     if (inputRef.current.select) { try { inputRef.current.select(); } catch {} }
     const r = inputRef.current.getBoundingClientRect();
     setPos({ left: r.left, top: r.bottom + 2, minWidth: r.width });
+    // Belt-and-braces refocus pulses — same Electron race that the
+    // plain CellEditor's useEffect protects against. Combobox cells
+    // mount slightly differently (useLayoutEffect + portal popover)
+    // so the protection lives here too.
+    const t1 = setTimeout(() => {
+      if (inputRef.current && document.activeElement !== inputRef.current) inputRef.current.focus();
+    }, 0);
+    const t2 = setTimeout(() => {
+      if (inputRef.current && document.activeElement !== inputRef.current) inputRef.current.focus();
+    }, 30);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   // Keep popover anchored if the page scrolls / window resizes while it's open.

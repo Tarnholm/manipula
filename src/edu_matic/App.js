@@ -370,6 +370,58 @@ function ModInfoScreen({ project, setProject }) {
             if (trimmed !== "" && !Number.isNaN(Number(trimmed))) v = Number(trimmed);
             else v = trimmed;
           }
+          // FactionN renames cascade — project.factions holds the canonical
+          // ordered list that drives availability column headers + EDU
+          // ownershipString output, and each unit's availability object +
+          // ownership array reference factions by tag. If we only updated
+          // globals.FactionN, the column header would still say the old
+          // tag and the EDU output would still emit the old name. Migrate
+          // all three (factions[], unit availability, unit ownership) in
+          // the same setProject so undo rolls the whole thing back as a
+          // single step.
+          const facMatch = /^Faction(\d+)$/.exec(key);
+          if (facMatch) {
+            const idx = parseInt(facMatch[1], 10) - 1;
+            const oldTag = String(g[key] ?? "").trim();
+            const newTag = String(v ?? "").trim();
+            if (oldTag && newTag && oldTag !== newTag) {
+              const nextFactions = Array.isArray(project.factions) ? project.factions.slice() : [];
+              while (nextFactions.length <= idx) nextFactions.push(null);
+              nextFactions[idx] = newTag;
+              const nextUnits = (project.units || []).map((u) => {
+                if (!u || u.kind !== "unit") return u;
+                let touched = false;
+                let nextAvail = u.availability;
+                if (u.availability && Object.prototype.hasOwnProperty.call(u.availability, oldTag)) {
+                  nextAvail = { ...u.availability };
+                  nextAvail[newTag] = nextAvail[oldTag];
+                  delete nextAvail[oldTag];
+                  touched = true;
+                }
+                let nextOwn = u.ownership;
+                if (Array.isArray(u.ownership) && u.ownership.includes(oldTag)) {
+                  nextOwn = u.ownership.map((x) => (x === oldTag ? newTag : x));
+                  touched = true;
+                }
+                return touched ? { ...u, availability: nextAvail, ownership: nextOwn } : u;
+              });
+              setProject({
+                ...project,
+                globals: { ...g, [key]: v },
+                factions: nextFactions,
+                units: nextUnits,
+              });
+              return;
+            }
+            // First-time set (oldTag empty) or rename-to-empty: still keep
+            // project.factions in sync so the next render of UnitsScreen
+            // sees the right tag at the right index.
+            const nextFactions = Array.isArray(project.factions) ? project.factions.slice() : [];
+            while (nextFactions.length <= idx) nextFactions.push(null);
+            nextFactions[idx] = newTag || null;
+            setProject({ ...project, globals: { ...g, [key]: v }, factions: nextFactions });
+            return;
+          }
           setProject({ ...project, globals: { ...g, [key]: v } });
         };
         return (
