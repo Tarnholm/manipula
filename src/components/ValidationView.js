@@ -49,6 +49,7 @@ export default function ValidationView({ units, modIndex, missingCards, eduProje
       dmbModelFiles: modIndex && modIndex.dmbModelFiles,
       dmbAssetMissing: modIndex && modIndex.dmbAssetMissing,
       dmbAssetOrphans: modIndex && modIndex.dmbAssetOrphans,
+      dmbBareModelMissing: modIndex && modIndex.dmbBareModelMissing,
       unitStringTags: modIndex && modIndex.strings && modIndex.strings.units ? new Set(Object.keys(modIndex.strings.units)) : null,
     });
     const orphans = eduOrphanIssues(modIndex);

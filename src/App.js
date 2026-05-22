@@ -586,7 +586,45 @@ export default function App() {
               }
             }
           }
-          setModIndex(prev => ({ ...prev, dmbAssetMissing, dmbAssetOrphans }));
+          // Missing-model check for the legacy bare-model coding pattern
+          // (the same LOD-expansion rule as the orphan diff above, in
+          // reverse). A DMB `model <factions> data/characters/foo` line
+          // resolves on disk to foo_lod0.cas … foo_lod3.cas.
+          //
+          // The catch: the game ALSO resolves many of these from vanilla
+          // .pack archives (peasants, skin variants) that the filesystem
+          // walk can't see — so "no loose file" alone does NOT mean
+          // "missing", or every vanilla-reused model would false-flag.
+          // Heuristic: group bare models by their declaring DMB type. A
+          // type is MOD-PROVIDED if at least one of its bare models has a
+          // loose .cas on disk; only then do we flag the type's OTHER
+          // variants that are absent (a real gap in a model set the mod
+          // ships). A type with zero loose models is vanilla-packed —
+          // skipped entirely. model_flexi[_m] paths are fully qualified and
+          // already covered by the dmbAssetMissing check.
+          let dmbBareModelMissing = [];
+          if (window.eduAPI && window.eduAPI.checkModPaths) {
+            const byType = new Map();
+            for (const m of (dmbParse.bareModels || [])) {
+              if (!m || !m.path) continue;
+              const t = m.type || "(no type)";
+              if (!byType.has(t)) byType.set(t, []);
+              byType.get(t).push(m.path);
+            }
+            if (byType.size) {
+              const lodCandidates = [];
+              for (const paths of byType.values()) for (const p of paths) { const b = norm(p); for (let i = 0; i < 4; i++) lodCandidates.push(`${b}_lod${i}.cas`); }
+              const res = await window.eduAPI.checkModPaths(lodCandidates);
+              const missingSet = new Set((res && Array.isArray(res.missing)) ? res.missing : []);
+              const lodPresent = (p) => { const b = norm(p); for (let i = 0; i < 4; i++) if (!missingSet.has(`${b}_lod${i}.cas`)) return true; return false; };
+              for (const [type, paths] of byType) {
+                const uniq = [...new Set(paths)];
+                if (!uniq.some(lodPresent)) continue;                 // fully vanilla-packed type — skip
+                for (const p of uniq) if (!lodPresent(p)) dmbBareModelMissing.push({ type, path: p, src: "DMB" });
+              }
+            }
+          }
+          setModIndex(prev => ({ ...prev, dmbAssetMissing, dmbAssetOrphans, dmbBareModelMissing }));
         } catch (e) { console.warn("[dmb-audit] failed:", e && e.message); }
       })();
     } catch (e) {
@@ -2129,13 +2167,14 @@ export default function App() {
           dmbModelFiles: modIndex.dmbModelFiles,
           dmbAssetMissing: modIndex.dmbAssetMissing,
           dmbAssetOrphans: modIndex.dmbAssetOrphans,
+          dmbBareModelMissing: modIndex.dmbBareModelMissing,
           unitStringTags: modIndex.strings && modIndex.strings.units ? new Set(Object.keys(modIndex.strings.units)) : null,
         });
         if (!cancelled) setEduValidationErrors(Array.isArray(errs) ? errs : []);
       } catch (e) { if (!cancelled) setEduValidationErrors([]); }
     }, 800);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.mountTypesLower, modIndex.mountModelByType, modIndex.projectileTypes, modIndex.projectileModelPaths, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.strings]);
+  }, [eduProject, modIndex.dmbModels, modIndex.dmbExtraUsage, modIndex.dmbNewTypes, modIndex.mountTypesLower, modIndex.mountModelByType, modIndex.projectileTypes, modIndex.projectileModelPaths, modIndex.dmbTextures, modIndex.dmbModelFiles, modIndex.dmbAssetMissing, modIndex.dmbAssetOrphans, modIndex.dmbBareModelMissing, modIndex.strings]);
 
   const validationSummary = useMemo(() => {
     // The summary runs on every render — keep it lightweight by skipping the O(n²) cross-unit

@@ -122,6 +122,7 @@ function validate(project, opts) {
   ctx.dmbModelFiles = (opts && Array.isArray(opts.dmbModelFiles)) ? opts.dmbModelFiles : null;
   ctx.dmbAssetMissing = (opts && opts.dmbAssetMissing instanceof Set) ? opts.dmbAssetMissing : null;
   ctx.dmbAssetOrphans = (opts && Array.isArray(opts.dmbAssetOrphans)) ? opts.dmbAssetOrphans : null;
+  ctx.dmbBareModelMissing = (opts && Array.isArray(opts.dmbBareModelMissing)) ? opts.dmbBareModelMissing : null;
   ctx.unitStringTags = (opts && opts.unitStringTags instanceof Set) ? opts.unitStringTags : null;
 
   checkModInfo(project, ctx, push);
@@ -154,6 +155,7 @@ function validate(project, opts) {
   // makes those texture/model refs moot) need it.
   ctx.dmbOrphanTypeSet = computeDmbOrphanTypes(project, ctx);
   checkDmbAssetReferences(project, ctx, push);
+  checkBareModelMissing(ctx, push);
   checkDmbOrphanTypes(project, ctx, push);
   checkDmbOrphanAssets(ctx, push);
 
@@ -716,6 +718,38 @@ function checkDmbAssetReferences(project, ctx, push) {
   };
   emit("texture", ctx.dmbTextures);
   emit("model_flexi", ctx.dmbModelFiles);
+}
+
+// Missing-model check for the legacy bare-model coding pattern. A DMB
+// `model <factions> data/characters/foo` line has NO .cas / _lodN suffix;
+// the game resolves it on disk to foo_lod0.cas … foo_lod3.cas.
+// ctx.dmbBareModelMissing is the renderer-computed list of genuine gaps:
+// a model variant absent from disk (mod + vanilla loose) that belongs to a
+// DMB type which IS mod-provided (at least one of its other variants has a
+// loose .cas). Fully vanilla-packed types are excluded upstream because
+// the game resolves those from .pack archives the filesystem walk can't
+// see — flagging them would false-flag every reused vanilla model.
+// model_flexi[_m] paths are fully-qualified and already covered by
+// checkDmbAssetReferences, so this only fills the bare-model gap.
+function checkBareModelMissing(ctx, push) {
+  if (!ctx.dmbBareModelMissing || !ctx.dmbBareModelMissing.length) return;
+  // Suppress bare models belonging to an orphan DMB type — that whole
+  // block is dead, and the fix is to delete the type (dmb-orphan-type
+  // already flags it), not to add the model files.
+  const orphanTypes = ctx.dmbOrphanTypeSet || new Set();
+  const seen = new Set();
+  for (const ref of ctx.dmbBareModelMissing) {
+    if (!ref || !ref.path) continue;
+    if (ref.type && orphanTypes.has(ref.type)) continue;
+    if (seen.has(ref.path)) continue;
+    seen.add(ref.path);
+    const stem = String(ref.path).split("/").pop();
+    push(err(
+      `[${ref.src || "DMB"}] ${ref.type || ref.path}`, null,
+      `Model "${ref.path}" is referenced but none of ${stem}_lod0.cas … ${stem}_lod3.cas exist in the mod or vanilla data — the game can't load this model. Set the vanilla data dir via the topbar if this is a vanilla model.`,
+      "dmb-bare-model-missing"
+    ));
+  }
 }
 
 // DMB types declared but never referenced by any EDU unit's `model id`
