@@ -53,8 +53,9 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
 // token (so "rhaetians" in "rhaetians, gauls" is replaced but a longer
 // word that merely contains it is not). Returns a NEW project object with
 // only the touched arrays/objects replaced.
-function renameFactionTagEverywhere(project, oldTag, newTag) {
+function renameFactionTagEverywhere(project, oldTag, newTag, opts) {
   const oldLc = String(oldTag).toLowerCase();
+  const skipFactions = opts && opts.skipFactions;
   // Replace any whole token equal to oldTag inside a comma-list / single value.
   const replaceInList = (str) => {
     if (typeof str !== "string" || !str || !str.toLowerCase().includes(oldLc)) return str;
@@ -68,8 +69,14 @@ function renameFactionTagEverywhere(project, oldTag, newTag) {
     return changed ? out.join(", ") : str;
   };
 
-  const factions = (project.factions || []).map((f) =>
-    (typeof f === "string" && f.toLowerCase() === oldLc) ? newTag : f);
+  // The reconcile path sets project.factions POSITIONALLY itself and passes
+  // skipFactions — otherwise this blanket "replace every matching slot" would
+  // clobber a different slot that legitimately still holds oldTag, causing a
+  // rename ping-pong (infinite render loop) when two slots share a tag.
+  const factions = skipFactions
+    ? project.factions
+    : (project.factions || []).map((f) =>
+        (typeof f === "string" && f.toLowerCase() === oldLc) ? newTag : f);
 
   const units = (project.units || []).map((u) => {
     if (!u || u.kind !== "unit") return u;
@@ -222,13 +229,21 @@ export default function App({ externalProject = null, onProjectChange, controlle
       }
     }
     if (!renames.length) return;
-    let next = project;
+    // Fix project.factions POSITIONALLY first — each slot gets exactly its
+    // global value. This is the loop-safe part: never blanket-replace a tag
+    // across the array (two slots sharing a tag would ping-pong forever).
+    const nf = project.factions.slice();
+    for (const r of renames) { while (nf.length <= r.idx) nf.push(null); nf[r.idx] = r.newTag; }
+    let next = { ...project, factions: nf };
+    // Migrate references (unit availability/ownership/strings + Core Data),
+    // skipping the factions array since we just fixed it positionally. Only
+    // migrate when the old tag is fully gone from the new faction list, so a
+    // tag still in use by another slot isn't dragged along.
+    const stillPresent = new Set(nf.map((f) => String(f || "").trim().toLowerCase()).filter(Boolean));
     for (const r of renames) {
-      next = renameFactionTagEverywhere(next, r.oldTag, r.newTag);
-      const nf = next.factions.slice();
-      while (nf.length <= r.idx) nf.push(null);
-      nf[r.idx] = r.newTag;
-      next = { ...next, factions: nf };
+      if (!stillPresent.has(r.oldTag.toLowerCase())) {
+        next = renameFactionTagEverywhere(next, r.oldTag, r.newTag, { skipFactions: true });
+      }
     }
     setProject(next);
   }, [project, setProject]);
