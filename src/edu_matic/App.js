@@ -605,6 +605,21 @@ function CoreDataScreen({ project, setProject }) {
     setProject({ ...project, coreData: { ...tables, [active]: next } });
     if (window.toast) window.toast(`Pasted ${newRows.length} row${newRows.length === 1 ? "" : "s"}`, "ok", 2000);
   }, [tables, active, project, setProject]);
+  // Cell-range fill — apply every {rowId, columnKey, value} in ONE
+  // setProject (looping the per-cell onEdit would re-read a stale table).
+  const onFillCoreDataCells = useCallback((targets) => {
+    if (!Array.isArray(targets) || !targets.length) return;
+    const t = tables[active]; if (!Array.isArray(t)) return;
+    const next = t.slice();
+    for (const { rowId, columnKey, value } of targets) {
+      const cur = next[rowId]; if (!cur) continue;
+      const upd = { ...cur };
+      if (value === "" || value == null) delete upd[columnKey];
+      else upd[columnKey] = value;
+      next[rowId] = upd;
+    }
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+  }, [tables, active, project, setProject]);
   const onPasteCoreDataOverwrite = useCallback((parsedRows, startRowId) => {
     if (!Array.isArray(parsedRows) || !parsedRows.length || typeof startRowId !== "number") return;
     const t = tables[active] || [];
@@ -733,6 +748,7 @@ function CoreDataScreen({ project, setProject }) {
         rowToJSON={(idx) => rows[idx] || null}
         onPasteRowsAsNew={onPasteCoreDataAsNew}
         onPasteRowsOverwrite={onPasteCoreDataOverwrite}
+        onFillCells={onFillCoreDataCells}
         addRowLabel="+ New row"
         bulkActions={[
           { label: "Set field on selected…", setField: { onApply: bulkSetCoreData } },
@@ -1423,6 +1439,49 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     setProject({ ...project, units: arr });
     if (window.toast) window.toast(`Pasted ${clean.length} unit${clean.length === 1 ? "" : "s"} over selection`, "ok", 2000);
   }, [project, setProject]);
+  // Cell-range fill — apply every {rowId, columnKey, value} in ONE
+  // setProject. Handles the synthetic avail:/own: columns plus normal
+  // fields; availability changes re-derive factionalOwnership once.
+  const onFillUnitCells = useCallback((targets) => {
+    if (!Array.isArray(targets) || !targets.length) return;
+    const nextUnits = project.units.slice();
+    const cloned = new Map();
+    const getU = (idx) => {
+      if (cloned.has(idx)) return cloned.get(idx);
+      const base = nextUnits[idx];
+      if (!base || base.kind !== "unit") return null;
+      const c = { ...base };
+      cloned.set(idx, c); nextUnits[idx] = c;
+      return c;
+    };
+    const touchedAvail = new Set();
+    for (const { rowId, columnKey, value } of targets) {
+      const u = getU(rowId);
+      if (!u || typeof columnKey !== "string") continue;
+      if (columnKey.startsWith(AVAIL_PREFIX)) {
+        const f = columnKey.slice(AVAIL_PREFIX.length);
+        const av = { ...(u.availability || {}) };
+        if (value === "" || value == null) delete av[f]; else av[f] = value;
+        u.availability = av; touchedAvail.add(rowId);
+      } else if (columnKey.startsWith(OWN_PREFIX)) {
+        const i = parseInt(columnKey.slice(OWN_PREFIX.length), 10);
+        const own = Array.isArray(u.ownership) ? u.ownership.slice() : [];
+        while (own.length <= i) own.push("");
+        own[i] = value || "";
+        while (own.length && !own[own.length - 1]) own.pop();
+        u.ownership = own;
+      } else {
+        if (value === "" || value == null) delete u[columnKey]; else u[columnKey] = value;
+      }
+    }
+    for (const idx of touchedAvail) {
+      const u = nextUnits[idx];
+      const ownList = sortByEduFactionOrder(factionKeys.filter((kk) => u.availability && u.availability[kk] === "Y"));
+      if (u.availability && u.availability.slave === "Y") ownList.push("slave");
+      u.factionalOwnership = ownList.join(", ");
+    }
+    setProject({ ...project, units: nextUnits });
+  }, [project, setProject, factionKeys]);
   // Move a row up or down within project.units. Skips section/comment
   // rows so the move feels like a 1-row jump in the visible table even
   // when the underlying array has interleaved comment markers.
@@ -1825,6 +1884,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         onPasteRow={onPasteUnit}
         onPasteRowsAsNew={onPasteUnitsAsNew}
         onPasteRowsOverwrite={onPasteUnitsOverwrite}
+        onFillCells={onFillUnitCells}
         onEditSection={renameSectionHeader}
         onSelectionChange={setSelectedRowIdxs}
         rowMenuExtras={[

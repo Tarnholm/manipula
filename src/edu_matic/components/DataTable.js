@@ -99,6 +99,10 @@ export default function DataTable({
   // overwrites consecutive data rows from there. Preferred over
   // onPasteRowsAsNew when a row selection exists.
   onPasteRowsOverwrite = null, // (rowsArray, startRowId) => void
+  // Cell-range fill. Receives [{rowOrigIdx, columnKey, value}, …] and must
+  // apply ALL of them in a single state update (looping the per-cell onEdit
+  // would re-read a stale project each time and only the last would stick).
+  onFillCells = null,        // (targets[]) => void
   // Per-row flag indicators for inline validation. Map keyed by ROWID
   // (not row index): { [rowId]: { error?: string, warn?: string } }.
   // First column gets a small dot showing the highest severity; the
@@ -344,6 +348,38 @@ export default function DataTable({
     }
     return m;
   }, [visibleEntries]);
+  // Visible data-row origIdx order — used to resolve a cell-selection
+  // rectangle (rows between anchor and focus, in screen order).
+  const visibleDataOrigIdxs = useMemo(
+    () => visibleEntries.filter((e) => Array.isArray(e.row)).map((e) => e.origIdx),
+    [visibleEntries]
+  );
+  // Set of "rowOrigIdx|colKey" cells inside the current selection rectangle.
+  // Precomputed (rather than testing each cell at render) so per-cell lookup
+  // is O(1) and the cost is bounded by the selection size, not the table.
+  const selectedCellKeys = useMemo(() => {
+    if (!cellSel) return null;
+    const ai = visibleDataOrigIdxs.indexOf(cellSel.aRow);
+    const fi = visibleDataOrigIdxs.indexOf(cellSel.fRow);
+    const aci = orderedColumns.indexOf(cellSel.aCol);
+    const fci = orderedColumns.indexOf(cellSel.fCol);
+    if (ai < 0 || fi < 0 || aci < 0 || fci < 0) return null;
+    const rLo = Math.min(ai, fi), rHi = Math.max(ai, fi);
+    const cLo = Math.min(aci, fci), cHi = Math.max(aci, fci);
+    const set = new Set();
+    for (let r = rLo; r <= rHi; r++)
+      for (let c = cLo; c <= cHi; c++)
+        set.add(visibleDataOrigIdxs[r] + "|" + orderedColumns[c]);
+    return set;
+  }, [cellSel, visibleDataOrigIdxs, orderedColumns]);
+  const beginCellSelect = useCallback((rowOrigIdx, colKey, additive) => {
+    cellDragRef.current = true;
+    setCellSel({ aRow: rowOrigIdx, aCol: colKey, fRow: rowOrigIdx, fCol: colKey });
+  }, []);
+  const extendCellSelect = useCallback((rowOrigIdx, colKey) => {
+    if (!cellDragRef.current) return;
+    setCellSel((cur) => cur ? { ...cur, fRow: rowOrigIdx, fCol: colKey } : cur);
+  }, []);
   // Update the navigation snapshot for moveCell. Uses filteredEntries
   // so search filtering also limits Tab navigation to visible rows.
   useEffect(() => {
@@ -435,6 +471,17 @@ export default function DataTable({
   // dashed "marching ants"-ish border (Excel cue) so the user can see
   // what a Ctrl+V will paste. Cleared on the next copy.
   const [copiedIds, setCopiedIds] = useState(() => new Set());
+  // Excel-style cell selection. anchor + focus identify a rectangle;
+  // single click selects one cell, click-drag extends, double-click edits.
+  // Stored as rowOrigIdx + column key (stable across re-render / sort).
+  const [cellSel, setCellSel] = useState(null);   // { aRow, aCol, fRow, fCol } | null
+  const cellDragRef = useRef(false);
+  // End a drag-select on mouseup anywhere.
+  useEffect(() => {
+    const up = () => { cellDragRef.current = false; };
+    document.addEventListener("mouseup", up);
+    return () => document.removeEventListener("mouseup", up);
+  }, []);
   // Notify the parent when the selection changes. Ref stored to dedupe
   // — only fire when the prop actually changes shape.
   const lastSelectionRef = useRef(null);
@@ -545,7 +592,35 @@ export default function DataTable({
         }
         return;
       }
+      // Resolve the current cell-selection rectangle (visible row origIdxs
+      // + column keys), if any. Cell selection takes priority over row
+      // selection for Ctrl+C/V so the Excel grid flow feels natural.
+      const cellRect = (() => {
+        if (!cellSel) return null;
+        const ai = visibleDataOrigIdxs.indexOf(cellSel.aRow), fi = visibleDataOrigIdxs.indexOf(cellSel.fRow);
+        const aci = orderedColumns.indexOf(cellSel.aCol), fci = orderedColumns.indexOf(cellSel.fCol);
+        if (ai < 0 || fi < 0 || aci < 0 || fci < 0) return null;
+        const rLo = Math.min(ai, fi), rHi = Math.max(ai, fi), cLo = Math.min(aci, fci), cHi = Math.max(aci, fci);
+        const rIdxs = []; for (let r = rLo; r <= rHi; r++) rIdxs.push(visibleDataOrigIdxs[r]);
+        const cKeys = []; for (let c = cLo; c <= cHi; c++) cKeys.push(orderedColumns[c]);
+        return { rIdxs, cKeys };
+      })();
       if (k === "c") {
+        if (cellRect) {
+          e.preventDefault();
+          const tsv = cellRect.rIdxs.map((ri) =>
+            cellRect.cKeys.map((ck) => {
+              const ci = columns.indexOf(ck);
+              const v = Array.isArray(rows[ri]) ? rows[ri][ci] : undefined;
+              return v == null ? "" : String(v);
+            }).join("\t")
+          ).join("\n");
+          navigator.clipboard.writeText(tsv).then(() => {
+            const n = cellRect.rIdxs.length * cellRect.cKeys.length;
+            if (window.toast) window.toast(`Copied ${n} cell${n === 1 ? "" : "s"}`, "ok", 1200);
+          }).catch(() => {});
+          return;
+        }
         if (hasSel && rowToJSON) {
           e.preventDefault();
           const ids = [...selectedIds].sort((a, b) =>
@@ -562,6 +637,29 @@ export default function DataTable({
         return;
       }
       if (k === "v") {
+        // Cell-range fill: a single clipboard value fills every selected
+        // cell; a TSV grid maps onto the selection from the top-left.
+        if (cellRect && onFillCells) {
+          e.preventDefault();
+          navigator.clipboard.readText().then((txt) => {
+            if (txt == null) return;
+            const resolve = (ri) => (rowIds ? rowIds[ri] : ri);
+            const targets = [];
+            if (/[\t\n]/.test(txt)) {
+              const grid = txt.replace(/\n$/, "").split(/\r?\n/).map((ln) => ln.split("\t"));
+              cellRect.rIdxs.forEach((ri, r) => cellRect.cKeys.forEach((ck, c) => {
+                const gv = grid[r] && grid[r][c] != null ? grid[r][c] : null;
+                if (gv != null) targets.push({ rowId: resolve(ri), columnKey: ck, value: gv });
+              }));
+            } else {
+              cellRect.rIdxs.forEach((ri) => cellRect.cKeys.forEach((ck) => {
+                targets.push({ rowId: resolve(ri), columnKey: ck, value: txt });
+              }));
+            }
+            if (targets.length) onFillCells(targets);
+          }).catch(() => {});
+          return;
+        }
         if ((onPasteRowsOverwrite || onPasteRowsAsNew) && (hasSel || focused)) {
           e.preventDefault();
           navigator.clipboard.readText().then((txt) => {
@@ -587,7 +685,7 @@ export default function DataTable({
     };
     document.addEventListener("keydown", onDocKey);
     return () => document.removeEventListener("keydown", onDocKey);
-  }, [selectedIds, rowToJSON, onPasteRowsAsNew, onPasteRowsOverwrite, bulkActions]);
+  }, [selectedIds, rowToJSON, onPasteRowsAsNew, onPasteRowsOverwrite, bulkActions, cellSel, onFillCells, visibleDataOrigIdxs, orderedColumns, rows, columns, rowIds]);
 
   const showToolbar = searchable || columnsToggleable || onAddRow || findReplace || (bulkActions && bulkActions.length);
   const selectionArr = useMemo(() => [...selectedIds], [selectedIds]);
@@ -754,7 +852,7 @@ export default function DataTable({
                 className="dtable-gutter dtable-gutter-head"
                 style={{ position: "sticky", top: 0, left: 0, zIndex: 6, width: GUTTER_W, minWidth: GUTTER_W, textAlign: "center" }}
                 title="Row numbers — click to select a whole row (Ctrl-click to add, Shift-click for a range)"
-                onClick={() => { if (selectedIds.size) setSelectedIds(new Set()); }}
+                onClick={() => { if (selectedIds.size) setSelectedIds(new Set()); setCellSel(null); }}
               >#</th>
               {orderedColumns.map((c, colVisibleIdx) => {
                 const label = (columnLabels && columnLabels[c]) || c;
@@ -966,6 +1064,7 @@ export default function DataTable({
                       title="Click to select this row · Ctrl-click to add/remove · Shift-click for a range"
                       onClick={(e) => {
                         e.stopPropagation();
+                        setCellSel(null);
                         setSelectedIds((prev) => {
                           const next = new Set(prev);
                           if (e.shiftKey && lastClickedRowIdRef.current != null) {
@@ -1001,6 +1100,7 @@ export default function DataTable({
                       }
                       const w = colWidths[c];
                       if (w) cellStyle.width = w;
+                      const cellSelected = !!(selectedCellKeys && selectedCellKeys.has(origIdx + "|" + c));
                       return (
                         <Cell
                           key={c}
@@ -1015,6 +1115,9 @@ export default function DataTable({
                           onAutoEnterConsumed={consumeAutoEdit}
                           onMove={moveCell}
                           stickyStyle={Object.keys(cellStyle).length ? cellStyle : null}
+                          cellSelected={cellSelected}
+                          onBeginSelect={beginCellSelect}
+                          onExtendSelect={extendCellSelect}
                         />
                       );
                     })}
@@ -1419,7 +1522,7 @@ function SectionLabel({ text, editable, onCommit }) {
 // time a cell opens its editor; every other editing cell listens and force-
 // commits + closes itself. A document-level Escape handler does the same so
 // the user always has a keyboard escape hatch when something goes sideways.
-const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove, stickyStyle }) {
+const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove, stickyStyle, cellSelected, onBeginSelect, onExtendSelect }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   // Ref alongside state so commit() reads the latest typed/picked value even
@@ -1538,8 +1641,25 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
     <td
       title={flagTitle || text}
       className={editable ? "dtable-editable" : ""}
-      style={{ position: stickyStyle ? "sticky" : "relative", ...(stickyStyle || {}) }}
-      onClick={startEdit}
+      style={(() => {
+        // Excel interaction: single click (mousedown) selects / starts a
+        // drag-select; double-click opens the editor. Selected cells get a
+        // gold outline.
+        const s = { position: stickyStyle ? "sticky" : "relative", ...(stickyStyle || {}) };
+        if (cellSelected && !editing) {
+          s.outline = "2px solid #dca64a";
+          s.outlineOffset = "-2px";
+          if (!s.background) s.background = "rgba(220,166,74,0.14)";
+        }
+        return s;
+      })()}
+      onMouseDown={(e) => {
+        if (editing) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;   // row select / range handled on the <tr>
+        if (onBeginSelect) onBeginSelect(rowOrigIdx, columnKey);
+      }}
+      onMouseEnter={() => { if (!editing && onExtendSelect) onExtendSelect(rowOrigIdx, columnKey); }}
+      onDoubleClick={startEdit}
     >
       <span
         className="dtable-cell-text"
@@ -1597,7 +1717,10 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       && prev.autoEnter === next.autoEnter
       && prev.onAutoEnterConsumed === next.onAutoEnterConsumed
       && prev.onMove === next.onMove
-      && prev.stickyStyle === next.stickyStyle;
+      && prev.stickyStyle === next.stickyStyle
+      && prev.cellSelected === next.cellSelected
+      && prev.onBeginSelect === next.onBeginSelect
+      && prev.onExtendSelect === next.onExtendSelect;
 });
 
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel, onMove }) {
