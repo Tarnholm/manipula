@@ -353,6 +353,43 @@ function ProjectScreen({ project, onImport, projectDir }) {
 function ModInfoScreen({ project, setProject }) {
   const [hookStatus, setHookStatus] = useState(null);
   const [hookBusy, setHookBusy] = useState(false);
+  const [renameStatus, setRenameStatus] = useState(null);
+  // Manual, guarded faction-rename application. When a FactionN global was
+  // edited (e.g. rhaetians → breuni) but the cached project.factions list
+  // wasn't updated (old build, or re-typing the same global is a no-op),
+  // the two diverge: Mod Info shows breuni, but columns / ethnicity /
+  // ownership read project.factions and still show rhaetians. This button
+  // applies those renames on demand — ONLY clean, unambiguous ones (old
+  // tag appears exactly once, new tag not already present) so it can't
+  // swap or merge factions the way the old auto-reconcile did.
+  const applyFactionRenames = useCallback(() => {
+    if (!project || !project.globals || !Array.isArray(project.factions)) return;
+    const g = project.globals;
+    const facCount = {};
+    for (const f of project.factions) { const t = String(f || "").trim().toLowerCase(); if (t) facCount[t] = (facCount[t] || 0) + 1; }
+    const renames = [];
+    for (const key of Object.keys(g)) {
+      const m = /^Faction(\d+)$/.exec(key);
+      if (!m) continue;
+      const idx = parseInt(m[1], 10) - 1;
+      const oldTag = String(project.factions[idx] ?? "").trim();
+      const newTag = String(g[key] ?? "").trim();
+      if (!oldTag || !newTag || oldTag.toLowerCase() === newTag.toLowerCase()) continue;
+      if ((facCount[oldTag.toLowerCase()] || 0) !== 1) continue;        // ambiguous: old tag not unique
+      if (facCount[newTag.toLowerCase()]) continue;                     // would merge into an existing faction
+      renames.push({ idx, oldTag, newTag });
+    }
+    if (!renames.length) { setRenameStatus("Faction list already matches the globals — nothing to rename."); return; }
+    let next = project;
+    for (const r of renames) {
+      const nf = next.factions.slice();
+      while (nf.length <= r.idx) nf.push(null);
+      nf[r.idx] = r.newTag;
+      next = renameFactionTagEverywhere({ ...next, factions: nf }, r.oldTag, r.newTag, { skipFactions: true });
+    }
+    setProject(next);
+    setRenameStatus(`Applied ${renames.length} rename${renames.length === 1 ? "" : "s"}: ${renames.map((r) => `${r.oldTag} → ${r.newTag}`).join(", ")}`);
+  }, [project, setProject]);
   // Backfill any missing heat/terrain tuning globals so they show up in
   // the table for projects imported before these knobs existed. One-shot
   // because once seeded the keys are in project.globals and the next
@@ -441,6 +478,16 @@ function ModInfoScreen({ project, setProject }) {
         </div>
       </div>
       <h3 style={{ marginTop: 24 }}>Globals ({Object.keys(g).length})</h3>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+        <button
+          className="btn"
+          onClick={applyFactionRenames}
+          title="If you renamed a faction here (e.g. rhaetians → breuni) but the columns / ethnicity / ownership still show the old name, click this to apply the rename through the unit data + Core Data. Only clean, unambiguous renames are applied."
+        >Apply faction renames</button>
+        {renameStatus && (
+          <span style={{ fontSize: 11, color: renameStatus.startsWith("Applied") ? "#7c9" : "#999" }}>{renameStatus}</span>
+        )}
+      </div>
       {(() => {
         const sortedKeys = Object.keys(g).sort((a, b) => NATURAL_COLLATOR.compare(a, b));
         const rows = sortedKeys.map((k) => [k, g[k]]);
