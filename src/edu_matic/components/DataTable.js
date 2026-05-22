@@ -94,6 +94,11 @@ export default function DataTable({
   // land after (or null = append at end). Distinct from onPasteRow,
   // which overwrites a single existing row.
   onPasteRowsAsNew = null,   // (rowsArray, afterRowId|null) => void
+  // Ctrl+V overwrite-onto-selection. Receives the parsed clipboard rows
+  // and the rowId to start overwriting at (the first selected row);
+  // overwrites consecutive data rows from there. Preferred over
+  // onPasteRowsAsNew when a row selection exists.
+  onPasteRowsOverwrite = null, // (rowsArray, startRowId) => void
   // Per-row flag indicators for inline validation. Map keyed by ROWID
   // (not row index): { [rowId]: { error?: string, warn?: string } }.
   // First column gets a small dot showing the highest severity; the
@@ -557,7 +562,7 @@ export default function DataTable({
         return;
       }
       if (k === "v") {
-        if (onPasteRowsAsNew && (hasSel || focused)) {
+        if ((onPasteRowsOverwrite || onPasteRowsAsNew) && (hasSel || focused)) {
           e.preventDefault();
           navigator.clipboard.readText().then((txt) => {
             if (!txt || !txt.trim()) { if (window.toast) window.toast("Clipboard is empty", "warn", 2000); return; }
@@ -566,8 +571,15 @@ export default function DataTable({
             catch { if (window.toast) window.toast("Clipboard isn't valid row JSON — copy rows with Ctrl+C first", "warn", 2800); return; }
             const arr = Array.isArray(parsed) ? parsed : [parsed];
             const numericSel = [...selectedIds].filter((x) => typeof x === "number");
-            const afterId = numericSel.length ? Math.max(...numericSel) : null;
-            onPasteRowsAsNew(arr, afterId);
+            // With a row selection, Ctrl+V OVERWRITES the selected rows
+            // (Excel-style: make blank rows, select them, paste onto them).
+            // With no selection it falls back to inserting new rows.
+            if (numericSel.length && onPasteRowsOverwrite) {
+              onPasteRowsOverwrite(arr, Math.min(...numericSel));
+            } else if (onPasteRowsAsNew) {
+              const afterId = numericSel.length ? Math.max(...numericSel) : null;
+              onPasteRowsAsNew(arr, afterId);
+            }
           }).catch(() => {});
         }
         return;
@@ -575,7 +587,7 @@ export default function DataTable({
     };
     document.addEventListener("keydown", onDocKey);
     return () => document.removeEventListener("keydown", onDocKey);
-  }, [selectedIds, rowToJSON, onPasteRowsAsNew, bulkActions]);
+  }, [selectedIds, rowToJSON, onPasteRowsAsNew, onPasteRowsOverwrite, bulkActions]);
 
   const showToolbar = searchable || columnsToggleable || onAddRow || findReplace || (bulkActions && bulkActions.length);
   const selectionArr = useMemo(() => [...selectedIds], [selectedIds]);

@@ -602,6 +602,17 @@ function CoreDataScreen({ project, setProject }) {
     setProject({ ...project, coreData: { ...tables, [active]: next } });
     if (window.toast) window.toast(`Pasted ${newRows.length} row${newRows.length === 1 ? "" : "s"}`, "ok", 2000);
   }, [tables, active, project, setProject]);
+  const onPasteCoreDataOverwrite = useCallback((parsedRows, startRowId) => {
+    if (!Array.isArray(parsedRows) || !parsedRows.length || typeof startRowId !== "number") return;
+    const t = tables[active] || [];
+    const clean = parsedRows.filter((p) => p && typeof p === "object").map((p) => ({ ...p }));
+    const next = t.slice();
+    let target = startRowId, pi = 0;
+    while (pi < clean.length && target < next.length) { next[target] = clean[pi]; pi++; target++; }
+    if (pi < clean.length) next.push(...clean.slice(pi));
+    setProject({ ...project, coreData: { ...tables, [active]: next } });
+    if (window.toast) window.toast(`Pasted ${clean.length} row${clean.length === 1 ? "" : "s"} over selection`, "ok", 2000);
+  }, [tables, active, project, setProject]);
 
   // Bulk operations on selected rows of the active core-data table.
   const bulkSetCoreData = useCallback((rowIdxs, column, value) => {
@@ -718,6 +729,7 @@ function CoreDataScreen({ project, setProject }) {
         onDeleteRow={deleteRow}
         rowToJSON={(idx) => rows[idx] || null}
         onPasteRowsAsNew={onPasteCoreDataAsNew}
+        onPasteRowsOverwrite={onPasteCoreDataOverwrite}
         addRowLabel="+ New row"
         bulkActions={[
           { label: "Set field on selected…", setField: { onApply: bulkSetCoreData } },
@@ -1382,6 +1394,32 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     setProject({ ...project, units: arr });
     if (window.toast) window.toast(`Pasted ${newUnits.length} unit${newUnits.length === 1 ? "" : "s"}`, "ok", 2000);
   }, [project, setProject]);
+  // Ctrl+V overwrite: replace consecutive unit rows starting at startRowId
+  // with the clipboard rows (Excel "paste onto these rows" flow). unit id /
+  // dictionary_tag are cleared and "(copy)" appended so an in-project paste
+  // doesn't collide. Overflow past the existing rows is appended as new.
+  const onPasteUnitsOverwrite = useCallback((parsedRows, startRowId) => {
+    if (!Array.isArray(parsedRows) || !parsedRows.length) return;
+    if (typeof startRowId !== "number") return;
+    const clean = parsedRows.filter((p) => p && typeof p === "object").map((p) => {
+      const u = { ...p, kind: "unit", row: 0 };
+      if (u.name) u.name = String(u.name) + " (copy)";
+      if (u["unit id"]) u["unit id"] = "";
+      if (u["dictionary_tag"]) u["dictionary_tag"] = "";
+      return u;
+    });
+    const arr = project.units.slice();
+    let target = startRowId, pi = 0;
+    while (pi < clean.length && target < arr.length) {
+      const cur = arr[target];
+      if (cur && cur.kind === "unit") { arr[target] = clean[pi]; pi++; }
+      target++;
+    }
+    // Append any clipboard rows that didn't have a target row to land on.
+    if (pi < clean.length) arr.push(...clean.slice(pi));
+    setProject({ ...project, units: arr });
+    if (window.toast) window.toast(`Pasted ${clean.length} unit${clean.length === 1 ? "" : "s"} over selection`, "ok", 2000);
+  }, [project, setProject]);
   // Move a row up or down within project.units. Skips section/comment
   // rows so the move feels like a 1-row jump in the visible table even
   // when the underlying array has interleaved comment markers.
@@ -1783,6 +1821,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         rowToJSON={(idx) => project.units[idx] || null}
         onPasteRow={onPasteUnit}
         onPasteRowsAsNew={onPasteUnitsAsNew}
+        onPasteRowsOverwrite={onPasteUnitsOverwrite}
         onEditSection={renameSectionHeader}
         onSelectionChange={setSelectedRowIdxs}
         rowMenuExtras={[
@@ -2337,6 +2376,20 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
     setProject({ ...project, armour: arr });
     if (window.toast) window.toast(`Pasted ${newRows.length} armour row${newRows.length === 1 ? "" : "s"}`, "ok", 2000);
   }, [rows, project, setProject]);
+  const onPasteArmourOverwrite = useCallback((parsedRows, startRowId) => {
+    if (!Array.isArray(parsedRows) || !parsedRows.length || typeof startRowId !== "number") return;
+    const clean = parsedRows.filter((p) => p && typeof p === "object").map((p) => ({ ...p, row: 0 }));
+    const arr = rows.slice();
+    let target = startRowId, pi = 0;
+    while (pi < clean.length && target < arr.length) {
+      const cur = arr[target];
+      if (cur && cur["Model Set Name"] != null) { arr[target] = clean[pi]; pi++; }
+      target++;
+    }
+    if (pi < clean.length) arr.push(...clean.slice(pi));
+    setProject({ ...project, armour: arr });
+    if (window.toast) window.toast(`Pasted ${clean.length} armour row${clean.length === 1 ? "" : "s"} over selection`, "ok", 2000);
+  }, [rows, project, setProject]);
   const addArmourFromTemplate = useCallback((tplKey) => {
     const tpl = ARMOUR_TEMPLATES.find(t => t.key === tplKey);
     if (!tpl) return;
@@ -2486,6 +2539,7 @@ function ArmourScreen({ project: rawProject, setProject, projectBlame }) {
         rowToJSON={(idx) => rows[idx] || null}
         onPasteRow={onPasteArmour}
         onPasteRowsAsNew={onPasteArmourAsNew}
+        onPasteRowsOverwrite={onPasteArmourOverwrite}
         onEditSection={renameArmourSection}
         rowMenuExtras={[
           { label: "↑ Move row up", onClick: (idx) => moveArmour(idx, "up") },
