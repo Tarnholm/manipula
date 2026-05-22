@@ -17,7 +17,7 @@ import { validate, diagnose } from "./validate";
 import { compute } from "./compute";
 import { formatEdu } from "./format";
 import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
-import { sortByEduFactionOrder } from "./factionOrder";
+import { sortByEduFactionOrder, cleanFactionList } from "./factionOrder";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -1524,9 +1524,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     }
     for (const idx of touchedAvail) {
       const u = nextUnits[idx];
-      const ownList = sortByEduFactionOrder(factionKeys.filter((kk) => u.availability && u.availability[kk] === "Y"));
-      if (u.availability && u.availability.slave === "Y") ownList.push("slave");
-      u.factionalOwnership = ownList.join(", ");
+      const y = factionKeys.filter((kk) => u.availability && u.availability[kk] === "Y");
+      if (u.availability && u.availability.slave === "Y") y.push("slave");
+      u.factionalOwnership = cleanFactionList(y).join(", ");
     }
     setProject({ ...project, units: nextUnits });
   }, [project, setProject, factionKeys]);
@@ -1589,13 +1589,12 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       const nextAvail = { ...(cur.availability || {}) };
       if (newValue === "" || newValue == null) delete nextAvail[f];
       else nextAvail[f] = newValue;
-      // Re-derive factionalOwnership from the Y cells, in the canonical
-      // EDU faction order (factionOrder.js) with slave at the end — so
-      // the ownership string the EDU emits is consistently ordered no
-      // matter which faction the user toggled.
-      const ownList = sortByEduFactionOrder(factionKeys.filter((k) => nextAvail[k] === "Y"));
-      if (nextAvail.slave === "Y") ownList.push("slave");
-      const next = { ...cur, availability: nextAvail, factionalOwnership: ownList.join(", ") };
+      // Re-derive factionalOwnership from the Y cells: canonical order,
+      // de-duplicated, slave last (cleanFactionList) so the emitted line
+      // is consistent no matter which faction the user toggled.
+      const y = factionKeys.filter((k) => nextAvail[k] === "Y");
+      if (nextAvail.slave === "Y") y.push("slave");
+      const next = { ...cur, availability: nextAvail, factionalOwnership: cleanFactionList(y).join(", ") };
       const nextUnits = project.units.slice();
       nextUnits[unitIdx] = next;
       setProject({ ...project, units: nextUnits });

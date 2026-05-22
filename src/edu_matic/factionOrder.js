@@ -78,16 +78,59 @@ export function sortByEduFactionOrder(tags) {
 }
 
 /**
+ * Sort + clean a list of faction tags for output: dedupe (case-insensitive,
+ * first occurrence wins), order canonically, and force "slave" to the very
+ * end (it's a real tag in the canonical list, but non-canonical tags would
+ * otherwise sort past it). Shared by ownership strings and ethnicity lines
+ * so both stay clean.
+ * @param {string[]} tags
+ * @returns {string[]}
+ */
+export function cleanFactionList(tags, excludeSet) {
+  const seen = new Set();
+  const uniq = [];
+  for (const t of tags) {
+    const s = String(t || "").trim();
+    if (!s) continue;
+    const lc = s.toLowerCase();
+    if (excludeSet && excludeSet.has(lc)) continue;   // placeholder / culture-group faction
+    if (seen.has(lc)) continue;
+    seen.add(lc);
+    uniq.push(s);
+  }
+  const slaves = uniq.filter((t) => t.toLowerCase() === "slave");
+  const rest = uniq.filter((t) => t.toLowerCase() !== "slave");
+  return [...sortByEduFactionOrder(rest), ...slaves];
+}
+
+/**
+ * Build the faction-exclude Set for a project: the built-in defaults
+ * (culture umbrellas / placeholder / rebel slots) UNION any extra tags
+ * from the EthnicityExcludeFactions global (comma-separated). Used for
+ * BOTH the ethnicity block and the ownership line so neither references
+ * a non-recruiting faction. Tags are lowercased.
+ * @param {string|undefined} globalValue project.globals.EthnicityExcludeFactions
+ * @returns {Set<string>}
+ */
+export function buildExcludeSet(globalValue) {
+  const set = new Set(DEFAULT_ETHNICITY_EXCLUDE.map((s) => s.toLowerCase()));
+  if (typeof globalValue === "string" && globalValue.trim()) {
+    for (const s of globalValue.split(",")) { const t = s.trim().toLowerCase(); if (t) set.add(t); }
+  }
+  return set;
+}
+
+/**
  * Reorder a comma-separated ownership string ("romans_julii, sparta, …")
- * into canonical order. Preserves the exact set of tags — only reorders
- * — so it's safe to run on output without changing which factions own a
- * unit. Whitespace around tags is trimmed; empties dropped.
+ * into canonical order, de-duplicated, with slave last. Duplicates and a
+ * misplaced slave were leaking into the EDU ownership line when the stored
+ * string (or the faction list it was derived from) carried repeats.
  * @param {string} str
  * @returns {string}
  */
-export function reorderOwnershipString(str) {
+export function reorderOwnershipString(str, excludeSet) {
   if (!str) return str;
   const tags = String(str).split(",").map((t) => t.trim()).filter(Boolean);
-  if (tags.length < 2) return tags.join(", ");
-  return sortByEduFactionOrder(tags).join(", ");
+  if (tags.length < 2 && !excludeSet) return tags.join(", ");
+  return cleanFactionList(tags, excludeSet).join(", ");
 }

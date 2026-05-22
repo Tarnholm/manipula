@@ -33,7 +33,7 @@ import { computeSecondary } from "./formulas/secondary";
 import { computeVS } from "./formulas/vs";
 import { computeTertiary } from "./formulas/tertiary";
 import { computeCosts } from "./formulas/cost";
-import { reorderOwnershipString, sortByEduFactionOrder, DEFAULT_ETHNICITY_EXCLUDE } from "./factionOrder";
+import { reorderOwnershipString, cleanFactionList, buildExcludeSet } from "./factionOrder";
 
 /** @typedef {import("./xlsmImporter").Project} Project */
 
@@ -126,12 +126,16 @@ function compute(project) {
 function computeUnit(unit, idx, project, isM2, entryType) {
   const r = resolveUnit(unit, idx);
   const out = { kind: "data", row: unit.row, name: unit.name, entryType: entryType || null };
+  // Faction exclude set (placeholder / culture-group / rebel slots) —
+  // applied to BOTH the ownership line and the ethnicity block so neither
+  // references a non-recruiting faction.
+  const exclSet = buildExcludeSet(project.globals && project.globals.EthnicityExcludeFactions);
   writeMetadata(out, unit, r, project.globals, entryType);
   writeCategoryAndClass(out, r);
   writeSoldierSlots(out, unit);
   writeOfficers(out, unit);
   writeCategorySpecific(out, unit, r);
-  writeOwnership(out, unit, entryType);
+  writeOwnership(out, unit, entryType, exclSet);
 
   // Pass through ethnicity info — format.js reads these when emitting
   // the per-faction `ethnicity` lines at the end of each unit block.
@@ -150,18 +154,6 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   if (out.ethnicityRegion) {
     const allFactions = project.factions || [];
     const avail = unit.availability || {};
-    // Factions that must never get an ethnicity line — culture-group
-    // umbrellas / placeholder / rebel slots (greeks, gauls, dummies, …)
-    // plus rhaetians (renamed to breuni). The built-in defaults ALWAYS
-    // apply; the EthnicityExcludeFactions global (comma-separated, edited
-    // in Mod Info) ADDS to them rather than replacing — so the defaults
-    // can't be silently overridden away by a project whose global was
-    // seeded before a default was added.
-    const exclRaw = project.globals && project.globals.EthnicityExcludeFactions;
-    const exclSet = new Set(DEFAULT_ETHNICITY_EXCLUDE.map((s) => s.toLowerCase()));
-    if (typeof exclRaw === "string" && exclRaw.trim()) {
-      for (const s of exclRaw.split(",")) { const t = s.trim().toLowerCase(); if (t) exclSet.add(t); }
-    }
     // "all" ownership (AoR entries, or a factional unit whose ownership
     // string is literally "all") means the unit is available to every
     // faction — so list every faction in the ethnicity block, not just
@@ -187,12 +179,12 @@ function computeUnit(unit, idx, project, isM2, entryType) {
         if (String(avail[tag] || "").toUpperCase() === "Y") tags.push(tag);
       }
     }
-    // Emit the ethnicity lines in the canonical EDU faction order, not the
-    // xlsm's Faction1..N order. slave is always last — append it after the
-    // sort so unknown tags (not in the canonical list) can't push past it.
-    const ordered = sortByEduFactionOrder(tags);
-    if (unit.ownership && unit.ownership.slave) ordered.push("slave");
-    out.ethnicityTags = ordered;
+    // Emit the ethnicity lines in canonical order, de-duplicated, slave
+    // last. cleanFactionList dedupes (project.factions can carry repeats
+    // that would otherwise become duplicate ethnicity lines) and keeps
+    // slave at the very end past any non-canonical tags.
+    if (unit.ownership && unit.ownership.slave) tags.push("slave");
+    out.ethnicityTags = cleanFactionList(tags, exclSet);
   }
   writeRecruitPriority(out, unit, entryType, project.globals);
 
@@ -363,7 +355,7 @@ function writeCategorySpecific(out, unit, r) {
   }
 }
 
-function writeOwnership(out, unit, entryType) {
+function writeOwnership(out, unit, entryType, exclSet) {
   // v0.7.0 stores the authoritative ownership string per entry type in
   // pre-built cells:
   //   Factional entry → unit.factionalOwnership  (col MU / 359)
@@ -377,17 +369,19 @@ function writeOwnership(out, unit, entryType) {
             : unit.factionalOwnership;
   if (pre !== undefined && pre !== null) {
     // "all" (AoR) and merc strings pass through untouched; a factional
-    // list gets reordered into the canonical EDU faction order so the
-    // emitted ownership line is consistent regardless of how the stored
-    // string happened to be ordered (xlsm import order, hand edits, …).
+    // list is cleaned: canonical order, de-duplicated, slave last, and
+    // placeholder / culture-group factions (greeks, gauls, …) dropped so
+    // they never appear as ownership references.
     const s = String(pre);
-    out.ownershipString = (entryType === "AoR" || entryType === "Merc") ? s : reorderOwnershipString(s);
+    out.ownershipString = (entryType === "AoR" || entryType === "Merc")
+      ? s
+      : reorderOwnershipString(s, exclSet);
     return;
   }
   if (unit.ownership && Object.keys(unit.ownership).length > 0) {
     const tags = Object.keys(unit.ownership).filter((k) => k !== "slave");
     if (unit.ownership.slave) tags.push("slave");
-    if (tags.length) out.ownershipString = reorderOwnershipString(tags.join(", "));
+    if (tags.length) out.ownershipString = reorderOwnershipString(tags.join(", "), exclSet);
   }
 }
 
