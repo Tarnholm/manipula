@@ -392,6 +392,14 @@ export default function DataTable({
     if (!cellDragRef.current) return;
     setCellSel((cur) => cur ? { ...cur, fRow: rowOrigIdx, fCol: colKey } : cur);
   }, []);
+  // Shift+click extends the rectangle from the existing anchor to the
+  // clicked cell (no drag needed) — the Excel "click, then shift-click"
+  // selection. Starts a fresh single-cell anchor if nothing's selected.
+  const shiftSelectCell = useCallback((rowOrigIdx, colKey) => {
+    setCellSel((cur) => cur
+      ? { ...cur, fRow: rowOrigIdx, fCol: colKey }
+      : { aRow: rowOrigIdx, aCol: colKey, fRow: rowOrigIdx, fCol: colKey });
+  }, []);
   // Update the navigation snapshot for moveCell. Uses filteredEntries
   // so search filtering also limits Tab navigation to visible rows.
   useEffect(() => {
@@ -1119,6 +1127,7 @@ export default function DataTable({
                           cellSelected={cellSelected}
                           onBeginSelect={beginCellSelect}
                           onExtendSelect={extendCellSelect}
+                          onShiftSelect={shiftSelectCell}
                         />
                       );
                     })}
@@ -1523,7 +1532,7 @@ function SectionLabel({ text, editable, onCommit }) {
 // time a cell opens its editor; every other editing cell listens and force-
 // commits + closes itself. A document-level Escape handler does the same so
 // the user always has a keyboard escape hatch when something goes sideways.
-const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove, stickyStyle, cellSelected, onBeginSelect, onExtendSelect }) {
+const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, editable, onCommit, flag, autoEnter, onAutoEnterConsumed, onMove, stickyStyle, cellSelected, onBeginSelect, onExtendSelect, onShiftSelect }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   // Ref alongside state so commit() reads the latest typed/picked value even
@@ -1656,7 +1665,12 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       })()}
       onMouseDown={(e) => {
         if (editing) return;
-        if (e.ctrlKey || e.metaKey || e.shiftKey) return;   // row select / range handled on the <tr>
+        if (e.ctrlKey || e.metaKey) return;   // row toggle handled on the <tr>
+        if (e.shiftKey) {                      // extend the cell rectangle
+          e.preventDefault();
+          if (onShiftSelect) onShiftSelect(rowOrigIdx, columnKey);
+          return;
+        }
         if (onBeginSelect) onBeginSelect(rowOrigIdx, columnKey);
       }}
       onMouseEnter={() => { if (!editing && onExtendSelect) onExtendSelect(rowOrigIdx, columnKey); }}
@@ -1721,7 +1735,8 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
       && prev.stickyStyle === next.stickyStyle
       && prev.cellSelected === next.cellSelected
       && prev.onBeginSelect === next.onBeginSelect
-      && prev.onExtendSelect === next.onExtendSelect;
+      && prev.onExtendSelect === next.onExtendSelect
+      && prev.onShiftSelect === next.onShiftSelect;
 });
 
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel, onMove }) {

@@ -37,6 +37,18 @@ import { reorderOwnershipString, sortByEduFactionOrder, DEFAULT_ETHNICITY_EXCLUD
 
 /** @typedef {import("./xlsmImporter").Project} Project */
 
+// Lightweight diagnostic logger — writes to %APPDATA%/edu-matic.log via the
+// preload bridge so we can see what compute() actually saw on a teammate's
+// machine without DevTools. JSON.stringify keeps quotes around values so
+// hidden whitespace / casing is visible ("rhaetians " vs "rhaetians").
+function dbg(tag, payload) {
+  try {
+    if (typeof window !== "undefined" && window.eduAPI && window.eduAPI.logMessage) {
+      window.eduAPI.logMessage("info", "[compute] " + tag + " " + JSON.stringify(payload));
+    }
+  } catch { /* logging must never throw */ }
+}
+
 /** @param {Project} project */
 function compute(project) {
   const idx = buildIndex(project);
@@ -93,6 +105,21 @@ function compute(project) {
       rows.push(computeUnit(u, idx, project, isM2, et));
     }
   }
+  // Diagnostic: surface faction-list anomalies that have caused
+  // ethnicity-output bugs — stale renamed tags lingering in the list
+  // (e.g. "rhaetians" after the breuni rename) and exact stored values
+  // (quoted, so trailing spaces / casing show). Only logs when there's
+  // something noteworthy, so it's not per-render noise.
+  try {
+    const rhaetVariants = (project.factions || []).filter((f) => /rhaet/i.test(String(f || "")));
+    if (rhaetVariants.length) {
+      dbg("stale-faction-in-list", {
+        variants: rhaetVariants,
+        excludeGlobal: project.globals && project.globals.EthnicityExcludeFactions,
+        note: "these are still in project.factions; ethnicity exclude should drop them",
+      });
+    }
+  } catch { /* never break compute for a diagnostic */ }
   return rows;
 }
 
@@ -151,7 +178,7 @@ function computeUnit(unit, idx, project, isM2, entryType) {
     for (let k = 0; k < allFactions.length; k++) {
       const tag = allFactions[k];
       if (!tag) continue;
-      if (exclSet.has(String(tag).toLowerCase())) continue;   // placeholder / culture-group faction
+      if (exclSet.has(String(tag).trim().toLowerCase())) continue;   // placeholder / culture-group faction (trim guards xlsm trailing spaces)
       if (ownAll || entryType === "AoR") {
         tags.push(tag);
       } else if (entryType === "Merc") {

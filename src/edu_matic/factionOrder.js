@@ -56,10 +56,6 @@ export const EDU_FACTION_ORDER = [
 // EthnicityExcludeFactions global. Lowercase.
 export const DEFAULT_ETHNICITY_EXCLUDE = [
   "greeks", "germanics", "gauls", "scythians", "hellenistic_rebels", "dummies",
-  // rhaetians was renamed to breuni mod-wide; it lingers in some projects'
-  // faction lists as a ghost (renamed before the full cascade existed), so
-  // keep it out of ethnicity permanently.
-  "rhaetians",
 ];
 
 // Lowercased tag → rank. Built once at module load.
