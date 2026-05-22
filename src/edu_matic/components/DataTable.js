@@ -882,10 +882,16 @@ export default function DataTable({
                     style={bgStyle}
                     draggable={!!onMoveRows}
                     onDragStart={onMoveRows ? (e) => {
-                      // Reorder is now Shift+drag. A plain drag is cancelled
-                      // here so it's free for cell-range selection / text
-                      // selection instead of yanking the whole row.
-                      if (!e.shiftKey) { e.preventDefault(); return; }
+                      // Reorder is triggered by dragging the row-number
+                      // gutter (the reliable Excel-style "grab the row
+                      // header" handle) OR by Shift+drag anywhere on the
+                      // row. A plain drag on a cell is cancelled so it's
+                      // free for cell/text selection. (Shift+drag alone is
+                      // unreliable — some browsers start a text selection
+                      // instead of a drag when Shift is held, which is why
+                      // the gutter handle is the primary path.)
+                      const fromGutter = !!(e.target.closest && e.target.closest(".dtable-gutter"));
+                      if (!fromGutter && !e.shiftKey) { e.preventDefault(); return; }
                       // If the dragged row is part of the current
                       // selection, move the whole selection. Otherwise
                       // move just this row.

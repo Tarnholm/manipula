@@ -49,6 +49,15 @@ export const EDU_FACTION_ORDER = [
   "cisalpine_boii", "breuni", "teurisci", "ambrones", "slave",
 ];
 
+// Factions that exist in the faction list (for ownership / availability
+// columns) but are NOT real recruiting factions, so they must never get
+// per-faction `ethnicity` lines: culture-group umbrellas and placeholder
+// / rebel slots. Used as the default for the editable
+// EthnicityExcludeFactions global. Lowercase.
+export const DEFAULT_ETHNICITY_EXCLUDE = [
+  "greeks", "germanics", "gauls", "scythians", "hellenistic_rebels", "dummies",
+];
+
 // Lowercased tag → rank. Built once at module load.
 const RANK = new Map(EDU_FACTION_ORDER.map((f, i) => [f.toLowerCase(), i]));
 

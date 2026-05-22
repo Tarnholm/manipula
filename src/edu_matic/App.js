@@ -41,6 +41,9 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   MassSnowModifier: 0,
   MassSnowConstant: 0,
   MercCostMultiplier: 1.8,
+  // Comma-separated factions that never get an ethnicity line (culture
+  // umbrellas / placeholder / rebel slots). Edit in Mod Info → Globals.
+  EthnicityExcludeFactions: "greeks, germanics, gauls, scythians, hellenistic_rebels, dummies",
 };
 
 // Rename a faction tag everywhere it's referenced across the project, so

@@ -33,7 +33,7 @@ import { computeSecondary } from "./formulas/secondary";
 import { computeVS } from "./formulas/vs";
 import { computeTertiary } from "./formulas/tertiary";
 import { computeCosts } from "./formulas/cost";
-import { reorderOwnershipString, sortByEduFactionOrder } from "./factionOrder";
+import { reorderOwnershipString, sortByEduFactionOrder, DEFAULT_ETHNICITY_EXCLUDE } from "./factionOrder";
 
 /** @typedef {import("./xlsmImporter").Project} Project */
 
@@ -123,6 +123,16 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   if (out.ethnicityRegion) {
     const allFactions = project.factions || [];
     const avail = unit.availability || {};
+    // Factions that must never get an ethnicity line — culture-group
+    // umbrellas / placeholder / rebel slots (greeks, gauls, dummies, …).
+    // Editable per project via the EthnicityExcludeFactions global
+    // (comma-separated); falls back to the built-in default list.
+    const exclRaw = project.globals && project.globals.EthnicityExcludeFactions;
+    const exclSet = new Set(
+      (typeof exclRaw === "string" && exclRaw.trim()
+        ? exclRaw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+        : DEFAULT_ETHNICITY_EXCLUDE)
+    );
     // "all" ownership (AoR entries, or a factional unit whose ownership
     // string is literally "all") means the unit is available to every
     // faction — so list every faction in the ethnicity block, not just
@@ -139,6 +149,7 @@ function computeUnit(unit, idx, project, isM2, entryType) {
     for (let k = 0; k < allFactions.length; k++) {
       const tag = allFactions[k];
       if (!tag) continue;
+      if (exclSet.has(String(tag).toLowerCase())) continue;   // placeholder / culture-group faction
       if (ownAll || entryType === "AoR") {
         tags.push(tag);
       } else if (entryType === "Merc") {
