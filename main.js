@@ -2020,11 +2020,17 @@ app.whenReady().then(() => {
   applyContentSecurityPolicy();
   registerIconProtocol();
   createWindow();
-  // Run one check on startup (packaged builds only — dev builds would 404)
+  // Run one check on startup (packaged builds only — dev builds would 404),
+  // then re-check every 20 minutes so a long-running session picks up new
+  // releases without needing a restart. autoDownload + autoInstallOnAppQuit
+  // mean a found update downloads in the background and applies on next
+  // quit; the renderer's update toast still surfaces "ready to install".
   if (app.isPackaged) {
-    autoUpdater.checkForUpdates().catch(err =>
-      console.warn("[updater] startup check failed:", err.message)
+    const check = () => autoUpdater.checkForUpdates().catch(err =>
+      console.warn("[updater] check failed:", err.message)
     );
+    check();
+    setInterval(check, 20 * 60 * 1000);
   }
 });
 app.on("window-all-closed", () => {
