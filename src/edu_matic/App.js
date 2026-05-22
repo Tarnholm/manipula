@@ -43,6 +43,81 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   MercCostMultiplier: 1.8,
 };
 
+// Rename a faction tag everywhere it's referenced across the project, so
+// a Mod Info rename (e.g. "rhaetians" → "breuni") fully propagates instead
+// of leaving stale references in unit ownership strings or Core Data
+// cells. Matching is case-insensitive and per whole comma-separated
+// token (so "rhaetians" in "rhaetians, gauls" is replaced but a longer
+// word that merely contains it is not). Returns a NEW project object with
+// only the touched arrays/objects replaced.
+function renameFactionTagEverywhere(project, oldTag, newTag) {
+  const oldLc = String(oldTag).toLowerCase();
+  // Replace any whole token equal to oldTag inside a comma-list / single value.
+  const replaceInList = (str) => {
+    if (typeof str !== "string" || !str || !str.toLowerCase().includes(oldLc)) return str;
+    const parts = str.split(",");
+    let changed = false;
+    const out = parts.map((p) => {
+      const t = p.trim();
+      if (t.toLowerCase() === oldLc) { changed = true; return newTag; }
+      return t;
+    });
+    return changed ? out.join(", ") : str;
+  };
+
+  const factions = (project.factions || []).map((f) =>
+    (typeof f === "string" && f.toLowerCase() === oldLc) ? newTag : f);
+
+  const units = (project.units || []).map((u) => {
+    if (!u || u.kind !== "unit") return u;
+    let touched = false;
+    const next = { ...u };
+    if (u.availability) {
+      const match = Object.keys(u.availability).find((k) => k.toLowerCase() === oldLc);
+      if (match) {
+        const avail = { ...u.availability };
+        avail[newTag] = avail[match];
+        delete avail[match];
+        next.availability = avail;
+        touched = true;
+      }
+    }
+    if (Array.isArray(u.ownership) && u.ownership.some((x) => typeof x === "string" && x.toLowerCase() === oldLc)) {
+      next.ownership = u.ownership.map((x) => (typeof x === "string" && x.toLowerCase() === oldLc ? newTag : x));
+      touched = true;
+    }
+    for (const field of ["factionalOwnership", "mercOwnership"]) {
+      if (typeof u[field] === "string") {
+        const replaced = replaceInList(u[field]);
+        if (replaced !== u[field]) { next[field] = replaced; touched = true; }
+      }
+    }
+    return touched ? next : u;
+  });
+
+  const coreData = {};
+  for (const [name, table] of Object.entries(project.coreData || {})) {
+    if (!Array.isArray(table)) { coreData[name] = table; continue; }
+    let tableChanged = false;
+    const nextTable = table.map((row) => {
+      if (!row || typeof row !== "object") return row;
+      let rowChanged = false;
+      const nextRow = { ...row };
+      for (const [k, val] of Object.entries(row)) {
+        if (typeof val === "string") {
+          const replaced = replaceInList(val);
+          if (replaced !== val) { nextRow[k] = replaced; rowChanged = true; }
+        }
+      }
+      if (rowChanged) { tableChanged = true; return nextRow; }
+      return row;
+    });
+    coreData[name] = tableChanged ? nextTable : table;
+  }
+
+  return { ...project, factions, units, coreData };
+}
+
 const VIEWS = [
   { key: "project",  label: "Project",        hint: "Load / save"          },
   { key: "modinfo",  label: "Mod Info",       hint: "Name, platform, era"  },
@@ -398,41 +473,18 @@ function ModInfoScreen({ project, setProject }) {
             const oldTag = fromFactions || fromGlobals;
             const newTag = String(v ?? "").trim();
             if (oldTag && newTag && oldTag !== newTag) {
-              const nextFactions = Array.isArray(project.factions) ? project.factions.slice() : [];
+              // Replace the tag everywhere — factions[], unit availability /
+              // ownership array / ownership strings, AND Core Data cells —
+              // then pin factions[idx] to the new tag (covers the case where
+              // the old value wasn't found by value, e.g. an empty slot).
+              const renamed = renameFactionTagEverywhere(project, oldTag, newTag);
+              const nextFactions = renamed.factions.slice();
               while (nextFactions.length <= idx) nextFactions.push(null);
               nextFactions[idx] = newTag;
-              const oldTagLc = oldTag.toLowerCase();
-              const nextUnits = (project.units || []).map((u) => {
-                if (!u || u.kind !== "unit") return u;
-                let touched = false;
-                let nextAvail = u.availability;
-                if (u.availability) {
-                  // Case-insensitive search — the user's global could be
-                  // capitalised differently from the actual key on each
-                  // unit and we still want to migrate them all.
-                  const match = Object.keys(u.availability).find((k) => k.toLowerCase() === oldTagLc);
-                  if (match) {
-                    nextAvail = { ...u.availability };
-                    nextAvail[newTag] = nextAvail[match];
-                    delete nextAvail[match];
-                    touched = true;
-                  }
-                }
-                let nextOwn = u.ownership;
-                if (Array.isArray(u.ownership)) {
-                  const hit = u.ownership.some((x) => typeof x === "string" && x.toLowerCase() === oldTagLc);
-                  if (hit) {
-                    nextOwn = u.ownership.map((x) => (typeof x === "string" && x.toLowerCase() === oldTagLc ? newTag : x));
-                    touched = true;
-                  }
-                }
-                return touched ? { ...u, availability: nextAvail, ownership: nextOwn } : u;
-              });
               setProject({
-                ...project,
+                ...renamed,
                 globals: { ...g, [key]: v },
                 factions: nextFactions,
-                units: nextUnits,
               });
               return;
             }
