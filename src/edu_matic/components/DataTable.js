@@ -986,6 +986,7 @@ export default function DataTable({
                 return (
                   <tr
                     key={`r${origIdx}`}
+                    className={copiedIds.has(rowId) ? "dtable-copied" : undefined}
                     style={bgStyle}
                     draggable={!!onMoveRows}
                     onDragStart={onMoveRows ? (e) => {

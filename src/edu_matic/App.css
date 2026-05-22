@@ -413,6 +413,15 @@ body {
 }
 .dtable tr:hover td { background: var(--bg-elev2); }
 
+/* Copied-row flash — when rows are copied (Ctrl+C / right-click Copy) they
+ * pulse amber a couple of times so the user sees exactly what's on the
+ * clipboard, then settle into the persistent dashed outline applied inline. */
+@keyframes dtable-copyflash {
+  0%, 100% { background-color: transparent; }
+  25%, 70% { background-color: rgba(220, 166, 74, 0.5); }
+}
+.dtable tr.dtable-copied td { animation: dtable-copyflash 0.85s ease-in-out 2; }
+
 /* Row-number gutter (Excel-style row headers). Tight padding, monospace
  * numerals, and a hover cue so it reads as clickable. The body cell's
  * background / selection tint are set inline (they depend on row state);
