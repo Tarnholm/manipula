@@ -87,13 +87,11 @@ export function sortByEduFactionOrder(tags) {
  * @returns {string[]}
  */
 export function cleanFactionList(tags, excludeSet) {
-  // Order by the canonical EDU faction list (EDU_FACTION_ORDER), dedupe,
-  // drop excluded placeholder factions, slave last. The canonical list is
-  // the authoritative order the mod team wants — the project's own
-  // Faction1..N globals can be scrambled (Faction1 ended up = Kydonia in
-  // one project), so we sort by the canonical list rather than trust the
-  // raw faction-list order. Tags not in the canonical list keep their
-  // incoming relative order and fall after the known ones, before slave.
+  // PRESERVE the input order — the mod team maintains the faction order in
+  // Mod Info (the Faction1..N list) and that IS the order they want in the
+  // output. Callers feed tags already in that order. We only dedupe, drop
+  // excluded placeholder factions, and force slave to the very end. No
+  // hardcoded canonical re-sort.
   const seen = new Set();
   const uniq = [];
   for (const t of tags) {
@@ -107,7 +105,7 @@ export function cleanFactionList(tags, excludeSet) {
   }
   const slaves = uniq.filter((t) => t.toLowerCase() === "slave");
   const rest = uniq.filter((t) => t.toLowerCase() !== "slave");
-  return [...sortByEduFactionOrder(rest), ...slaves];
+  return [...rest, ...slaves];
 }
 
 /**
@@ -119,6 +117,25 @@ export function cleanFactionList(tags, excludeSet) {
  * @param {string|undefined} globalValue project.globals.EthnicityExcludeFactions
  * @returns {Set<string>}
  */
+/**
+ * The authoritative faction order, read straight from the Mod Info
+ * globals (Faction1, Faction2, … in numeric order). This is the list the
+ * mod team edits, so it's the order everything (availability columns,
+ * filter, ethnicity, ownership) should follow. The cached project.factions
+ * array can drift out of sync with the globals, so prefer this.
+ * @param {object} globals project.globals
+ * @returns {string[]} faction tags in Faction1..N order
+ */
+export function factionOrderFromGlobals(globals) {
+  if (!globals || typeof globals !== "object") return [];
+  const keys = Object.keys(globals)
+    .filter((k) => /^Faction\d+$/.test(k))
+    .sort((a, b) => parseInt(a.slice(7), 10) - parseInt(b.slice(7), 10));
+  const out = [];
+  for (const k of keys) { const v = String(globals[k] ?? "").trim(); if (v) out.push(v); }
+  return out;
+}
+
 export function buildExcludeSet(globalValue) {
   const set = new Set(DEFAULT_ETHNICITY_EXCLUDE.map((s) => s.toLowerCase()));
   if (typeof globalValue === "string" && globalValue.trim()) {

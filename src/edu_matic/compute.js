@@ -33,7 +33,7 @@ import { computeSecondary } from "./formulas/secondary";
 import { computeVS } from "./formulas/vs";
 import { computeTertiary } from "./formulas/tertiary";
 import { computeCosts } from "./formulas/cost";
-import { reorderOwnershipString, cleanFactionList, buildExcludeSet } from "./factionOrder";
+import { reorderOwnershipString, cleanFactionList, buildExcludeSet, factionOrderFromGlobals } from "./factionOrder";
 
 /** @typedef {import("./xlsmImporter").Project} Project */
 
@@ -152,7 +152,12 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   // Slave (Case 504) fires whenever the slave flag is set, after the
   // numbered factions.
   if (out.ethnicityRegion) {
-    const allFactions = project.factions || [];
+    // Faction order/list comes from the Mod Info globals (Faction1..N),
+    // the editable source of truth — NOT the cached project.factions array,
+    // which can drift out of sync. Fall back to project.factions only if
+    // the globals carry no Faction* keys.
+    const fromGlobals = factionOrderFromGlobals(project.globals);
+    const allFactions = fromGlobals.length ? fromGlobals : (project.factions || []);
     const avail = unit.availability || {};
     // "all" ownership (AoR entries, or a factional unit whose ownership
     // string is literally "all") means the unit is available to every

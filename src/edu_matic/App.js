@@ -17,7 +17,7 @@ import { validate, diagnose } from "./validate";
 import { compute } from "./compute";
 import { formatEdu } from "./format";
 import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
-import { cleanFactionList, sortByEduFactionOrder } from "./factionOrder";
+import { cleanFactionList, factionOrderFromGlobals } from "./factionOrder";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -1050,12 +1050,18 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // Last-selected rowIds (= project.units indices) so the preview pane
   // shows live computed cost / upkeep / armour for the user's selection.
   const [selectedRowIdxs, setSelectedRowIdxs] = useState([]);
-  // Faction order from project.factions — the index in this array IS the
-  // faction id used by the underlying VBA / EDU pipeline.
+  // Faction order — read from the Mod Info globals (Faction1, Faction2, …
+  // in numeric order), which is the list the mod team maintains. The cached
+  // project.factions array can drift out of sync with the globals (it was
+  // showing iberians at slot 1 while Mod Info had sparta), so the globals
+  // are the source of truth. Fall back to project.factions only if the
+  // globals carry no Faction* keys.
   const factionKeys = useMemo(() => {
+    const fromGlobals = factionOrderFromGlobals(project.globals);
+    if (fromGlobals.length) return fromGlobals;
     const arr = Array.isArray(project.factions) ? project.factions : [];
     return arr.map(f => typeof f === "string" ? f : (f && (f.Faction || f.faction || f.name || f.Name) || "")).filter(Boolean);
-  }, [project.factions]);
+  }, [project.globals, project.factions]);
   // Build the column order: explicit HEAD list, then per-faction availability
   // columns + slave, then 4 ownership_N columns, then TAIL list, then any
   // remaining unrecognised keys at the end so we never silently drop one.
@@ -1104,10 +1110,10 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     }
     const ordered = [...cache.head];
     if (hasAvailability) {
-      // Availability columns follow the canonical EDU faction order
-      // (factionOrder.js) — sparta, galatians, … — not the raw
-      // Faction1..N list, which can be scrambled in a project. slave last.
-      for (const f of sortByEduFactionOrder(factionKeys)) ordered.push(AVAIL_PREFIX + f);
+      // Availability columns follow the Mod Info faction order
+      // (factionKeys = project.factions, the Faction1..N list the mod team
+      // maintains). slave last. No hardcoded canonical re-sort.
+      for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
       ordered.push(AVAIL_PREFIX + "slave");
     }
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
@@ -1849,7 +1855,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
           title="Show only units recruitable for this faction"
         >
           <option value="">— any faction —</option>
-          {factionKeys.map((f, i) => <option key={f} value={f}>faction {i + 1}: {f}</option>)}
+          {factionKeys.map((f) => <option key={f} value={f}>{f}</option>)}
         </select>
         <select
           value={filterCategory}
@@ -3253,7 +3259,10 @@ function ValidateScreen({ project: rawProject, onView }) {
   // a fundamental class (Infantry / Missile / Cavalry) so the user
   // catches gaps before shipping a balance pass.
   const rosterReport = useMemo(() => {
-    const factionKeys = (project.factions || []).map((f) => typeof f === "string" ? f : (f && (f.Faction || f.faction || f.name) || "")).filter(Boolean);
+    const fromGlobals = factionOrderFromGlobals(project.globals);
+    const factionKeys = fromGlobals.length
+      ? fromGlobals
+      : (project.factions || []).map((f) => typeof f === "string" ? f : (f && (f.Faction || f.faction || f.name) || "")).filter(Boolean);
     const buckets = ["Infantry", "Missile Infantry", "Missile Cavalry", "Cavalry", "Other"];
     const bucketOf = (cat, cls) => {
       const c = String(cat || "").toLowerCase();
