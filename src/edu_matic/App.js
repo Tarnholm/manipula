@@ -41,10 +41,10 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   MassSnowModifier: 0,
   MassSnowConstant: 0,
   MercCostMultiplier: 1.8,
-  // recruit_priority_offset applied to AoR + Merc entries (factional
-  // entries use the unit's own "rec priority" column). Editable here so
-  // the offset is exposed in the UI rather than buried as a magic default.
-  aor_default_rec_priority: 0,
+  // NOTE: aor_default_rec_priority (the AoR/Merc recruit_priority_offset)
+  // is NOT seeded here — it already ships in the xlsm/globals (RIS sets it
+  // to -100) and is editable in Mod Info → Globals. Seeding a default
+  // would risk handing a fresh project a 0 that diverges from that value.
   // Comma-separated factions that never get an ethnicity line (culture
   // umbrellas / placeholder / rebel slots). Edit in Mod Info → Globals.
   EthnicityExcludeFactions: "greeks, germanics, gauls, scythians, hellenistic_rebels, dummies",
