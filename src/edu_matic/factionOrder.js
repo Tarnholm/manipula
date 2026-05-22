@@ -87,6 +87,12 @@ export function sortByEduFactionOrder(tags) {
  * @returns {string[]}
  */
 export function cleanFactionList(tags, excludeSet) {
+  // Preserve the INPUT order — callers feed tags already in the project's
+  // own faction order (Mod Info's Faction1..N list), which is the order the
+  // mod team maintains and expects in the output. We only dedupe, drop
+  // excluded placeholder factions, and force slave to the very end. We do
+  // NOT re-sort to a hardcoded canonical list — that diverged from the
+  // project's faction list and scrambled the output order.
   const seen = new Set();
   const uniq = [];
   for (const t of tags) {
@@ -100,7 +106,7 @@ export function cleanFactionList(tags, excludeSet) {
   }
   const slaves = uniq.filter((t) => t.toLowerCase() === "slave");
   const rest = uniq.filter((t) => t.toLowerCase() !== "slave");
-  return [...sortByEduFactionOrder(rest), ...slaves];
+  return [...rest, ...slaves];
 }
 
 /**

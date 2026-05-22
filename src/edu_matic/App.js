@@ -17,7 +17,7 @@ import { validate, diagnose } from "./validate";
 import { compute } from "./compute";
 import { formatEdu } from "./format";
 import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
-import { sortByEduFactionOrder, cleanFactionList } from "./factionOrder";
+import { cleanFactionList } from "./factionOrder";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -206,47 +206,6 @@ export default function App({ externalProject = null, onProjectChange, controlle
       window.eduAPI.getAppVersion().then(setAppVersion).catch(() => {});
     }
   }, []);
-
-  // App-wide faction reconciliation. A faction renamed in Mod Info on an
-  // older build (or via any path that updated globals.FactionN but not the
-  // cached project.factions list) leaves the two out of sync — the Units
-  // column header still shows the OLD tag because it reads project.factions.
-  // Runs on EVERY screen (not just Mod Info) so the headers / ethnicity /
-  // ownership all correct themselves the moment the project loads. One-shot:
-  // once reconciled there's no mismatch, so it won't re-run.
-  useEffect(() => {
-    if (!project || !project.globals || !Array.isArray(project.factions)) return;
-    const g0 = project.globals;
-    const renames = [];
-    for (const key of Object.keys(g0)) {
-      const m = /^Faction(\d+)$/.exec(key);
-      if (!m) continue;
-      const idx = parseInt(m[1], 10) - 1;
-      const globalVal = String(g0[key] ?? "").trim();
-      const facVal = String(project.factions[idx] ?? "").trim();
-      if (globalVal && facVal && globalVal.toLowerCase() !== facVal.toLowerCase()) {
-        renames.push({ idx, oldTag: facVal, newTag: globalVal });
-      }
-    }
-    if (!renames.length) return;
-    // Fix project.factions POSITIONALLY first — each slot gets exactly its
-    // global value. This is the loop-safe part: never blanket-replace a tag
-    // across the array (two slots sharing a tag would ping-pong forever).
-    const nf = project.factions.slice();
-    for (const r of renames) { while (nf.length <= r.idx) nf.push(null); nf[r.idx] = r.newTag; }
-    let next = { ...project, factions: nf };
-    // Migrate references (unit availability/ownership/strings + Core Data),
-    // skipping the factions array since we just fixed it positionally. Only
-    // migrate when the old tag is fully gone from the new faction list, so a
-    // tag still in use by another slot isn't dragged along.
-    const stillPresent = new Set(nf.map((f) => String(f || "").trim().toLowerCase()).filter(Boolean));
-    for (const r of renames) {
-      if (!stillPresent.has(r.oldTag.toLowerCase())) {
-        next = renameFactionTagEverywhere(next, r.oldTag, r.newTag, { skipFactions: true });
-      }
-    }
-    setProject(next);
-  }, [project, setProject]);
 
   const showToast = useCallback((text, kind = "info") => {
     setToast({ text, kind, id: Date.now() });
@@ -1098,11 +1057,11 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     }
     const ordered = [...cache.head];
     if (hasAvailability) {
-      // Availability columns always follow the canonical EDU faction
-      // order (factionOrder.js), not the xlsm's Faction1..N order, so the
-      // mod team sees the same column layout every time. slave is always
-      // last. Unknown tags fall to the end of the faction block.
-      for (const f of sortByEduFactionOrder(factionKeys)) ordered.push(AVAIL_PREFIX + f);
+      // Availability columns follow the project's own faction order
+      // (factionKeys = project.factions, i.e. the Mod Info Faction1..N
+      // list). slave last. No hardcoded canonical re-sort — the column
+      // order matches the mod team's faction list exactly.
+      for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
       ordered.push(AVAIL_PREFIX + "slave");
     }
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
