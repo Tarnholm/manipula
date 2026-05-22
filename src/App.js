@@ -1898,7 +1898,6 @@ export default function App() {
   // silently. Updates whenever projectDirty changes.
   useEffect(() => {
     if (window.electronAPI?.setRendererDirty) window.electronAPI.setRendererDirty(projectDirty);
-    if (window.eduAPI?.setRendererDirty) window.eduAPI.setRendererDirty(projectDirty);
   }, [projectDirty]);
 
   // Save-then-exit / save-then-update handlers. The Save button is
@@ -2572,8 +2571,8 @@ export default function App() {
             setDiff(buildWriteBackDiff(fresh));
           }}
           onOpenInEditor={async () => {
-            if (api && api.openPath && edbConflict.path) {
-              await api.openPath(edbConflict.path);
+            if (window.eduAPI?.openPath && edbConflict.path) {
+              await window.eduAPI.openPath(edbConflict.path);
             }
           }}
           onOverwrite={() => {

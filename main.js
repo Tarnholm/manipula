@@ -233,6 +233,21 @@ function vanillaDataDir() {
   return null;
 }
 
+// Guard against path traversal from renderer-supplied file names. Resolve
+// `candidate` (relative to baseDir, or an absolute path) and confirm it
+// stays inside baseDir. Returns the resolved absolute path, or null if it
+// escapes. Every IPC handler that takes a renderer-controlled path runs
+// through this so a crafted name like "../../foo" can't read/write/delete
+// outside the intended directory.
+function resolveWithin(baseDir, candidate) {
+  if (!baseDir || !candidate || typeof candidate !== "string") return null;
+  const baseAbs = path.resolve(baseDir);
+  const abs = path.resolve(baseAbs, candidate);
+  if (abs === baseAbs) return abs;
+  if (abs.startsWith(baseAbs + path.sep)) return abs;
+  return null;
+}
+
 function unitsJsonPath() {
   // Legacy single-file location. Profiles live in profilesDir() instead; this is the migration source.
   return path.join(app.getPath("userData"), "units.json");
@@ -589,6 +604,9 @@ ipcMain.handle("list-edb-backups", async () => {
 ipcMain.handle("restore-edb-backup", async (_e, backupPath) => {
   const d = dataDir();
   const target = path.join(d, "export_descr_buildings.txt");
+  const safeBackup = resolveWithin(d, backupPath);
+  if (!safeBackup) return { ok: false, reason: "Refusing to restore from a path outside the mod data folder" };
+  backupPath = safeBackup;
   if (!fs.existsSync(backupPath)) return { ok: false, reason: "Backup file missing" };
   // Make a "pre-restore" backup of the current EDB first, so a misclick is recoverable.
   try {
@@ -601,7 +619,9 @@ ipcMain.handle("restore-edb-backup", async (_e, backupPath) => {
 });
 
 ipcMain.handle("delete-edb-backup", async (_e, backupPath) => {
-  try { fs.unlinkSync(backupPath); return { ok: true }; }
+  const safe = resolveWithin(dataDir(), backupPath);
+  if (!safe) return { ok: false, reason: "Refusing to delete a path outside the mod data folder" };
+  try { fs.unlinkSync(safe); return { ok: true }; }
   catch (e) { return { ok: false, reason: e.message }; }
 });
 
@@ -960,7 +980,8 @@ ipcMain.handle("delete-mod-files", async (_e, relPaths) => {
   for (const p of relPaths) {
     if (typeof p !== "string" || !p) continue;
     const rel = p.replace(/^data[\\/]+/i, "").replace(/[\\/]+/g, path.sep);
-    const abs = path.join(d, rel);
+    const abs = resolveWithin(d, rel);
+    if (!abs) { failed.push({ path: p, error: "outside mod data folder" }); continue; }
     try {
       if (fs.existsSync(abs)) { fs.unlinkSync(abs); deleted++; }
       else failed.push({ path: p, error: "not found" });
@@ -1208,6 +1229,13 @@ ipcMain.handle("get-map-regions-pixels", async () => {
     // Transfer as ArrayBuffer so the renderer can wrap it directly without copying.
     const ab = img.pixels.buffer.slice(img.pixels.byteOffset, img.pixels.byteOffset + img.pixels.byteLength);
     const result = { width: img.width, height: img.height, pixels: ab };
+    // Cap the cache — each entry holds a full RGBA buffer (~MBs). Switching
+    // data dirs or a touched mtime adds new keys; without a bound the Map
+    // grows for the life of the process. Keep only the few most recent.
+    if (mapPixelCache.size >= 4) {
+      const oldest = mapPixelCache.keys().next().value;
+      if (oldest !== undefined) mapPixelCache.delete(oldest);
+    }
     mapPixelCache.set(key, result);
     return result;
   } catch (e) {
@@ -1431,11 +1459,14 @@ ipcMain.handle("edm-choose-clone-parent", async () => {
   return r.filePaths[0];
 });
 ipcMain.handle("edm-read-project-file", async (_e, dir, name) => {
-  try { return fs.readFileSync(path.join(dir, name), "utf8"); } catch { return null; }
+  const target = resolveWithin(dir, name);
+  if (!target) return null;
+  try { return fs.readFileSync(target, "utf8"); } catch { return null; }
 });
 ipcMain.handle("edm-write-project-file", async (_e, dir, name, content) => {
   try {
-    const target = path.join(dir, name);
+    const target = resolveWithin(dir, name);
+    if (!target) { console.error("[edm] write-project-file: path escapes project dir:", name); return false; }
     const parent = path.dirname(target);
     if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
     fs.writeFileSync(target, content, "utf8");
@@ -1460,7 +1491,8 @@ ipcMain.handle("edm-list-project-files", async (_e, dir, subdir) => {
 // files so the on-disk tree exactly reflects the project.
 ipcMain.handle("edm-delete-project-file", async (_e, dir, name) => {
   try {
-    const target = path.join(dir, name);
+    const target = resolveWithin(dir, name);
+    if (!target) { console.error("[edm] delete-project-file: path escapes project dir:", name); return false; }
     if (fs.existsSync(target)) fs.unlinkSync(target);
     return true;
   } catch (e) { console.error("[edm] delete-project-file:", e.message); return false; }
@@ -1490,7 +1522,8 @@ ipcMain.handle("edm-write-project-batch", async (_e, dir, payload) => {
     // tell new-and-listed from previously-existing-and-orphaned.
     const writtenAbs = new Set();
     for (const w of writes) {
-      const target = path.join(dir, w.relPath);
+      const target = resolveWithin(dir, w && w.relPath);
+      if (!target) { console.warn("[edm] write-project-batch: skipping path outside project dir:", w && w.relPath); continue; }
       const parent = path.dirname(target);
       if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
       fs.writeFileSync(target, w.content, "utf8");
@@ -1503,8 +1536,8 @@ ipcMain.handle("edm-write-project-batch", async (_e, dir, payload) => {
     // on-disk tree would accumulate ghost units forever.
     let pruned = 0;
     for (const sub of pruneSubdirs) {
-      const subAbs = path.join(dir, sub);
-      if (!fs.existsSync(subAbs)) continue;
+      const subAbs = resolveWithin(dir, sub);
+      if (!subAbs || !fs.existsSync(subAbs)) continue;
       for (const name of fs.readdirSync(subAbs)) {
         if (!name.endsWith(".json")) continue;
         const f = path.join(subAbs, name);
