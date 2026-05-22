@@ -41,6 +41,10 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   MassSnowModifier: 0,
   MassSnowConstant: 0,
   MercCostMultiplier: 1.8,
+  // recruit_priority_offset applied to AoR + Merc entries (factional
+  // entries use the unit's own "rec priority" column). Editable here so
+  // the offset is exposed in the UI rather than buried as a magic default.
+  aor_default_rec_priority: 0,
   // Comma-separated factions that never get an ethnicity line (culture
   // umbrellas / placeholder / rebel slots). Edit in Mod Info → Globals.
   EthnicityExcludeFactions: "greeks, germanics, gauls, scythians, hellenistic_rebels, dummies",
@@ -136,6 +140,7 @@ const VIEWS = [
   { key: "bulk",     label: "Bulk Edit",      hint: "Filter + apply field changes" },
   { key: "armour",   label: "Armour",         hint: "Armour models"        },
   { key: "merc",     label: "Mercenaries",    hint: "Merc units"           },
+  { key: "costs",    label: "Roster Cost",    hint: "Avg/median + army totals" },
   { key: "validate", label: "Validate",       hint: "Error check"          },
   { key: "preview",  label: "Preview EDU",    hint: "Computed output"      },
   { key: "export",   label: "Export",         hint: "Write .txt file"      },
@@ -265,6 +270,7 @@ export default function App({ externalProject = null, onProjectChange, controlle
         {view === "bulk"     && <BulkEditScreen project={project} setProject={setProject} />}
         {view === "armour"   && <ArmourScreen   project={project} setProject={setProject} projectBlame={projectBlame} />}
         {view === "merc"     && <MercScreen     project={project} setProject={setProject} modDataDir={modDataDir} />}
+        {view === "costs"    && <CostScreen     project={project} setProject={setProject} />}
         {view === "validate" && <ValidateScreen project={project} onView={setView} />}
         {view === "preview"  && <PreviewScreen  project={project} />}
         {view === "export"   && <ExportScreen   project={project} onExport={exportEdu} modDataDir={modDataDir} />}
@@ -615,6 +621,152 @@ const CANONICAL_COLUMN_ORDER = {
   meleeSkeletons: ["Melee Skeleton type", "Speed", "Lethality Mdf"],
   mountSkeletons: ["Mount Skeleton type", "Speed", "Lethality Mdf"],
 };
+
+// ── Roster Cost analysis ───────────────────────────────────────────
+// Whole-roster average + median Factional price/upkeep, plus six
+// user-defined 20-unit "army planner" boxes (paste unit names, get the
+// summed cost + upkeep). Costs come from the live EDU compute(); only
+// the Factional entry of each unit is counted (the main recruitable
+// cost). Army definitions persist on project.costArmies so they survive
+// reload / sync.
+function costMedian(nums) {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function costFmt(n) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return Math.round(n).toLocaleString();
+}
+function CostStatCard({ label, value }) {
+  return (
+    <div style={{ border: "1px solid #333", borderRadius: 8, padding: "10px 16px", background: "#1c1c1c", minWidth: 120 }}>
+      <div style={{ fontSize: 11, color: "#999", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: "#e0c074" }}>{value}</div>
+    </div>
+  );
+}
+function CostScreen({ project, setProject }) {
+  // Factional price/upkeep per unit, keyed by both display name and unit
+  // id (lowercased) so pasted names OR ids resolve. Memoized on the inputs
+  // that affect compute() — NOT costArmies — so editing army text is cheap.
+  const lookup = useMemo(() => {
+    const byKey = new Map();
+    let rows = [];
+    try { rows = compute(project) || []; } catch { rows = []; }
+    // unit id -> display name, so a pasted id can map to the cost row.
+    const idToName = new Map();
+    for (const u of (project.units || [])) {
+      if (!u || u.kind !== "unit") continue;
+      const id = String(u["unit id"] || "").trim().toLowerCase();
+      const nm = String(u.name || "").trim();
+      if (id && nm) idToName.set(id, nm);
+    }
+    for (const r of rows) {
+      if (!r || r.kind !== "data") continue;
+      if (r.entryType && r.entryType !== "Factional") continue;   // count the factional entry only
+      const nm = String(r.name || "").trim();
+      if (!nm) continue;
+      const rec = { name: nm, price: Number(r.price) || 0, upkeep: Number(r.upkeep) || 0 };
+      if (!byKey.has(nm.toLowerCase())) byKey.set(nm.toLowerCase(), rec);
+    }
+    // Add id aliases pointing at the same record.
+    for (const [id, nm] of idToName) {
+      const rec = byKey.get(nm.toLowerCase());
+      if (rec && !byKey.has(id)) byKey.set(id, rec);
+    }
+    return byKey;
+  }, [project.units, project.coreData, project.globals, project.factions, project.modInfo, project.armour]);
+
+  const roster = useMemo(() => {
+    // De-dupe by name so id aliases don't double-count.
+    const seen = new Set();
+    const prices = [], upkeeps = [];
+    for (const rec of lookup.values()) {
+      if (seen.has(rec.name)) continue;
+      seen.add(rec.name);
+      prices.push(rec.price); upkeeps.push(rec.upkeep);
+    }
+    const sum = (a) => a.reduce((s, x) => s + x, 0);
+    const avg = (a) => (a.length ? sum(a) / a.length : 0);
+    return {
+      count: prices.length,
+      avgPrice: avg(prices), medPrice: costMedian(prices),
+      avgUpkeep: avg(upkeeps), medUpkeep: costMedian(upkeeps),
+    };
+  }, [lookup]);
+
+  const armies = (Array.isArray(project.costArmies) && project.costArmies.length === 6)
+    ? project.costArmies
+    : ["", "", "", "", "", ""];
+  const setArmy = (i, text) => {
+    const next = armies.slice();
+    next[i] = text;
+    setProject({ ...project, costArmies: next });
+  };
+  const parseArmy = (text) => {
+    const names = String(text || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    let cost = 0, upkeep = 0, matched = 0;
+    const unmatched = [];
+    for (const n of names) {
+      const hit = lookup.get(n.toLowerCase());
+      if (hit) { cost += hit.price; upkeep += hit.upkeep; matched++; }
+      else unmatched.push(n);
+    }
+    return { count: names.length, matched, cost, upkeep, unmatched };
+  };
+
+  return (
+    <div className="screen">
+      <h2>Roster Cost</h2>
+      <p style={{ color: "#999", fontSize: 13, marginTop: -4 }}>
+        Factional price &amp; upkeep from the live EDU compute. Roster stats cover all{" "}
+        {roster.count} units. Each army planner totals the unit names you paste in
+        (one per line or comma-separated; unit id or display name both work).
+      </p>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
+        <CostStatCard label="Units" value={roster.count} />
+        <CostStatCard label="Avg cost" value={costFmt(roster.avgPrice)} />
+        <CostStatCard label="Median cost" value={costFmt(roster.medPrice)} />
+        <CostStatCard label="Avg upkeep" value={costFmt(roster.avgUpkeep)} />
+        <CostStatCard label="Median upkeep" value={costFmt(roster.medUpkeep)} />
+      </div>
+      <h3 style={{ marginBottom: 10 }}>Army planners <span style={{ fontSize: 12, fontWeight: 400, color: "#888" }}>(20 units each)</span></h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+        {armies.map((text, i) => {
+          const a = parseArmy(text);
+          return (
+            <div key={i} style={{ border: "1px solid #333", borderRadius: 8, padding: 12, background: "#1c1c1c" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <strong style={{ color: "#dca64a" }}>Army {i + 1}</strong>
+                <span style={{ fontSize: 11, color: a.count === 20 ? "#7c9" : "#999" }}>
+                  {a.matched}/{a.count} matched{a.count !== 20 ? ` · ${a.count}/20` : ""}
+                </span>
+              </div>
+              <textarea
+                value={text}
+                onChange={(e) => setArmy(i, e.target.value)}
+                placeholder="Paste up to 20 unit names, one per line"
+                rows={8}
+                style={{ width: "100%", boxSizing: "border-box", background: "#161616", color: "#ddd", border: "1px solid #333", borderRadius: 6, fontFamily: "Consolas, monospace", fontSize: 12, padding: 8, resize: "vertical" }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 13 }}>
+                <span>Total cost: <strong style={{ color: "#e0c074" }}>{costFmt(a.cost)}</strong></span>
+                <span>Upkeep: <strong style={{ color: "#e0c074" }}>{costFmt(a.upkeep)}</strong></span>
+              </div>
+              {a.unmatched.length > 0 && (
+                <div style={{ marginTop: 6, fontSize: 11, color: "#d88" }} title={a.unmatched.join("\n")}>
+                  {a.unmatched.length} unmatched: {a.unmatched.slice(0, 4).join(", ")}{a.unmatched.length > 4 ? "…" : ""}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function CoreDataScreen({ project, setProject }) {
   const tables = project?.coreData || {};

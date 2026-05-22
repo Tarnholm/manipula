@@ -1586,6 +1586,13 @@ export default function App() {
   // working from a fresh xlsm import or empty state". Persisted to
   // localStorage so the tool reopens the last project on launch.
   const [projectDir, setProjectDir] = useState(null);
+  // Pull reminder — at startup (and whenever the project dir changes) we
+  // fetch + check whether the remote is ahead. If it is, a dismissible
+  // banner nudges the user to pull BEFORE editing, so a teammate's pushed
+  // changes don't turn into a merge conflict. { behind } when shown, null
+  // when hidden/dismissed. pullBusy gates the inline Pull button.
+  const [pullReminder, setPullReminder] = useState(null);
+  const [pullBusy, setPullBusy] = useState(false);
   // Clone-from-GitHub modal state. null when closed; { url, parent, leaf,
   // busy?, log? } when open. Lets teammates onboard without a terminal.
   const [cloneModal, setCloneModal] = useState(null);
@@ -1647,6 +1654,26 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [projectDir, projectSaveTick]);
+
+  // Foolproof pull reminder. On project-dir change (i.e. app start with a
+  // remembered project, or after opening one), fetch the remote and check
+  // whether it's ahead. If so, surface the dismissible banner so the user
+  // pulls before making edits. Network failure (offline / private repo) is
+  // non-fatal — just skip silently.
+  useEffect(() => {
+    if (!projectDir || !window.eduAPI?.gitFetch || !window.eduAPI?.gitStatus) { setPullReminder(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        await window.eduAPI.gitFetch(projectDir);
+        const s = await window.eduAPI.gitStatus(projectDir);
+        if (cancelled) return;
+        if (s && s.isRepo && (s.behind || 0) > 0) setPullReminder({ behind: s.behind });
+        else setPullReminder(null);
+      } catch { if (!cancelled) setPullReminder(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [projectDir]);
 
   // Export hashes per file kind ("edb" / "edu") captured at last write-out.
   // Used to detect "the game file changed under us since we last exported"
@@ -2204,6 +2231,39 @@ export default function App() {
   return (
     <AppErrorBoundary>
     <LightboxProvider>
+    {pullReminder && (
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", background: "rgba(79,143,214,0.14)", borderBottom: "1px solid rgba(79,143,214,0.4)", color: "#cfe2f7", fontSize: 13 }}>
+        <span style={{ fontSize: 15 }}>↓</span>
+        <span>
+          <strong>{pullReminder.behind} commit{pullReminder.behind === 1 ? "" : "s"}</strong> waiting on the remote.
+          Pull before you edit so a teammate's changes don't turn into a merge conflict.
+        </span>
+        <span style={{ flex: 1 }} />
+        <button
+          disabled={pullBusy}
+          onClick={async () => {
+            if (!projectDir || !window.eduAPI?.gitPull) return;
+            setPullBusy(true);
+            try {
+              const r = await window.eduAPI.gitPull(projectDir);
+              if (r && r.ok === false) { toast("Pull failed: " + (r.reason || r.error || "see Sync"), "error"); }
+              else {
+                toast("Pulled — reloading from disk", "success");
+                if (projectDir) loadProjectFromDir(projectDir);
+                setPullReminder(null);
+              }
+            } catch (e) { toast("Pull failed: " + (e && e.message), "error"); }
+            finally { setPullBusy(false); }
+          }}
+          style={{ background: "#4f8fd6", color: "#0c1828", border: "none", padding: "5px 14px", borderRadius: 5, fontSize: 12, fontWeight: 700, cursor: pullBusy ? "default" : "pointer", opacity: pullBusy ? 0.6 : 1 }}
+        >{pullBusy ? "Pulling…" : "Pull now"}</button>
+        <button
+          onClick={() => setPullReminder(null)}
+          title="Dismiss (you can still pull from the Sync button)"
+          style={{ background: "transparent", color: "#9bb8d6", border: "1px solid rgba(155,184,214,0.4)", padding: "5px 12px", borderRadius: 5, fontSize: 12, cursor: "pointer" }}
+        >Dismiss</button>
+      </div>
+    )}
     <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
     {/* Toast queue — fixed top-right, stacks bottom-down. */}
     {toasts.length > 0 && (
