@@ -17,7 +17,7 @@ import { validate, diagnose } from "./validate";
 import { compute } from "./compute";
 import { formatEdu } from "./format";
 import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
-import { cleanFactionList } from "./factionOrder";
+import { cleanFactionList, sortByEduFactionOrder } from "./factionOrder";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -1104,11 +1104,10 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     }
     const ordered = [...cache.head];
     if (hasAvailability) {
-      // Availability columns follow the project's own faction order
-      // (factionKeys = project.factions, i.e. the Mod Info Faction1..N
-      // list). slave last. No hardcoded canonical re-sort — the column
-      // order matches the mod team's faction list exactly.
-      for (const f of factionKeys) ordered.push(AVAIL_PREFIX + f);
+      // Availability columns follow the canonical EDU faction order
+      // (factionOrder.js) — sparta, galatians, … — not the raw
+      // Faction1..N list, which can be scrambled in a project. slave last.
+      for (const f of sortByEduFactionOrder(factionKeys)) ordered.push(AVAIL_PREFIX + f);
       ordered.push(AVAIL_PREFIX + "slave");
     }
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);

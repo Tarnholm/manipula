@@ -145,15 +145,6 @@ export default function DataTable({
     if (!searchPersistKey) return "";
     try { return localStorage.getItem("rt:search:" + searchPersistKey) || ""; } catch { return ""; }
   });
-  // Debounced copy of the query used for the HEAVY work (filtering 800+
-  // rows × hundreds of columns, match counts). The input itself stays
-  // bound to `q` so typing is instant; the expensive re-filter only runs
-  // ~150ms after the user pauses, which kills the per-keystroke lag.
-  const [debouncedQ, setDebouncedQ] = useState(q);
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedQ(q), 150);
-    return () => clearTimeout(id);
-  }, [q]);
   // Persist on change so switching tabs doesn't lose the query.
   useEffect(() => {
     if (!searchPersistKey) return;
@@ -164,7 +155,7 @@ export default function DataTable({
   }, [q, searchPersistKey]);
   const [bulkSetState, setBulkSetState] = useState(null);  // null | { onApply, column, value }
   const filteredEntries = useMemo(() => {
-    const needle = debouncedQ.trim().toLowerCase();
+    const needle = q.trim().toLowerCase();
     const all = rows.map((r, i) => ({ row: r, origIdx: i }));
     if (!needle) return all;
     const kept = [];
@@ -187,7 +178,7 @@ export default function DataTable({
     }
     while (kept.length && isNonData(kept[kept.length - 1].row)) kept.pop();
     return kept;
-  }, [debouncedQ, rows]);
+  }, [q, rows]);
   const totalDataCount = useMemo(() => rows.reduce((n, r) => n + (isNonData(r) ? 0 : 1), 0), [rows]);
   const dataCount = useMemo(() => filteredEntries.reduce((n, e) => n + (isNonData(e.row) ? 0 : 1), 0), [filteredEntries]);
   // Cell-level match count for the search query — reports how many
@@ -195,7 +186,7 @@ export default function DataTable({
   // string occurs many times per row (e.g. faction codes), so the user
   // can tell "12 of 845 rows" from "57 cells matched."
   const matchedCellCount = useMemo(() => {
-    const needle = debouncedQ.trim().toLowerCase();
+    const needle = q.trim().toLowerCase();
     if (!needle) return 0;
     let n = 0;
     for (const e of filteredEntries) {
@@ -218,7 +209,7 @@ export default function DataTable({
   // Reset on data / search change so jumping to a different filter
   // shows results from the top. Keyed off the debounced query so it
   // resets in step with the (debounced) filter, not every keystroke.
-  useEffect(() => { setRenderLimit(ROW_PAGE); }, [rows, debouncedQ]);
+  useEffect(() => { setRenderLimit(ROW_PAGE); }, [rows, q]);
   // sortedEntries / visibleEntries are computed further down, after the
   // sort/pinned state is declared. Their deps array reads `sortBy`, so
   // they MUST come after the useState. Putting them here would TDZ-crash
@@ -553,11 +544,11 @@ export default function DataTable({
   // hit in the Units screen on the Turns column.
   const lastResetKeyRef = useRef("");
   useEffect(() => {
-    const key = `${rows.length}|${debouncedQ}`;
+    const key = `${rows.length}|${q}`;
     if (key === lastResetKeyRef.current) return;
     lastResetKeyRef.current = key;
     if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-  }, [rows, debouncedQ]);
+  }, [rows, q]);
 
 
   // Wheel: shift+wheel scrolls horizontally; plain wheel scrolls vertically
