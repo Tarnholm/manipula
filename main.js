@@ -337,6 +337,20 @@ ipcMain.handle("load-mod-files", async () => {
       out.missing.push(`${k}: ${e.message}`);
     }
   }
+  // descr_lbc_db.txt — the city-viewer "living battlefield" civilians DB.
+  // Its `model X` lines reference DMB battle-model types (the peasant /
+  // civilian models). Mods almost never ship their own copy, so fall back
+  // to the vanilla data dir. Loaded separately from the main path loop so a
+  // mod that lacks it doesn't get a spurious "missing" entry when the
+  // vanilla copy is available.
+  try {
+    let lbc = path.join(d, "descr_lbc_db.txt");
+    if (!fs.existsSync(lbc)) {
+      const vd = vanillaDataDir();
+      if (vd) lbc = path.join(vd, "descr_lbc_db.txt");
+    }
+    if (fs.existsSync(lbc)) out.files.descrLbcDb = readSmart(lbc);
+  } catch {}
   // List event-script files (names only, no contents needed for reform list)
   try {
     if (fs.existsSync(paths.eventScriptsDir)) {

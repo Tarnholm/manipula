@@ -365,6 +365,18 @@ export default function App() {
           if (m) dmbExtraUsage.add(m[1]);
         }
       }
+      // descr_lbc_db.txt — the city-viewer civilians DB. Each `model X`
+      // line points at a DMB battle-model type (roman_peasant,
+      // barb_female_peasant, egyptian_male_peasant, …). Credit them so the
+      // orphan-DMB-type check doesn't false-flag the civilian peasant
+      // models as safe-to-delete — they're referenced by the game even
+      // though no EDU unit / descr_character uses them.
+      if (f.descrLbcDb) {
+        for (const raw of f.descrLbcDb.split(/\r?\n/)) {
+          const m = raw.replace(/;.*$/, "").match(/^\s*model\s+(\S+)/i);
+          if (m) dmbExtraUsage.add(m[1]);
+        }
+      }
       // descr_mount.txt: every `type X` block's `model Y` line points
       // at a DMB type. Add those Ys to dmbExtraUsage so the orphan-DMB
       // check doesn't false-flag mount models (horse_medium, camel,
