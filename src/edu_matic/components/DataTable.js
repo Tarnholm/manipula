@@ -442,6 +442,15 @@ export default function DataTable({
   }, []);
 
   const scrollRef = useRef(null);
+  // Search box keyboard-focus rescue. Electron/Chromium sometimes leaves the
+  // search <input> with DOM focus but NO keyboard focus — keystrokes go
+  // nowhere until the window is blurred and re-focused. The cell editors
+  // dodge this with re-focus pulses on mount; the always-mounted search box
+  // never gets one. On focus-in we do a single guarded blur+deferred-refocus
+  // (the blur forces Chromium to redo focus acquisition, including keyboard).
+  // The flag prevents the deferred refocus from looping.
+  const searchRef = useRef(null);
+  const searchFixRef = useRef(false);
   // Auto-enter target. Set by Tab/Shift-Tab/Enter from the active editor;
   // the matching Cell sees it on its next render and re-enters edit mode
   // automatically. Resolved through navRef so the callback always reads
@@ -707,10 +716,19 @@ export default function DataTable({
           {searchable && (
             <>
               <input
+                ref={searchRef}
                 className="input"
                 placeholder="Search…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
+                onFocus={() => {
+                  if (searchFixRef.current) { searchFixRef.current = false; return; }
+                  const el = searchRef.current;
+                  if (!el) return;
+                  searchFixRef.current = true;
+                  el.blur();
+                  setTimeout(() => { if (searchRef.current) searchRef.current.focus(); }, 0);
+                }}
               />
               <span className="dim">
                 {dataCount} of {totalDataCount} row{totalDataCount === 1 ? "" : "s"}
@@ -1950,11 +1968,11 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
             <div
               key={opt}
               data-combo-idx={i}
-              className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "")}
+              className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "") + (opt === "" ? " dtable-combo-opt--none" : "")}
               onMouseEnter={() => setHighlightIdx(i)}
               onClick={() => commitWith(opt)}
             >
-              {opt}
+              {opt === "" ? "(none)" : opt}
             </div>
           ))}
         </div>,

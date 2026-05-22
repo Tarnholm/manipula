@@ -576,6 +576,46 @@ function ModInfoScreen({ project, setProject }) {
   );
 }
 
+// Canonical column order per Core Data table. The table rows are SPARSE —
+// a row only carries keys for non-default values — so there is no reliable
+// full column list to derive order from, which is why columns used to
+// shuffle as you edited. This is the mod team's authoritative layout
+// (keyed by the table's _key). Matching against the real data keys is
+// normalized (trim / case / collapsed spaces) so a canonical label binds
+// to the actual stored key even when spelling differs slightly (e.g. the
+// "Max shield size " key has a trailing space). Columns not present in the
+// data still render (so the user can fill them); any real key not listed
+// here is appended at the end so nothing is ever hidden.
+const CANONICAL_COLUMN_ORDER = {
+  recruitmentClasses: ["Recruitment Class", "Recruitment time", "Pool refresh rate mdf", "Recr cost mdf", "Upk cost mdf", "Unit size mdf", "Pool max cap mdf", "Allows is_peasant", "Allows free_upkeep", "Allows sap", "Allows knight", "Allows no-start-skrm", "Allows mercenary", "Allows command"],
+  qualityClasses: ["Quality Class", "Attack mdf", "Ranged Attack mdf", "Charge mdf", "Defence mdf", "Morale mdf", "Heat fatigue mdf", "Discipline mdf", "Training mdf", "Recr cost mdf", "Upk cost mdf", "Unit size mdf", "Recruitment time", "Pool max cap", "Starting experience", "Allows is_peasant", "Allows free_upkeep", "Allows sap", "Allows stakes", "Allows knight", "Allows no-start-skrm", "Allows command", "Allows general", "Allows frighten foot", "CB unit limit", "Recruitment Priority"],
+  categories: ["Category Type", "Pool refresh rate mdf", "Pool max cap mdf", "Recr cost mdf", "Upk cost mdf", "Minor skill mdf", "Unit size mdf", "Allows hide", "Allows sea_faring", "Allows swim", "Hr Cl Spacing", "Vr Cl Spacing", "Hr Ls Spacing", "Vr ls Spacing", "Formation ranks", "Charge dist"],
+  specialties: ["Specialty Type", "Attack mdf", "Charge mdf", "Defence mdf", "Morale mdf", "Recr cost mdf", "Unit size mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "special ability", "special ability 2", "special ability 3", "no precursor", "mass multiplier", "discipline", "training"],
+  dwellings: ["Dwelling Type", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "heat modifier", "special ability", "unit size mdf"],
+  cultures: ["Culture Type", "Inf pool refresh rate mdf", "Cav pool refresh rate mdf", "Inf pool max cap mdf", "Cav pool max cap mdf", "Inf recr cost mdf", "Cav recr cost mdf", "Inf upk cost mdf", "Cav upk cost mdf", "Inf unit size mdf", "Cav unit size mdf", "Inf atack mdf", "Cav attack mdf", "Inf charge mdf", "Cav charge mdf", "Inf defence mdf", "Cav defence mdf", "Inf morale mdf", "Cav morale mdf", "Inf discipline", "Cav discipline", "Inf training", "Cav training", "Inf fatigue mdf", "Cav fatigue mdf", "Shieldwall min class", "Hedgehog min class", "Warcry min class", "Tortoise min class", "Wedge min class", "Powercharge min class", "Formed-charge min class", "Fire-by-rank min class", "Cantabrian min class"],
+  formations: ["Formation Type", "Hr Cl Spacing Mdf", "Vr Cl Spacing Mdf", "Hr Ls Spacing Mdf", "Vr ls Spacing Mdf", "Formation ranks", "Training", "Formation 1", "Formation 2", "scrub", "sand", "forest", "snow"],
+  weapons: ["Weapon Type", "Attack", "Charge", "Defence", "Range", "Ammo mdf", "AP", "(light_)spear", "spear_bonus", "short/long_pike", "ranged weapon type", "Allows shld-wall/trts", "Allows phalanx/hedgehog", "Allows inf/cav", "Max shield size", "Frightens", "wpn tech", "dmg type", "sound type", "firing sound type", "min delay", "lethality mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "Cost"],
+  projectiles: ["Projectile Type", "Attack", "Range", "Ammo", "AP", "BP", "thrown", "launch", "area", "incendiary", "wpn type", "wpn tech", "dmg type", "sound type", "min delay mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "Cost"],
+  armourAttributes: ["Attribute", "Head", "Face", "Shoulders", "Chest", "Up. Back", "Abdom.", "Low. Back", "Loins", "Up. Arm", "Low. Arm", "Hands", "Up. Leg", "Low. Leg", "Feet", "Total"],
+  armourHead: ["Armour Type", "Head Coverage", "Face Coverage", "Cost"],
+  armourTorso: ["Armour Type", "Shoulders Coverage", "Chest Coverage", "Up. Back Coverage", "Abdom. Coverage", "Low. Back Coverage", "Loins Coverage", "Up. Arm Coverage", "Low. Arm Coverage", "Up. Leg Coverage", "Cost"],
+  armourUpperArm: ["Armour Type", "Up. Arm Coverage", "Low. Arm Coverage", "Cost"],
+  armourLowerArm: ["Armour Type", "Low. Arm Coverage", "Cost"],
+  armourHand: ["Armour Type", "Low. Arm Coverage", "Hands Coverage", "Cost"],
+  armourUpperLeg: ["Armour Type", "Loins Coverage", "Up. Leg Coverage", "Cost"],
+  armourLowerLeg: ["Armour Type", "Low. Leg Coverage", "Feet Coverage", "Cost"],
+  armourFoot: ["Armour Type", "Up. Leg Coverage", "Low. Leg Coverage", "Feet Coverage", "Cost"],
+  armourMaterials: ["Armour Material", "Mass mdf", "Armour mdf", "Heat mdf", "Hit sound", "Cost mdf", "Armour level"],
+  shieldSizes: ["Shield Size", "Defence", "Shield", "Mass", "Cost", "Allows ShldWall/Trts"],
+  mounts: ["Mount Type", "Armour mdf", "Defence mdf", "Mount mass mdf", "Hit sound", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "Cost"],
+  specialMounts: ["Special Mount/Animal Type", "Is Elephant", "Sec attack", "Sec charge", "Sec armour", "Sec defence", "Sec HP", "Mounts per unit", "Men per mount", "Mount mass", "Hit sound", "AP", "BP", "launch", "area", "run_amok", "frighten_mounted", "wpn tech", "dmg type", "sound type", "min delay", "lethality mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "Cost"],
+  engines: ["Engine Type", "Attack", "Range", "Engines per unit", "Men per engine", "Engine type", "explode", "Allows withdraw", "Cost"],
+  engineProjectiles: ["Engine Projectile Type", "Attack mdf", "Range", "Ammo", "AP", "BP", "launch", "area", "wpn tech", "dmg type", "sound type", "min delay", "Cost"],
+  ships: ["Ship Type", "Class", "Men per ship", "Attack", "Armour", "Defence", "Morale", "wpn tech", "Cost", "Upkeep"],
+  meleeSkeletons: ["Melee Skeleton type", "Speed", "Lethality Mdf"],
+  mountSkeletons: ["Mount Skeleton type", "Speed", "Lethality Mdf"],
+};
+
 function CoreDataScreen({ project, setProject }) {
   const tables = project?.coreData || {};
   const names = Object.keys(tables);
@@ -596,8 +636,37 @@ function CoreDataScreen({ project, setProject }) {
   const colOrderRef = useRef({});
   const columns = useMemo(() => {
     if (!active) return [];
-    const present = new Set();
-    for (const r of rows) for (const k of Object.keys(r)) present.add(k);
+    // Union of keys actually present in the data, in first-seen order.
+    const present = [];
+    const seenP = new Set();
+    for (const r of rows) for (const k of Object.keys(r)) { if (!seenP.has(k)) { seenP.add(k); present.push(k); } }
+
+    // Preferred: the mod team's canonical layout for this table. Render the
+    // full canonical list — even columns with no data yet — so the layout
+    // is stable and editable, binding each canonical label to the real key
+    // via normalized matching. Any real key not in the canonical list is
+    // appended so nothing is hidden.
+    const canon = CANONICAL_COLUMN_ORDER[active];
+    if (canon && canon.length) {
+      const norm = (s) => String(s).trim().toLowerCase().replace(/\s+/g, " ");
+      const presentByNorm = new Map();
+      for (const k of present) { const n = norm(k); if (!presentByNorm.has(n)) presentByNorm.set(n, k); }
+      const out = [];
+      const usedNorm = new Set();
+      for (const label of canon) {
+        const n = norm(label);
+        if (usedNorm.has(n)) continue;
+        usedNorm.add(n);
+        out.push(presentByNorm.get(n) || label);   // prefer the real stored key spelling
+      }
+      for (const k of present) { const n = norm(k); if (!usedNorm.has(n)) { usedNorm.add(n); out.push(k); } }
+      return out;
+    }
+
+    // Fallback for tables without a canonical order: lock the first observed
+    // column order for the screen's lifetime so editing (which mutates each
+    // row's key insertion order) doesn't shuffle columns mid-type. New keys
+    // discovered later are appended at the end.
     const cached = colOrderRef.current[active];
     if (cached && cached.length) {
       const out = [...cached];
@@ -605,10 +674,6 @@ function CoreDataScreen({ project, setProject }) {
       if (out.length !== cached.length) colOrderRef.current[active] = out;
       return colOrderRef.current[active];
     }
-    // Seed from the union but in the order rows expose the keys (which
-    // matches the xlsm column order at import time, since rows[0] was
-    // built in that order). Take the first row's keys as the spine and
-    // append anything found only in later rows.
     const seed = rows[0] ? Object.keys(rows[0]) : [];
     const out = [...seed];
     for (const k of present) if (!out.includes(k)) out.push(k);

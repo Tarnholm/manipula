@@ -576,6 +576,10 @@ select.dtable-cell-input {
   background: rgba(220, 166, 74, 0.18);
   color: var(--accent, #dca64a);
 }
+.dtable-combo-opt--none {
+  color: var(--fg-dim, #888);
+  font-style: italic;
+}
 .dtable-combo-empty {
   padding: 6px 10px;
   color: var(--fg-dim, #888);
