@@ -40,6 +40,15 @@ import { createPortal } from "react-dom";
 // horizontal bar disappears again, the regression is almost certainly a parent
 // flex item missing min-width:0 — not a bug in this component.
 
+// Spreadsheet-style column letter for a 0-based visible column index:
+// 0→A, 25→Z, 26→AA, … Shown above each header label so cells can be
+// referenced like a spreadsheet (the row gutter supplies the number).
+function colIndexToLetter(i) {
+  let s = "", n = i + 1;
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
 function isSection(row) { return row && !Array.isArray(row) && typeof row.section === "string"; }
 function isSeparator(row) { return row && !Array.isArray(row) && row.separator === true; }
 function isNonData(row) { return isSection(row) || isSeparator(row); }
@@ -316,14 +325,17 @@ export default function DataTable({
     }
     return out;
   }, [orderedColumns, pinned, colWidths]);
-  // Sequential 1-based row numbers for the gutter, assigned across the
-  // visible (rendered) data rows in order. Keyed by origIdx so the body
-  // render can look each up.
+  // Sequential 1-based row numbers for the gutter. Counts section-header
+  // rows as well as data rows (the user wants the numbering to "include
+  // headers" so it matches a top-to-bottom count of what's on screen);
+  // only the thin decorative separators are skipped. Keyed by origIdx.
   const rowNumberByOrigIdx = useMemo(() => {
     const m = new Map();
     let n = 0;
     for (const e of visibleEntries) {
-      if (Array.isArray(e.row)) { n++; m.set(e.origIdx, n); }
+      if (isSeparator(e.row)) continue;
+      n++;
+      m.set(e.origIdx, n);
     }
     return m;
   }, [visibleEntries]);
@@ -732,8 +744,9 @@ export default function DataTable({
                 title="Row numbers — click to select a whole row (Ctrl-click to add, Shift-click for a range)"
                 onClick={() => { if (selectedIds.size) setSelectedIds(new Set()); }}
               >#</th>
-              {orderedColumns.map((c) => {
+              {orderedColumns.map((c, colVisibleIdx) => {
                 const label = (columnLabels && columnLabels[c]) || c;
+                const colLetter = colIndexToLetter(colVisibleIdx);
                 const isPinned = pinned.has(c);
                 const w = colWidths[c];
                 const sortIcon = sortBy && sortBy.key === c ? (sortBy.dir === "asc" ? " ▲" : " ▼") : "";
@@ -764,6 +777,7 @@ export default function DataTable({
                       });
                     }}
                   >
+                    <span className="dtable-colletter" aria-hidden="true">{colLetter}</span>
                     {label}{sortIcon}
                     <span className="dtable-caret" aria-hidden="true">▾</span>
                     <span
@@ -798,7 +812,11 @@ export default function DataTable({
             <tbody key={`g${gi}`}>
               {g.section && (
                 <tr key={`s${g.section.origIdx}`} className="dtable-section">
-                  <td colSpan={visibleColumns.length + 1}>
+                  <td
+                    className="dtable-gutter"
+                    style={{ position: "sticky", left: 0, zIndex: 2, width: GUTTER_W, minWidth: GUTTER_W, textAlign: "center", color: "#888", fontSize: 10 }}
+                  >{rowNumberByOrigIdx.get(g.section.origIdx) ?? ""}</td>
+                  <td colSpan={visibleColumns.length}>
                     <SectionLabel
                       text={g.section.row.section}
                       editable={!!onEditSection}
@@ -852,6 +870,10 @@ export default function DataTable({
                     style={bgStyle}
                     draggable={!!onMoveRows}
                     onDragStart={onMoveRows ? (e) => {
+                      // Reorder is now Shift+drag. A plain drag is cancelled
+                      // here so it's free for cell-range selection / text
+                      // selection instead of yanking the whole row.
+                      if (!e.shiftKey) { e.preventDefault(); return; }
                       // If the dragged row is part of the current
                       // selection, move the whole selection. Otherwise
                       // move just this row.

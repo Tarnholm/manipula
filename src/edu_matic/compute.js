@@ -121,11 +121,7 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   // Slave (Case 504) fires whenever the slave flag is set, after the
   // numbered factions.
   if (out.ethnicityRegion) {
-    const fq = Number(project.globals && project.globals.FactionQuantity);
     const allFactions = project.factions || [];
-    const cap = Number.isFinite(fq) && fq > 0
-      ? Math.min(fq + 1, allFactions.length)
-      : allFactions.length;
     const avail = unit.availability || {};
     // "all" ownership (AoR entries, or a factional unit whose ownership
     // string is literally "all") means the unit is available to every
@@ -133,8 +129,14 @@ function computeUnit(unit, idx, project, isM2, entryType) {
     // the Y-flagged ones. writeOwnership ran just above, so
     // out.ownershipString is already resolved here.
     const ownAll = String(out.ownershipString || "").trim().toLowerCase() === "all";
+    // Iterate the FULL faction list — no FactionQuantity cap. The cap
+    // (VBA's Faction1..Faction(FQ+1) window) was silently dropping any
+    // faction sitting past FQ in the xlsm order, so an "all"/AoR unit
+    // lost every faction beyond that slot (galatians, carthage, greeks,
+    // … in this project). A unit available to a faction anywhere in the
+    // list must get an ethnicity line for it.
     const tags = [];
-    for (let k = 0; k < cap; k++) {
+    for (let k = 0; k < allFactions.length; k++) {
       const tag = allFactions[k];
       if (!tag) continue;
       if (ownAll || entryType === "AoR") {

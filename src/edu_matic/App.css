@@ -429,6 +429,19 @@ body {
 }
 .dtable th.dtable-gutter-head { color: #777; font-weight: 700; }
 
+/* Spreadsheet-style column letter shown above each header label. Small,
+ * dim, its own line so it reads like Excel's A/B/C column header without
+ * crowding the column name. */
+.dtable th .dtable-colletter {
+  display: block;
+  font-size: 9px;
+  font-weight: 400;
+  color: #777;
+  line-height: 1;
+  margin-bottom: 1px;
+  letter-spacing: 0.04em;
+}
+
 /* Section-divider row — full-width gold band echoing the spreadsheet's faction
  * separators (#MACEDON / #EPIRUS / …). Scrolls naturally with content.
  * Sticky-LEFT only, so the label stays anchored at the left edge during
