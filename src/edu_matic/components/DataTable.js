@@ -348,6 +348,18 @@ export default function DataTable({
     }
     return m;
   }, [visibleEntries]);
+  // Excel-style cell selection. anchor + focus identify a rectangle;
+  // single click selects one cell, click-drag extends, double-click edits.
+  // Stored as rowOrigIdx + column key (stable across re-render / sort).
+  // Declared HERE — before the selectedCellKeys / beginCellSelect hooks
+  // that read it — to avoid a temporal-dead-zone ReferenceError.
+  const [cellSel, setCellSel] = useState(null);   // { aRow, aCol, fRow, fCol } | null
+  const cellDragRef = useRef(false);
+  useEffect(() => {
+    const up = () => { cellDragRef.current = false; };
+    document.addEventListener("mouseup", up);
+    return () => document.removeEventListener("mouseup", up);
+  }, []);
   // Visible data-row origIdx order — used to resolve a cell-selection
   // rectangle (rows between anchor and focus, in screen order).
   const visibleDataOrigIdxs = useMemo(
@@ -471,17 +483,6 @@ export default function DataTable({
   // dashed "marching ants"-ish border (Excel cue) so the user can see
   // what a Ctrl+V will paste. Cleared on the next copy.
   const [copiedIds, setCopiedIds] = useState(() => new Set());
-  // Excel-style cell selection. anchor + focus identify a rectangle;
-  // single click selects one cell, click-drag extends, double-click edits.
-  // Stored as rowOrigIdx + column key (stable across re-render / sort).
-  const [cellSel, setCellSel] = useState(null);   // { aRow, aCol, fRow, fCol } | null
-  const cellDragRef = useRef(false);
-  // End a drag-select on mouseup anywhere.
-  useEffect(() => {
-    const up = () => { cellDragRef.current = false; };
-    document.addEventListener("mouseup", up);
-    return () => document.removeEventListener("mouseup", up);
-  }, []);
   // Notify the parent when the selection changes. Ref stored to dedupe
   // — only fire when the prop actually changes shape.
   const lastSelectionRef = useRef(null);
