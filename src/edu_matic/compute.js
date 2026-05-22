@@ -124,15 +124,17 @@ function computeUnit(unit, idx, project, isM2, entryType) {
     const allFactions = project.factions || [];
     const avail = unit.availability || {};
     // Factions that must never get an ethnicity line — culture-group
-    // umbrellas / placeholder / rebel slots (greeks, gauls, dummies, …).
-    // Editable per project via the EthnicityExcludeFactions global
-    // (comma-separated); falls back to the built-in default list.
+    // umbrellas / placeholder / rebel slots (greeks, gauls, dummies, …)
+    // plus rhaetians (renamed to breuni). The built-in defaults ALWAYS
+    // apply; the EthnicityExcludeFactions global (comma-separated, edited
+    // in Mod Info) ADDS to them rather than replacing — so the defaults
+    // can't be silently overridden away by a project whose global was
+    // seeded before a default was added.
     const exclRaw = project.globals && project.globals.EthnicityExcludeFactions;
-    const exclSet = new Set(
-      (typeof exclRaw === "string" && exclRaw.trim()
-        ? exclRaw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
-        : DEFAULT_ETHNICITY_EXCLUDE)
-    );
+    const exclSet = new Set(DEFAULT_ETHNICITY_EXCLUDE.map((s) => s.toLowerCase()));
+    if (typeof exclRaw === "string" && exclRaw.trim()) {
+      for (const s of exclRaw.split(",")) { const t = s.trim().toLowerCase(); if (t) exclSet.add(t); }
+    }
     // "all" ownership (AoR entries, or a factional unit whose ownership
     // string is literally "all") means the unit is available to every
     // faction — so list every faction in the ethnicity block, not just
