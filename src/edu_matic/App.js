@@ -200,6 +200,39 @@ export default function App({ externalProject = null, onProjectChange, controlle
     }
   }, []);
 
+  // App-wide faction reconciliation. A faction renamed in Mod Info on an
+  // older build (or via any path that updated globals.FactionN but not the
+  // cached project.factions list) leaves the two out of sync — the Units
+  // column header still shows the OLD tag because it reads project.factions.
+  // Runs on EVERY screen (not just Mod Info) so the headers / ethnicity /
+  // ownership all correct themselves the moment the project loads. One-shot:
+  // once reconciled there's no mismatch, so it won't re-run.
+  useEffect(() => {
+    if (!project || !project.globals || !Array.isArray(project.factions)) return;
+    const g0 = project.globals;
+    const renames = [];
+    for (const key of Object.keys(g0)) {
+      const m = /^Faction(\d+)$/.exec(key);
+      if (!m) continue;
+      const idx = parseInt(m[1], 10) - 1;
+      const globalVal = String(g0[key] ?? "").trim();
+      const facVal = String(project.factions[idx] ?? "").trim();
+      if (globalVal && facVal && globalVal.toLowerCase() !== facVal.toLowerCase()) {
+        renames.push({ idx, oldTag: facVal, newTag: globalVal });
+      }
+    }
+    if (!renames.length) return;
+    let next = project;
+    for (const r of renames) {
+      next = renameFactionTagEverywhere(next, r.oldTag, r.newTag);
+      const nf = next.factions.slice();
+      while (nf.length <= r.idx) nf.push(null);
+      nf[r.idx] = r.newTag;
+      next = { ...next, factions: nf };
+    }
+    setProject(next);
+  }, [project, setProject]);
+
   const showToast = useCallback((text, kind = "info") => {
     setToast({ text, kind, id: Date.now() });
     setTimeout(() => setToast((t) => (t && Date.now() - t.id > 3500 ? null : t)), 4000);
@@ -359,39 +392,6 @@ function ModInfoScreen({ project, setProject }) {
     if (Object.keys(missing).length > 0) {
       setProject({ ...project, globals: { ...project.globals, ...missing } });
     }
-  }, [project, setProject]);
-  // Reconcile project.factions with the FactionN globals. A faction renamed
-  // on an older build (or any path that updated the global but not the
-  // cached faction list) leaves globals.Faction37="breuni" while
-  // project.factions[36] is still "rhaetians" — and re-typing "breuni" is
-  // a no-op, so the rename never finishes. Detect those mismatches on load
-  // and run the full rename cascade so the new name carries over to
-  // project.factions, every unit's availability/ownership, and Core Data.
-  // One-shot: once reconciled there are no mismatches so it won't re-run.
-  useEffect(() => {
-    if (!project || !project.globals || !Array.isArray(project.factions)) return;
-    const g0 = project.globals;
-    const renames = [];
-    for (const key of Object.keys(g0)) {
-      const m = /^Faction(\d+)$/.exec(key);
-      if (!m) continue;
-      const idx = parseInt(m[1], 10) - 1;
-      const globalVal = String(g0[key] ?? "").trim();
-      const facVal = String(project.factions[idx] ?? "").trim();
-      if (globalVal && facVal && globalVal.toLowerCase() !== facVal.toLowerCase()) {
-        renames.push({ idx, oldTag: facVal, newTag: globalVal });
-      }
-    }
-    if (!renames.length) return;
-    let next = project;
-    for (const r of renames) {
-      next = renameFactionTagEverywhere(next, r.oldTag, r.newTag);
-      const nf = next.factions.slice();
-      while (nf.length <= r.idx) nf.push(null);
-      nf[r.idx] = r.newTag;
-      next = { ...next, factions: nf };
-    }
-    setProject(next);
   }, [project, setProject]);
   if (!project) return <EmptyScreen />;
   const mi = project.modInfo;
