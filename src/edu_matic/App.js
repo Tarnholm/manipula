@@ -668,7 +668,15 @@ function CostScreen({ project, setProject }) {
       if (r.entryType && r.entryType !== "Factional") continue;   // count the factional entry only
       const nm = String(r.name || "").trim();
       if (!nm) continue;
-      const rec = { name: nm, price: Number(r.price) || 0, upkeep: Number(r.upkeep) || 0 };
+      const rec = {
+        name: nm,
+        price: Number(r.price) || 0,
+        upkeep: Number(r.upkeep) || 0,
+        // Rough combat "power" for value-for-money: primary attack + charge
+        // + defence + morale. Crude but enough to spot cost outliers.
+        power: (Number(r.attack) || 0) + (Number(r.charge) || 0) + (Number(r.defence) || 0) + (Number(r.morale) || 0),
+        factions: String(r.ownershipString || "").split(",").map((s) => s.trim()).filter(Boolean),
+      };
       if (!byKey.has(nm.toLowerCase())) byKey.set(nm.toLowerCase(), rec);
     }
     // Add id aliases pointing at the same record.
@@ -696,6 +704,34 @@ function CostScreen({ project, setProject }) {
       avgUpkeep: avg(upkeeps), medUpkeep: costMedian(upkeeps),
     };
   }, [lookup]);
+
+  // Value-for-money: price per "power point". Lowest ratio = best value.
+  const valueRanking = useMemo(() => {
+    const seen = new Set(); const arr = [];
+    for (const rec of lookup.values()) {
+      if (seen.has(rec.name)) continue; seen.add(rec.name);
+      if (rec.power > 0 && rec.price > 0) arr.push({ name: rec.name, price: rec.price, power: rec.power, ratio: rec.price / rec.power });
+    }
+    arr.sort((a, b) => a.ratio - b.ratio);
+    return { best: arr.slice(0, 8), worst: arr.slice(-8).reverse() };
+  }, [lookup]);
+
+  // Average Factional cost per faction, in Mod Info faction order. A unit
+  // whose ownership is "all" counts toward every faction.
+  const byFaction = useMemo(() => {
+    const order = factionOrderFromGlobals(project.globals);
+    const seen = new Set(); const recs = [];
+    for (const rec of lookup.values()) { if (seen.has(rec.name)) continue; seen.add(rec.name); recs.push(rec); }
+    const out = [];
+    for (const f of order) {
+      const fl = f.toLowerCase();
+      const units = recs.filter((r) => r.factions.some((x) => x.toLowerCase() === fl || x.toLowerCase() === "all"));
+      if (!units.length) continue;
+      const sum = units.reduce((s, r) => s + r.price, 0);
+      out.push({ faction: f, count: units.length, avg: sum / units.length });
+    }
+    return out;
+  }, [lookup, project.globals]);
 
   const armies = (Array.isArray(project.costArmies) && project.costArmies.length === 6)
     ? project.costArmies
@@ -764,6 +800,42 @@ function CostScreen({ project, setProject }) {
           );
         })}
       </div>
+
+      {(valueRanking.best.length > 0 || byFaction.length > 0) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16, marginTop: 24 }}>
+          {valueRanking.best.length > 0 && (
+            <div>
+              <h3 style={{ marginBottom: 8 }}>Value for money <span style={{ fontSize: 12, fontWeight: 400, color: "#888" }}>(cost ÷ attack+charge+defence+morale)</span></h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {[["Best value", valueRanking.best, "#7c9"], ["Worst value", valueRanking.worst, "#d88"]].map(([title, list, col]) => (
+                  <div key={title} style={{ border: "1px solid #333", borderRadius: 8, background: "#1c1c1c", padding: 10 }}>
+                    <div style={{ color: col, fontWeight: 600, fontSize: 12, marginBottom: 6 }}>{title}</div>
+                    {list.map((v) => (
+                      <div key={v.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "2px 0", gap: 8 }} title={`cost ${costFmt(v.price)} · power ${costFmt(v.power)}`}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</span>
+                        <strong style={{ color: "#e0c074" }}>{v.ratio.toFixed(1)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {byFaction.length > 0 && (
+            <div>
+              <h3 style={{ marginBottom: 8 }}>Average cost by faction</h3>
+              <div style={{ border: "1px solid #333", borderRadius: 8, background: "#1c1c1c", padding: 10, maxHeight: 360, overflowY: "auto" }}>
+                {byFaction.map((f) => (
+                  <div key={f.faction} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "2px 0", gap: 8 }} title={`${f.count} units`}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.faction} <span style={{ color: "#777" }}>({f.count})</span></span>
+                    <strong style={{ color: "#e0c074" }}>{costFmt(f.avg)}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1182,6 +1254,16 @@ const UNIT_TEMPLATES = [
 //                  array and trims trailing empties.
 const AVAIL_PREFIX = "avail:";
 const OWN_PREFIX = "own:";
+// Read-only derived columns in the Units table (computed via compute(), so
+// gated behind a toggle to avoid running the whole pipeline on every edit).
+const DERIVED_PREFIX = "calc:";
+const DERIVED_COLS = [
+  { key: DERIVED_PREFIX + "price",  label: "∑ cost",     field: "price" },
+  { key: DERIVED_PREFIX + "upkeep", label: "∑ upkeep",   field: "upkeep" },
+  { key: DERIVED_PREFIX + "prio",   label: "∑ rec prio", field: "recruit_priority_offset" },
+  { key: DERIVED_PREFIX + "armour", label: "∑ armour",   field: "armour" },
+];
+const DERIVED_COL_KEY_SET = new Set(DERIVED_COLS.map((c) => c.key));
 
 // Canonical column order for the EDU Units table — matches the layout the
 // modteam expects (and that the EDU spreadsheet historically used). Columns
@@ -1271,6 +1353,10 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   // Last-selected rowIds (= project.units indices) so the preview pane
   // shows live computed cost / upkeep / armour for the user's selection.
   const [selectedRowIdxs, setSelectedRowIdxs] = useState([]);
+  // Show read-only computed columns (cost / upkeep / rec prio / armour) in
+  // the grid. Off by default — running compute() over the whole roster on
+  // every edit is expensive, so we only pay it when the user opts in.
+  const [showComputed, setShowComputed] = useState(false);
   // Faction order — read from the Mod Info globals (Faction1, Faction2, …
   // in numeric order), which is the list the mod team maintains. The cached
   // project.factions array can drift out of sync with the globals (it was
@@ -1340,8 +1426,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     if (hasOwnership) for (let i = 0; i < 4; i++) ordered.push(OWN_PREFIX + i);
     ordered.push(...cache.tail);
     ordered.push(...cache.extras);
+    if (showComputed) for (const c of DERIVED_COLS) ordered.push(c.key);
     return ordered;
-  }, [units, factionKeys]);
+  }, [units, factionKeys, showComputed]);
 
   // Build per-column edit metadata. Lookup columns become dropdowns sourced
   // from the project's coreData tables; the dropdown options are the first
@@ -1447,8 +1534,26 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     factionKeys.forEach((f) => { out[AVAIL_PREFIX + f] = f; });
     out[AVAIL_PREFIX + "slave"] = "slave";
     for (let i = 0; i < 4; i++) out[OWN_PREFIX + i] = `ownership_${i + 1}`;
+    for (const c of DERIVED_COLS) out[c.key] = c.label;
     return out;
   }, [factionKeys]);
+
+  // Computed cost/upkeep/priority/armour per unit name — only when the
+  // toggle is on (so we don't run compute() over the roster otherwise).
+  // Memoized on compute-relevant inputs (not on every render).
+  const computedByName = useMemo(() => {
+    if (!showComputed) return null;
+    const map = new Map();
+    let rows = [];
+    try { rows = compute(project) || []; } catch { rows = []; }
+    for (const r of rows) {
+      if (!r || r.kind !== "data") continue;
+      if (r.entryType && r.entryType !== "Factional") continue;
+      const nm = String(r.name || "").trim();
+      if (nm && !map.has(nm)) map.set(nm, r);
+    }
+    return map;
+  }, [showComputed, project.units, project.coreData, project.globals, project.factions, project.modInfo, project.armour]);
 
   // Walk the original units list (including kind:"comment" markers) to interleave
   // section dividers between faction blocks. We track each row's index in the
@@ -1476,6 +1581,13 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
             const i = parseInt(k.slice(OWN_PREFIX.length), 10);
             return (Array.isArray(u.ownership) && u.ownership[i]) || "";
           }
+          if (k.startsWith(DERIVED_PREFIX)) {
+            const r = computedByName && computedByName.get(u.name);
+            if (!r) return "";
+            const col = DERIVED_COLS.find((c) => c.key === k);
+            const v = col ? r[col.field] : undefined;
+            return v == null ? "" : v;
+          }
           return u[k];
         }));
         ids.push(idx);
@@ -1484,7 +1596,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     while (rows.length && rows[0] && !Array.isArray(rows[0])) { rows.shift(); ids.shift(); }
     while (rows.length && rows[rows.length - 1] && !Array.isArray(rows[rows.length - 1])) { rows.pop(); ids.pop(); }
     return { rows, rowIds: ids };
-  }, [project.units, allKeys]);
+  }, [project.units, allKeys, computedByName]);
 
   // Row mutators — add/duplicate/insert/delete on the project.units array.
   // All operate on raw indices into project.units (NOT filtered table rows);
@@ -1656,6 +1768,35 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     if (window.toast) window.toast(`Auto-linked ${linked} variant${linked === 1 ? "" : "s"} to their base unit.`, "ok", 3500);
   }, [project, setProject]);
 
+  // One-click: write each unit's "rec priority" = its Quality class
+  // "Recruitment Priority", cleaning up stale per-unit values (the EDU
+  // output already derives from the class; this just makes the column match
+  // so it isn't misleading). Only touches units whose class defines a value.
+  const syncRecPriorityFromQuality = useCallback(() => {
+    const qc = (project.coreData && project.coreData.qualityClasses) || [];
+    const prioByClass = new Map();
+    for (const row of qc) {
+      if (!row) continue;
+      const key = String(row["Quality Class"] ?? "").trim().toLowerCase();
+      const p = row["Recruitment Priority"];
+      if (key && p != null && p !== "") prioByClass.set(key, p);
+    }
+    let changed = 0;
+    const nextUnits = project.units.map((u) => {
+      if (!u || u.kind !== "unit") return u;
+      const cls = String(u.Quality ?? "").trim().toLowerCase();
+      if (!cls || !prioByClass.has(cls)) return u;
+      const p = prioByClass.get(cls);
+      if (String(u["rec priority"] ?? "") === String(p)) return u;
+      changed++;
+      return { ...u, "rec priority": p };
+    });
+    if (changed > 0) setProject({ ...project, units: nextUnits });
+    if (window.toast) window.toast(
+      changed ? `Synced "rec priority" on ${changed} unit${changed === 1 ? "" : "s"} from their Quality class.` : "All units already match their Quality class — nothing to sync.",
+      changed ? "ok" : "info", 3000);
+  }, [project, setProject]);
+
   // Replace a unit's record from a clipboard-pasted JSON. Preserves
   // kind / row to avoid corrupting the project shape; everything else
   // structural-replaces.
@@ -1809,6 +1950,8 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
 
   const onEdit = useCallback((unitIdx, columnKey, newValue) => {
     if (typeof unitIdx !== "number" || unitIdx < 0) return;
+    // Computed columns are read-only — never write them back to the unit.
+    if (typeof columnKey === "string" && columnKey.startsWith(DERIVED_PREFIX)) return;
     const cur = project.units[unitIdx];
     if (!cur || cur.kind !== "unit") return;
     // Synthetic per-faction availability column: write into the nested
@@ -2102,6 +2245,16 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         >↪ Auto-link AOR variants</button>
         <button
           className="btn"
+          onClick={syncRecPriorityFromQuality}
+          title="Write each unit's 'rec priority' = its Quality class 'Recruitment Priority', cleaning up stale per-unit values so the column matches the EDU output."
+        >⟳ Sync rec priority from Quality</button>
+        <button
+          className={`btn${showComputed ? " btn-accent" : ""}`}
+          onClick={() => setShowComputed((v) => !v)}
+          title="Toggle read-only computed columns (cost, upkeep, recruit priority, armour) from the live EDU compute. Off by default — it recomputes the roster on each edit."
+        >{showComputed ? "✓ Computed columns" : "∑ Computed columns"}</button>
+        <button
+          className="btn"
           onClick={() => insertSectionHeader(null, "above")}
           title="Insert a section header line at the top of the table (e.g. MID-REPUBLICAN ROMANS). For mid-list placement, right-click any row → Insert section header above/below."
         >+ Section header</button>
@@ -2147,6 +2300,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         rowIds={filteredTable.rowIds}
         columnMeta={columnMeta}
         columnLabels={columnLabels}
+        readOnlyColumns={DERIVED_COL_KEY_SET}
         onEdit={onEdit}
         editable
         pinFirstColumn

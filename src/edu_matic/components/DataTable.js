@@ -59,6 +59,7 @@ export default function DataTable({
   rowIds = null,
   columnMeta = null,
   columnLabels = null,    // optional { [key]: displayLabel } for header rendering
+  readOnlyColumns = null, // optional Set<columnKey> rendered as non-editable (e.g. computed columns)
   onEdit = null,
   editable = false,
   pinFirstColumn = false,
@@ -1137,7 +1138,7 @@ export default function DataTable({
                           columnKey={c}
                           rowOrigIdx={origIdx}
                           meta={columnMeta && columnMeta[c]}
-                          editable={editable}
+                          editable={editable && !(readOnlyColumns && readOnlyColumns.has(c))}
                           onCommit={commitCell}
                           flag={j === 0 ? flag : null}
                           autoEnter={autoEnter}

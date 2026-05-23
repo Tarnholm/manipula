@@ -134,6 +134,7 @@ function validate(project, opts) {
     checkUnitStructural(u, ctx, push);
     checkUnitRefs(u, ctx, push);
     checkUnitConditionalFields(u, ctx, push);
+    checkRecPriorityDivergence(u, ctx, push);
     checkUnitArmourUpgrades(u, ctx, push);
     checkUnitFactionOwnership(u, ctx, project, push);
     checkUnitDmbModel(u, ctx, push);
@@ -255,6 +256,25 @@ function coreLookup(ctx, table, name) {
   const t = ctx.tables[table];
   if (!t) return null;
   return t.byName.get(normKey(name)) || null;
+}
+
+// Data hygiene: a unit's stored "rec priority" should match its Quality
+// class "Recruitment Priority". The EDU output now derives recruit priority
+// from the class, so a divergent per-unit value is dead/stale and almost
+// always a mistake (e.g. a levy slinger left at 74 when its class is 215).
+// Warn so the user can spot and clear/align it; it does NOT affect output.
+function checkRecPriorityDivergence(u, ctx, push) {
+  const stored = u["rec priority"];
+  if (stored == null || stored === "") return;
+  const qual = coreLookup(ctx, "qualityClasses", u.Quality);
+  if (!qual) return;
+  const classPrio = qual["Recruitment Priority"];
+  if (classPrio == null || classPrio === "") return;
+  const a = Number(stored), b = Number(classPrio);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return;
+  push(err(u.name, u.row,
+    `Stored "rec priority" (${a}) differs from its Quality class "${u.Quality}" Recruitment Priority (${b}). The EDU output uses the class value (${b}) — the per-unit value is stale; clear or align it.`,
+    "rec-priority-divergence", "warn"));
 }
 
 // ── Mod info (3 checks) ─────────────────────────────────────────────

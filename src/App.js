@@ -97,6 +97,7 @@ import { LightboxProvider } from "./components/UnitCard";
 // EDU-matic — bundled second app for generating export_descr_unit.txt from an EDUMatic xlsm.
 // Lives in src/edu_matic/ and shares window.eduAPI (defined in preload.js).
 import EduMaticApp from "./edu_matic/App";
+import { changelogFor } from "./changelog";
 import { validateUnits, validateFactions, summarize } from "./validation";
 import useHistory, { useUndoShortcuts } from "./useHistory";
 import { parseEDB, parseEDBAsync, groupByUnit, extractCoreRequires, extractFactions, detectMinTier } from "./parsers/edb";
@@ -1620,6 +1621,10 @@ export default function App() {
   // when hidden/dismissed. pullBusy gates the inline Pull button.
   const [pullReminder, setPullReminder] = useState(null);
   const [pullBusy, setPullBusy] = useState(false);
+  // "What's new" banner — shown once per version after an auto-update, when
+  // the running version differs from the last-seen version and changelog.js
+  // has notes for it. Dismiss records the version so it doesn't reappear.
+  const [whatsNew, setWhatsNew] = useState(null);
   // Clone-from-GitHub modal state. null when closed; { url, parent, leaf,
   // busy?, log? } when open. Lets teammates onboard without a terminal.
   const [cloneModal, setCloneModal] = useState(null);
@@ -1701,6 +1706,18 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [projectDir]);
+
+  // "What's new" — when the running version differs from the last one we
+  // showed notes for, surface the changelog entry (if any) once.
+  useEffect(() => {
+    if (!info || !info.version) return;
+    let lastSeen = null;
+    try { lastSeen = localStorage.getItem("rt:lastSeenVersion"); } catch {}
+    if (lastSeen === info.version) return;
+    const entry = changelogFor(info.version);
+    if (entry) setWhatsNew(entry);
+    else { try { localStorage.setItem("rt:lastSeenVersion", info.version); } catch {} }
+  }, [info]);
 
   // Export hashes per file kind ("edb" / "edu") captured at last write-out.
   // Used to detect "the game file changed under us since we last exported"
@@ -2345,6 +2362,23 @@ export default function App() {
           title="Dismiss (you can still pull from the Sync button)"
           style={{ background: "transparent", color: "#9bb8d6", border: "1px solid rgba(155,184,214,0.4)", padding: "5px 12px", borderRadius: 5, fontSize: 12, cursor: "pointer" }}
         >Dismiss</button>
+      </div>
+    )}
+    {whatsNew && (
+      <div style={{ padding: "10px 16px", background: "rgba(124,201,153,0.10)", borderBottom: "1px solid rgba(124,201,153,0.4)", color: "#d6f2e0", fontSize: 13 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: whatsNew.notes && whatsNew.notes.length ? 6 : 0 }}>
+          <strong style={{ color: "#7c9" }}>What's new in v{whatsNew.version}</strong>
+          <span style={{ flex: 1 }} />
+          <button
+            onClick={() => { setWhatsNew(null); try { localStorage.setItem("rt:lastSeenVersion", whatsNew.version); } catch {} }}
+            style={{ background: "transparent", color: "#9ad0ad", border: "1px solid rgba(124,201,153,0.4)", padding: "4px 12px", borderRadius: 5, fontSize: 12, cursor: "pointer" }}
+          >Got it</button>
+        </div>
+        {whatsNew.notes && whatsNew.notes.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.5, color: "#cfe9d8" }}>
+            {whatsNew.notes.map((n, i) => <li key={i}>{n}</li>)}
+          </ul>
+        )}
       </div>
     )}
     <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
