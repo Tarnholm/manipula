@@ -118,6 +118,20 @@ import { findQualityClass } from "./qualityClasses";
 
 const api = window.electronAPI;
 
+// Auto-update errors arrive as full HttpError dumps (URL + headers + stack).
+// A toast/status only wants a short human line. A 404 on latest.yml usually
+// means a new release is mid-publish (assets not all uploaded yet) — that's
+// "update imminent" info, not a hard error. Anything else collapses to its
+// first line, capped. (Ported from Provincia's update-watching code.)
+function updateErrToast(raw) {
+  const s = String(raw || "(unknown)");
+  if (/latest\.yml|HttpError|\b404\b/i.test(s)) {
+    return { text: "Update imminent — a new release is still uploading. Keep watching; it'll install automatically.", kind: "info" };
+  }
+  const first = s.split("\n")[0].trim();
+  return { text: `Update check failed: ${first.length > 140 ? first.slice(0, 137) + "…" : first}`, kind: "error" };
+}
+
 export default function App() {
   const [info, setInfo] = useState(null);
   const [dataDir, setDataDir] = useState("");
@@ -154,8 +168,14 @@ export default function App() {
     api.readUnits().then(d => history.reset((d.units || []).map(migrateV1)));
     // Pull cached update status (for events the main process fired before this listener attached).
     if (api.getUpdateStatus) api.getUpdateStatus().then(s => { if (s) setUpdateStatus(s); });
-    // Subscribe to live update events going forward.
-    const unsub = api.onUpdateStatus && api.onUpdateStatus((s) => setUpdateStatus(s));
+    // Subscribe to live update events going forward. While the background
+    // watch is running, swallow the "nothing yet" pings (none/checking) so
+    // the update toast doesn't flash "you're on the latest" every 5s — the
+    // watch only cares about an actual available/downloaded result.
+    const unsub = api.onUpdateStatus && api.onUpdateStatus((s) => {
+      if (updateWatchRef.current && s && (s.state === "none" || s.state === "checking")) return;
+      setUpdateStatus(s);
+    });
 
     // Auto-load on launch. Project directory takes priority — once a user
     // has saved a Manipula project folder, that's the source of truth for
@@ -1533,6 +1553,13 @@ export default function App() {
   const [factionStripModal, setFactionStripModal] = useState(null);
   const [edumaticPreview, setEdumaticPreview] = useState(null); // { source, rows, selected: Set } | null
   const [updateStatus, setUpdateStatus] = useState(null); // { state: "available"|"downloading"|"downloaded"|"error", ... } | null
+  // Background update-watch (ported from Provincia): double-click the version
+  // label to poll for updates every 5s until one appears (then auto-stops),
+  // or double-click again to cancel. Lets a teammate actively wait for a
+  // just-pushed release instead of relying on the 20-min auto-check.
+  const [watchingUpdates, setWatchingUpdates] = useState(false);
+  const updateWatchRef = useRef(null);          // setInterval id while watching
+  const versionClickTimerRef = useRef(null);    // single-vs-double click discriminator
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
   // (Bulk-blame useEffect moved further down — its deps array reads
@@ -1737,6 +1764,62 @@ export default function App() {
     setToasts(t => [...t, { id, text, kind }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms);
   }, []);
+
+  // ── Update watching (ported from Provincia) ───────────────────────
+  // Manual one-off check: pop a "checking" status, fire updaterCheck, then
+  // reconcile from the cached status if no live event arrives. manualUpdate
+  // CheckRef marks this so the result is surfaced (vs the silent watch poll).
+  const doCheckUpdates = useCallback(async () => {
+    if (!api?.updaterCheck) return;
+    setUpdateStatus({ state: "checking" });
+    setStatus("Checking for updates…");
+    const r = await api.updaterCheck();
+    if (r && !r.ok) {
+      const t = updateErrToast(r.reason);
+      setUpdateStatus({ state: "error", message: t.text });
+      setStatus(t.text);
+      return;
+    }
+    setTimeout(async () => {
+      if (api.getUpdateStatus) {
+        const s = await api.getUpdateStatus();
+        if (s) setUpdateStatus(s);
+      }
+    }, 4000);
+  }, []);
+  const stopUpdateWatch = useCallback((silent) => {
+    if (updateWatchRef.current) { clearInterval(updateWatchRef.current); updateWatchRef.current = null; }
+    setWatchingUpdates(false);
+    if (!silent) toast("Stopped watching for updates.", "info");
+  }, [toast]);
+  const toggleUpdateWatch = useCallback(() => {
+    if (updateWatchRef.current) { stopUpdateWatch(false); return; }
+    if (!api?.updaterCheck) return;
+    setWatchingUpdates(true);
+    toast("Watching for updates in the background — checking every 5s until one is found.", "info");
+    const poll = () => { try { api.updaterCheck(); } catch (e) { console.warn("[updater] watch poll failed:", e); } };
+    poll();   // check immediately, then on an interval
+    updateWatchRef.current = setInterval(poll, 5000);
+  }, [toast, stopUpdateWatch]);
+  // Single click = one-off check; double click = toggle the background watch.
+  // The 250ms timer lets a double-click cancel the pending single-click.
+  const onVersionClick = useCallback(() => {
+    if (versionClickTimerRef.current) return;
+    versionClickTimerRef.current = setTimeout(() => { versionClickTimerRef.current = null; doCheckUpdates(); }, 250);
+  }, [doCheckUpdates]);
+  const onVersionDblClick = useCallback(() => {
+    if (versionClickTimerRef.current) { clearTimeout(versionClickTimerRef.current); versionClickTimerRef.current = null; }
+    toggleUpdateWatch();
+  }, [toggleUpdateWatch]);
+  // Stop the watch loop the moment an update actually appears / finishes.
+  useEffect(() => {
+    if (!updateStatus) return;
+    if ((updateStatus.state === "available" || updateStatus.state === "downloaded") && updateWatchRef.current) {
+      clearInterval(updateWatchRef.current); updateWatchRef.current = null; setWatchingUpdates(false);
+    }
+  }, [updateStatus]);
+  // Clear the interval if the app unmounts mid-watch.
+  useEffect(() => () => { if (updateWatchRef.current) clearInterval(updateWatchRef.current); }, []);
   // Expose to window so callbacks deep in the tree (and the merc /
   // export-units IPC handlers) can surface failure as a sticky toast
   // without prop-drilling.
@@ -2469,28 +2552,10 @@ export default function App() {
         onRedo={history.redo}
         canUndo={history.canUndo}
         canRedo={history.canRedo}
-        onCheckUpdates={async () => {
-          if (!api) return;
-          // Pop the toast immediately so the click always produces visible feedback. autoUpdater
-          // events that follow will replace this state with available/none/downloaded/error.
-          setUpdateStatus({ state: "checking" });
-          setStatus("Checking for updates…");
-          const r = await api.updaterCheck();
-          if (!r.ok) {
-            setUpdateStatus({ state: "error", message: r.reason || "Update check failed" });
-            setStatus("Update check failed: " + (r.reason || "?"));
-            return;
-          }
-          // If autoUpdater is silent (already-cached state, no events emitted), pull whatever
-          // the main process last knew about and surface that — otherwise the toast hangs on "checking".
-          setTimeout(async () => {
-            if (api.getUpdateStatus) {
-              const s = await api.getUpdateStatus();
-              if (s) setUpdateStatus(s);
-              else setUpdateStatus({ state: "error", message: "no response from updater (check console)" });
-            }
-          }, 4000);
-        }}
+        onCheckUpdates={onVersionClick}
+        onVersionDblClick={onVersionDblClick}
+        watchingUpdates={watchingUpdates}
+        downloadPct={updateStatus && updateStatus.state === "downloading" && typeof updateStatus.percent === "number" ? updateStatus.percent : null}
         info={info}
       />
       {edbDrift && !edbDriftDismissed && (
@@ -2882,7 +2947,7 @@ export default function App() {
   );
 }
 
-function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, onReloadFromDisk, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onShowShortcuts, info }) {
+function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDirty, eduValidationErrors = [], setEduView, setActiveTab, unitsCount, units, theme, onThemeToggle, onJumpToUnit, onJumpToEdu, onFindReplace, onExportBundle, onSaveProject, onOpenProject, onCloneProject, onReloadFromDisk, projectDir, projectSaveTick, projectDirty, onPick, onReload, onImport, onImportNewFromEDB, onImportEdumatic, onResetImportsToReferenceOnly, onMarkOrphanUnits, onWriteBack, onSaveText, onOpenBackups, profiles, activeProfile, onSwitchProfile, onNewProfile, onDeleteProfile, onUndo, onRedo, canUndo, canRedo, onCheckUpdates, onVersionDblClick, watchingUpdates = false, downloadPct = null, onShowShortcuts, info }) {
   return (
     <div style={{ borderBottom: "1px solid rgba(220,166,74,0.15)", padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, background: "rgba(20,22,23,0.78)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", flexWrap: "wrap" }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginRight: 4 }}>Manipula</div>
@@ -2902,11 +2967,16 @@ function Topbar({ dataDir, loading, status, eduProject, eduProjectSource, eduDir
       {info && info.version && (
         <span
           onClick={onCheckUpdates}
-          title="Click to check for updates"
-          style={{ color: "#777", fontSize: 11, marginRight: 8, fontFamily: "Consolas, monospace", cursor: "pointer", padding: "2px 4px", borderRadius: 3 }}
+          onDoubleClick={onVersionDblClick}
+          title={downloadPct != null ? `Downloading update… ${downloadPct}%` : watchingUpdates ? "Watching for updates every 5s — double-click to stop" : "Click to check for updates · double-click to keep watching until one appears"}
+          style={{ color: watchingUpdates ? "#dca64a" : "#777", fontSize: 11, marginRight: 8, fontFamily: "Consolas, monospace", cursor: "pointer", padding: "2px 4px", borderRadius: 3 }}
           onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(220,166,74,0.12)"; e.currentTarget.style.color = "#dca64a"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = ""; e.currentTarget.style.color = "#777"; }}
-        >v{info.version}</span>
+          onMouseLeave={(e) => { e.currentTarget.style.background = ""; e.currentTarget.style.color = watchingUpdates ? "#dca64a" : "#777"; }}
+        >
+          v{info.version}
+          {downloadPct != null && <span style={{ marginLeft: 4, color: "#dca64a", fontWeight: 600 }}>{downloadPct}%</span>}
+          {downloadPct == null && watchingUpdates && <span style={{ marginLeft: 5, color: "#dca64a", fontWeight: 600 }}>👀 watching…</span>}
+        </span>
       )}
       <QuickSearch units={units} eduProject={eduProject} onJumpToUnit={onJumpToUnit} onJumpToEdu={onJumpToEdu} />
       <button onClick={onPick} style={tbtn("#3a4a5a")}>Mod data folder…</button>
