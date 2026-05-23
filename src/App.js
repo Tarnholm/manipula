@@ -2238,17 +2238,21 @@ export default function App() {
     setDiff(buildWriteBackDiff(fresh));
   };
 
-  const confirmWriteBack = async () => {
-    if (!diff) return;
-    const out = applyUnitsToEDB(diff.fresh, units);
+  const confirmWriteBack = async (baseOverride) => {
+    // baseOverride lets the "Overwrite anyway" conflict path write directly
+    // (it passes the fresh disk text); the normal path uses the previewed diff.
+    const base = (typeof baseOverride === "string") ? baseOverride : (diff && diff.fresh);
+    if (base == null) return;
+    const out = applyUnitsToEDB(base, units);
     const r = await api.writeEDB(out);
     if (r.ok) {
       setStatus(`Wrote EDB. Backup: ${r.backup}`);
       // Record the hash of what we just wrote so the next write-back can
-      // detect external edits.
+      // detect external edits. Spread the existing edb entry so we keep its
+      // `path` (the conflict modal + "Open in editor" depend on it).
       try {
         const { hashOfText } = await import("./projectStore");
-        setProjectExports(e => ({ ...e, edb: { hashAtExport: hashOfText(out), exportedAt: new Date().toISOString() } }));
+        setProjectExports(e => ({ ...e, edb: { ...(e && e.edb), hashAtExport: hashOfText(out), exportedAt: new Date().toISOString() } }));
       } catch {}
       // Auto-prune units that were marked for removal — their lines are
       // now scrubbed from the EDB, so the project no longer needs to
@@ -2737,7 +2741,9 @@ export default function App() {
           onOverwrite={() => {
             const fresh = edbConflict.fresh;
             setEdbConflict(null);
-            setDiff(buildWriteBackDiff(fresh));
+            // Write the project's version straight over the changed disk
+            // file (skips the review step — that's what "Overwrite" means).
+            confirmWriteBack(fresh);
           }}
         />
       )}

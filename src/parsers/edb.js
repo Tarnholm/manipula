@@ -31,7 +31,12 @@ export function parseEDB(text) {
   let inAlias = null;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    // `;` starts a comment in EDB. Strip it for matching (so an inline
+    // comment on an alias / levels / recruit line doesn't get absorbed into
+    // the captured value), but keep the original text for `raw`. Mirrors the
+    // other descr_* parsers, which all strip `;.*$` first.
+    const raw = lines[i];
+    const line = raw.replace(/;.*$/, "");
 
     // Aliases
     const am = line.match(ALIAS_RE);
@@ -90,7 +95,7 @@ export function parseEDB(text) {
         xp: parseInt(rm[2], 10),
         requires: rm[3].trim(),
         line: i,
-        raw: line,
+        raw,
         building: curBuilding.name,
         level: curBuilding.levels[curLevelIdx].name,
       };
@@ -145,7 +150,7 @@ export async function parseEDBAsync(text) {
     }
     const rm = line.match(RECRUIT_RE);
     if (rm && curBuilding && curLevelIdx >= 0) {
-      const rec = { unit: rm[1], xp: parseInt(rm[2], 10), requires: rm[3].trim(), line: i, raw: line, building: curBuilding.name, level: curBuilding.levels[curLevelIdx].name };
+      const rec = { unit: rm[1], xp: parseInt(rm[2], 10), requires: rm[3].trim(), line: i, raw, building: curBuilding.name, level: curBuilding.levels[curLevelIdx].name };
       recruits.push(rec);
       curBuilding.levels[curLevelIdx].recruits.push(rec);
     }
