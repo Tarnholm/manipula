@@ -118,7 +118,7 @@ export function validateUnits(units, modIndex, opts = {}) {
         if (!knownHR.has(m[1])) {
           issues.push(issue(u, "error", "unknown-hr", `Unknown hidden_resource "${m[1]}"`));
         }
-      } else if ((m = t.match(/^not hidden_resource\s+(\S+)$/))) {
+      } else if ((m = t.match(/^not\s+hidden_resource\s+(\S+)$/))) {
         if (!knownHR.has(m[1])) {
           issues.push(issue(u, "warn", "unknown-hr-negated", `Unknown hidden_resource (negated) "${m[1]}"`));
         }

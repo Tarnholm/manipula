@@ -102,6 +102,13 @@ function isMercUnit(name) {
 // double-prefix). Applies in both paired and AOR-only modes.
 function aorRecruitName(u) {
   if (!u.aor) return null;
+  // An aorOnly unit can override the recruit name — e.g. the Cretan archers
+  // recruit as "gortynian archers", whose EDU `type` has NO "aor " prefix.
+  // Without honoring the override the emitted recruit line ("aor gortynian
+  // archers") points at a non-existent EDU type and the unit can't recruit.
+  // Matches the design (recruitName is the override when aorOnly) and the
+  // preview header.
+  if (u.aor.aorOnly && u.aor.recruitName) return String(u.aor.recruitName).trim();
   const base = String(u.unit || "").replace(/^aor\s+/i, "");
   return `aor ${base}`;
 }

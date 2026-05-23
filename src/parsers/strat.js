@@ -22,8 +22,8 @@ export function parseDescrStratFactions(text) {
     }
     if (s === "settlement") { inSettlement = true; continue; }
     if (s === "}" && inSettlement) { inSettlement = false; continue; }
-    if (inSettlement && s.startsWith("region")) {
-      const rn = s.replace("region", "").trim();
+    if (inSettlement && /^region\s/.test(s)) {
+      const rn = s.replace(/^region\s+/, "").trim();
       if (current && rn) factionRegions[current].push(rn);
     }
   }
