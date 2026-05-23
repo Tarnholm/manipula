@@ -369,7 +369,7 @@ function renderGroup(unitId, issuesForUnit, units, modIndex, onJump, selectedUni
         )}
         <span style={{ fontWeight: 600 }}>{heading}</span>
         {u && display && <span style={{ color: "#666", fontSize: 11 }}>({u.unit})</span>}
-        {u && <span style={{ color: "#888", fontSize: 11 }}>· {u.unitType || "faction"} · t{u.minTier}</span>}
+        {u && <span style={{ color: "#888", fontSize: 11 }}>· {u.unitType || "faction"} · t{u.canonicalMicTier ?? u.minTier ?? "?"}</span>}
         {!u && <span style={{ color: "#888", fontSize: 11 }}>· cross-file</span>}
       </div>
       {issuesForUnit.map((i, idx) => (

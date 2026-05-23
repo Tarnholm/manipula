@@ -45,10 +45,15 @@ function gh(method, pathname) {
 (async () => {
   try {
     const rels = await gh("GET", `/repos/${owner}/${repo}/releases?per_page=100`);
-    const nonDraft = (rels || []).filter((r) => !r.draft).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const toDelete = nonDraft.slice(keep);
+    // Count ALL releases by recency (newest first) — the release we just
+    // published is still a DRAFT at this point, so filtering it out would
+    // keep `keep` published PLUS the new one (= keep+1 after un-drafting).
+    // Including everything keeps the newest `keep` (the new draft among them)
+    // and also cleans up stale leftover drafts.
+    const all = (rels || []).slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const toDelete = all.slice(keep);
     if (!toDelete.length) {
-      console.log(`[prune] nothing to delete (${nonDraft.length} non-draft releases, keeping ${keep}).`);
+      console.log(`[prune] nothing to delete (${all.length} releases, keeping ${keep}).`);
       return;
     }
     console.log(`[prune] keeping ${keep} latest, deleting ${toDelete.length} older releases.`);

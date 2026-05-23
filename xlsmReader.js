@@ -84,9 +84,16 @@ function readEdumatic(xlsmPath) {
   const buf = fs.readFileSync(xlsmPath);
   const zip = readZip(buf);
 
-  const wbXml = zip.extract("xl/workbook.xml").toString("utf8");
-  const relsXml = zip.extract("xl/_rels/workbook.xml.rels").toString("utf8");
-  const sstXml = zip.extract("xl/sharedStrings.xml").toString("utf8");
+  const wbBuf = zip.extract("xl/workbook.xml");
+  const relsBuf = zip.extract("xl/_rels/workbook.xml.rels");
+  if (!wbBuf || !relsBuf) {
+    throw new Error("Not a valid .xlsx/.xlsm workbook (missing workbook.xml) — pick the EDU-matic spreadsheet file.");
+  }
+  const wbXml = wbBuf.toString("utf8");
+  const relsXml = relsBuf.toString("utf8");
+  // sharedStrings.xml is optional — a workbook with no shared strings omits it.
+  const sstBuf = zip.extract("xl/sharedStrings.xml");
+  const sstXml = sstBuf ? sstBuf.toString("utf8") : "";
 
   const strings = [];
   for (const { inner } of iterTags(sstXml, "si")) {
