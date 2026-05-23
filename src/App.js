@@ -3289,6 +3289,7 @@ function EduSubTabs({ view, onView, project }) {
     { key: "bulk",     label: "Bulk Edit",   hint: "Apply a column change across many units at once." },
     { key: "armour",   label: "Armour",      hint: "Per-model armour set: # Instances, Type, Material per body slot. Drives EDU armour value." },
     { key: "merc",     label: "Mercenaries", hint: "Pools, regions, per-unit cost / max / replenish. Cross-check vs descr_mercenaries." },
+    { key: "costs",    label: "Roster Cost", hint: "Average/median Factional cost + upkeep across the roster, and totals for six paste-in 20-unit armies." },
     { key: "validate", label: "Validate",    hint: "Errors and warnings across the project." },
     { key: "preview",  label: "Preview EDU", hint: "Computed DATA + formatted EDU text — read-only preview of the export." },
     { key: "export",   label: "Export EDU",  hint: "Write export_descr_unit.txt; sync export_units.txt order." },

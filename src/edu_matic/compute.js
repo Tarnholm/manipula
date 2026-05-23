@@ -191,7 +191,7 @@ function computeUnit(unit, idx, project, isM2, entryType) {
     if (unit.ownership && unit.ownership.slave) tags.push("slave");
     out.ethnicityTags = cleanFactionList(tags, exclSet);
   }
-  writeRecruitPriority(out, unit, entryType, project.globals);
+  writeRecruitPriority(out, unit, r, entryType, project.globals);
 
   // ── Formula: # of men ────────────────────────────────────────
   // Write under both v2.6 name ("# of men") and v0.7.0 rename ("No. of men")
@@ -390,14 +390,21 @@ function writeOwnership(out, unit, entryType, exclSet) {
   }
 }
 
-function writeRecruitPriority(out, unit, entryType, globals) {
+function writeRecruitPriority(out, unit, r, entryType, globals) {
   // VBA Case 199 in v0.7.0: AoR and Merc variants use a fixed global
   // `aor_default_rec_priority` instead of the unit's rec priority.
   let v;
   if ((entryType === "AoR" || entryType === "Merc") && globals) {
     v = toNum(globals["aor_default_rec_priority"] ?? globals["AorRecrPriority"]);
   } else {
-    v = toNum(unit["rec priority"]);
+    // Factional priority is driven by the unit's Quality class
+    // "Recruitment Priority" so every unit of a class shares it (e.g. all
+    // "02. levy slinger" units → 215), mirroring the xlsm's VLOOKUP. The
+    // per-unit "rec priority" field is only a fallback for classes that
+    // don't define a Recruitment Priority — it no longer lets a stale /
+    // mismatched per-unit value override the class.
+    const fromClass = toNum(r && r.qual && r.qual["Recruitment Priority"]);
+    v = fromClass != null ? fromClass : toNum(unit["rec priority"]);
   }
   if (v != null) out["recruit_priority_offset"] = v;
 }
