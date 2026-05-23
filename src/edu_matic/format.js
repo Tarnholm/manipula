@@ -124,7 +124,12 @@ function formatUnit(row) {
   const variation = Number(row["unit variation"] || 0);
   const men = row["# of men"] ?? 0;
   const extras = row["# of extras"] ?? 0;
-  const mass = row["mass"] != null ? fmtNum(row["mass"]) : "";
+  // soldier/soldiers REQUIRE the mass field. If it's missing, joinCSV drops
+  // it and the line emits with too few fields — RTW then aborts parsing the
+  // REST of the EDU at that line, breaking every unit below it. Fall back to
+  // a valid default so one unresolved unit can't take down the whole file.
+  let mass = row["mass"] != null ? fmtNum(row["mass"]) : "";
+  if (mass === "") mass = "1";
   if (variation === 0) {
     out.push(line("soldier", joinCSV([row["model"] || "", men, extras, mass])));
   } else {
@@ -172,12 +177,20 @@ function formatUnit(row) {
   const attrFlags = ATTR_COLS.map((c) => row[c]).filter((v) => v);
   if (attrFlags.length) out.push(line("attributes", attrFlags.join(", ")));
 
-  // Formation
+  // Formation. Emit only when there's formation data, but when emitting, the
+  // 6 mandatory fields (4 spacings, ranks, formation1) must be positionally
+  // present — a dropped field shifts the rest and RTW aborts the parse. Fill
+  // gaps with safe defaults; formation2 is the only optional trailing field.
   const hrCl = row["h. cl. spacing"], vrCl = row["v. cl. spacing"];
   const hrLs = row["h. l. spacing"],  vrLs = row["v. l. spacing"];
-  const ranks = row["ranks"];
-  const formation = joinCSV([fmtNum(hrCl), fmtNum(vrCl), fmtNum(hrLs), fmtNum(vrLs), ranks, row["formation1"], row["formation2"]]);
-  if (formation) out.push(line("formation", formation));
+  const ranks = row["ranks"], f1 = row["formation1"], f2 = row["formation2"];
+  if ([hrCl, vrCl, hrLs, vrLs, ranks, f1, f2].some((v) => v != null && v !== "")) {
+    const fNum = (v) => { const n = fmtNum(v); return n === "" ? "0" : n; };
+    const rk = (ranks != null && ranks !== "") ? ranks : "0";   // keep raw (original passed it un-fmtNum'd)
+    const parts = [fNum(hrCl), fNum(vrCl), fNum(hrLs), fNum(vrLs), rk, f1 || "square"];
+    if (f2) parts.push(f2);
+    out.push(line("formation", parts.join(", ")));
+  }
 
   // stat_health
   if (row["hp"] != null || row["sec hp"] != null) {
