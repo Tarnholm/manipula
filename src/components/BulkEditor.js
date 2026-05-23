@@ -159,7 +159,7 @@ function makeTransformer(op, params) {
         u.writeBackUserSet = true;
         break;
       case "add-hidden-resource": {
-        const reqs = u.commonRequires || [];
+        const reqs = [...(u.commonRequires || [])];
         for (const v of strList) {
           const c = `hidden_resource ${v}`;
           if (!reqs.includes(c)) reqs.push(c);
@@ -171,7 +171,7 @@ function makeTransformer(op, params) {
         u.commonRequires = (u.commonRequires || []).filter(r => !strList.some(v => r === `hidden_resource ${v}`));
         break;
       case "add-faction": {
-        const f = u.factions || [];
+        const f = [...(u.factions || [])];
         for (const v of strList) if (!f.includes(v)) f.push(v);
         u.factions = f;
         break;
@@ -180,7 +180,7 @@ function makeTransformer(op, params) {
         u.factions = (u.factions || []).filter(x => !strList.includes(x));
         break;
       case "add-exclude-faction": {
-        const f = u.excludeFactions || [];
+        const f = [...(u.excludeFactions || [])];
         for (const v of strList) if (!f.includes(v)) f.push(v);
         u.excludeFactions = f;
         break;
@@ -197,7 +197,7 @@ function makeTransformer(op, params) {
         break;
       }
       case "add-raw": {
-        const reqs = u.commonRequires || [];
+        const reqs = [...(u.commonRequires || [])];
         if (strVal && !reqs.includes(strVal)) reqs.push(strVal);
         u.commonRequires = reqs;
         break;

@@ -571,8 +571,8 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
             />
             <Field label="Custom extras (one per line — verbatim)">
               <textarea
-                value={(aiR.custom || []).join("\n")}
-                onChange={(e) => updateAiRequires("custom", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
+                value={(aiR.raw || []).join("\n")}
+                onChange={(e) => updateAiRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
                 style={{ ...input(420), height: 60, fontFamily: "Consolas, monospace", fontSize: 11 }}
                 placeholder="e.g. event_counter ai_buff_1 1"
               />

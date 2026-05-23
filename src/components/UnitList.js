@@ -194,9 +194,14 @@ export default function UnitList({ units, selectedId, selectedIds, onSelect, onA
       if (filterMode === "faction" && filterValue) {
         if (!(u.factions || []).includes(filterValue)) return false;
       } else if (filterMode === "hr" && filterValue) {
-        if (!(u.requires || []).some(r => r === `hidden_resource ${filterValue}`)) return false;
+        // Authored units carry requires in commonRequires / outsideExtras /
+        // aorRequires — not the legacy `requires` field — so the filter must
+        // check all of them (matching how usageOptions builds the list).
+        const allReq = [...(u.commonRequires || []), ...(u.outsideExtras || []), ...(u.aorRequires || []), ...(u.requires || [])];
+        if (!allReq.some(r => r === `hidden_resource ${filterValue}`)) return false;
       } else if (filterMode === "reform" && filterValue) {
-        if (!(u.requires || []).some(r => r === `major_event "${filterValue}"`)) return false;
+        const allReq = [...(u.commonRequires || []), ...(u.outsideExtras || []), ...(u.aorRequires || []), ...(u.requires || [])];
+        if (!allReq.some(r => r === `major_event "${filterValue}"`)) return false;
       }
       return true;
     });

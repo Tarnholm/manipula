@@ -74,8 +74,9 @@ export function useUndoShortcuts({ undo, redo }) {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       // Skip if focus is inside text inputs / textareas / contenteditable
-      const tag = (document.activeElement && document.activeElement.tagName) || "";
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const ae = document.activeElement;
+      const tag = (ae && ae.tagName) || "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || (ae && ae.isContentEditable)) return;
       if (e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
       else if ((e.key === "z" && e.shiftKey) || e.key === "y") { e.preventDefault(); redo(); }
     };

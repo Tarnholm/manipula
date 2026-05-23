@@ -2089,7 +2089,11 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     for (let idx = 0; idx < project.units.length; idx++) {
       const u = project.units[idx];
       if (!u || u.kind !== "unit") continue;
-      const f = validationByName.get(u.name) || {};
+      // Clone — validationByName holds the live validation Map; mutating its
+      // stored object in place would re-append the linked/recruit/blame notes
+      // on every recompute (growing tooltips) and leak stale notes after the
+      // underlying data changes.
+      const f = { ...(validationByName.get(u.name) || {}) };
       const importNote = importDiffByIdx.get(idx);
       if (importNote) f.info = importNote;
       // Linked-variant hint — surface "↪ Linked to <master>" in the
