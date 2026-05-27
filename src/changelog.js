@@ -3,9 +3,11 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.36.104", notes: [
+    "Faction availability dropdown in the EDU Builder now offers M (mercenary) alongside Y — was Y-only before.",
+  ] },
   { version: "0.36.103", notes: [
     "Watching for updates (double-click the version label) now truly auto-installs the update the moment it finishes downloading — no \"Restart and install\" click. If you have unsaved EDU edits it saves your project first so nothing is lost.",
-    "Faction availability dropdown in the EDU Builder now offers M (mercenary) alongside Y — was Y-only before.",
   ] },
   { version: "0.36.97", notes: [
     "Roster Cost tab v2: per-faction average cost + best/worst value-for-money outliers.",
