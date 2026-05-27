@@ -1512,10 +1512,14 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       const opts = [...new Set([...canonical.filter((c) => seen.has(c)), ...seen])];
       meta["Entries"] = { type: "select", options: opts };
     }
-    // Per-faction availability columns are Y/blank toggles.
+    // Per-faction availability: "" = none, "Y" = factional, "M" = mercenary.
+    // Importer (xlsmImporter.js) preserves "M" as the merc flag so the
+    // ethnicity emitter can distinguish factional ownership from merc
+    // availability — the editor must offer it too.
     for (const f of factionKeys) {
-      meta[AVAIL_PREFIX + f] = { type: "select", options: ["", "Y"] };
+      meta[AVAIL_PREFIX + f] = { type: "select", options: ["", "Y", "M"] };
     }
+    // Slave column stays Y-only — slaves don't have a merc availability.
     meta[AVAIL_PREFIX + "slave"] = { type: "select", options: ["", "Y"] };
     // Other free-text columns get a plain text editor by default — no entry
     // in `meta` is needed for that, the table treats unknown columns as text.

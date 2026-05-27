@@ -1560,6 +1560,10 @@ export default function App() {
   // just-pushed release instead of relying on the 20-min auto-check.
   const [watchingUpdates, setWatchingUpdates] = useState(false);
   const updateWatchRef = useRef(null);          // setInterval id while watching
+  // Armed when the user double-clicks the version to watch: once an update
+  // downloads, install it automatically (saving the project first if dirty) so
+  // no "Restart and install" click is needed. Disarmed if the watch is cancelled.
+  const autoInstallRef = useRef(false);
   const versionClickTimerRef = useRef(null);    // single-vs-double click discriminator
   // EDU-matic shared state — when set, the EDU Builder tab uses this project. A single xlsm
   // import populates both this and the recruitment-side import in one action.
@@ -1807,13 +1811,15 @@ export default function App() {
   const stopUpdateWatch = useCallback((silent) => {
     if (updateWatchRef.current) { clearInterval(updateWatchRef.current); updateWatchRef.current = null; }
     setWatchingUpdates(false);
+    autoInstallRef.current = false; // user cancelled — disarm auto-install
     if (!silent) toast("Stopped watching for updates.", "info");
   }, [toast]);
   const toggleUpdateWatch = useCallback(() => {
     if (updateWatchRef.current) { stopUpdateWatch(false); return; }
     if (!api?.updaterCheck) return;
     setWatchingUpdates(true);
-    toast("Watching for updates in the background — checking every 5s until one is found.", "info");
+    autoInstallRef.current = true; // arm: auto-install once an update downloads
+    toast("Watching for updates — will save your project and install automatically once one appears.", "info");
     const poll = () => { try { api.updaterCheck(); } catch (e) { console.warn("[updater] watch poll failed:", e); } };
     poll();   // check immediately, then on an interval
     updateWatchRef.current = setInterval(poll, 5000);
@@ -1834,7 +1840,29 @@ export default function App() {
     if ((updateStatus.state === "available" || updateStatus.state === "downloaded") && updateWatchRef.current) {
       clearInterval(updateWatchRef.current); updateWatchRef.current = null; setWatchingUpdates(false);
     }
-  }, [updateStatus]);
+    // Auto-install once the download finishes, if the user opted into watching.
+    // Save the project first when there are unsaved EDU edits so the install
+    // (which quits the app) can't lose work; mirrors the save-then-update flow.
+    if (updateStatus.state === "downloaded" && autoInstallRef.current) {
+      autoInstallRef.current = false;
+      const doInstall = () => { try { (window.electronAPI?.updaterQuitAndInstallNow || window.electronAPI?.updaterQuitAndInstall)?.(); } catch (e) { console.warn("[updater] auto-install failed:", e); } };
+      if (projectDirtyRef.current) {
+        toast(`Update ${updateStatus.version || ""} downloaded — saving your project, then installing…`, "info");
+        const btn = document.querySelector("[data-rtshortcut='save-project']");
+        if (btn) btn.click();
+        const start = Date.now();
+        const tick = () => {
+          if (!projectDirtyRef.current) { doInstall(); return; }
+          if (Date.now() - start > 30000) { doInstall(); return; } // give up waiting; install anyway
+          setTimeout(tick, 200);
+        };
+        setTimeout(tick, 200);
+      } else {
+        toast(`Update ${updateStatus.version || ""} downloaded — installing now…`, "info");
+        setTimeout(doInstall, 600);
+      }
+    }
+  }, [updateStatus, toast]);
   // Clear the interval if the app unmounts mid-watch.
   useEffect(() => () => { if (updateWatchRef.current) clearInterval(updateWatchRef.current); }, []);
   // Expose to window so callbacks deep in the tree (and the merc /
