@@ -4,7 +4,7 @@
 // VBA L6423–6551:
 //   1. sum contributions from spec + dwell + weapons + mount + special mount,
 //      blended by MeleeFraction when a secondary weapon is present
-//   2. clamp each to ±31
+//   2. clamp each to ±50
 //   3. "keep top 2 magnitude" filter: if all four are nonzero, zero the
 //      smallest-magnitude pair (VBA does it via two nested comparisons —
 //      replicated faithfully)
@@ -57,7 +57,7 @@ function computeVS(r, project) {
   const vals = { horse: 0, elephant: 0, chariot: 0, camel: 0 };
   for (const k of Object.keys(fractions)) {
     if (fractions[k] > 0) {
-      vals[k] = clamp(sumBonus(r, cols[k][0], cols[k][1], cols[k][1], withSec, mf), -31, 31);
+      vals[k] = clamp(sumBonus(r, cols[k][0], cols[k][1], cols[k][1], withSec, mf), -50, 50);
     }
   }
 

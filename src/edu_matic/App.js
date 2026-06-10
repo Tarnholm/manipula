@@ -1087,6 +1087,8 @@ function CoreDataScreen({ project, setProject }) {
         searchPersistKey={`edu-coredata-${active}`}
         onEdit={onEdit}
         editable
+        pinFirstColumn
+        columnsToggleable
         maxHeight="65vh"
         searchable
         onAddRow={addBlank}
@@ -3727,6 +3729,7 @@ function ValidateScreen({ project: rawProject, onView }) {
             rowIds={errors.map((e) => e.unit)}
             maxHeight="35vh"
             searchable
+            pinFirstColumn
             rowMenuExtras={[
               { label: "Jump to unit (Units screen)", onClick: (unitName) => jumpToUnit(unitName) },
             ]}
@@ -3745,6 +3748,7 @@ function ValidateScreen({ project: rawProject, onView }) {
             rowIds={warnings.map((w) => w.unit)}
             maxHeight="35vh"
             searchable
+            pinFirstColumn
             rowMenuExtras={[
               { label: "Jump to unit (Units screen)", onClick: (unitName) => jumpToUnit(unitName) },
             ]}

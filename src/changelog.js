@@ -3,6 +3,24 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.36.109", notes: [
+    "Fixed: EDB recruitment wasn't being read at all since 0.36.98 (a parser crash left every unit showing as \"not coded into EDB\" and the Current EDB panel empty). Recruitment editing works again.",
+    "Import from EDB now refuses to run when zero recruit lines were parsed, so a failed EDB load can no longer wipe your project. If yours was wiped: the profiles _backups folder holds your last 8 units.json snapshots; the EDB itself was never touched.",
+  ] },
+  { version: "0.36.108", notes: [
+    "VS-cavalry bonuses (vs horse / elephant / chariot / camel) are now clamped to ±50 instead of ±31, allowing stronger anti-cavalry stats in the EDU output.",
+  ] },
+  { version: "0.36.107", notes: [
+    "Section header rows (the glowy yellow #FACTION dividers in Units / Armour tables) can now be selected with Ctrl/Shift+click and deleted via right-click → Delete, just like normal rows. Useful for cleaning up stale faction/culture markers without manually navigating around them.",
+  ] },
+  { version: "0.36.106", notes: [
+    "Discipline calc was reading 'Training mdf' instead of 'Discipline mdf' from the unit's quality class — a copy-paste from the training formula directly below. Per RIS dev clarification: SoldierDiscipline = UnitDiscipline + QualClassDisciplineMdf + CultCategoryInf/CavDisciplineMdf. Some units may shift between low/normal/disciplined as a result.",
+  ] },
+  { version: "0.36.105", notes: [
+    "Core Data tables (Recruitment Classes, Quality Classes, Cultures, etc.) now keep the first column pinned while you scroll right — no more losing the row anchor on wide tables. Errors / Warnings tables pin Unit too.",
+    "New \"Hide empty cols\" toolbar button on tables where you can pick columns — one click drops every column where all rows are blank; click again to bring them back.",
+    "Hardened cell-edit focus: the bug where you had to alt-tab out and back to type into a cell should be gone (or at least much rarer). Added OS-level window.focus(), extended retries to 160ms, and re-grabs the input when window focus returns.",
+  ] },
   { version: "0.36.104", notes: [
     "Faction availability dropdown in the EDU Builder now offers M (mercenary) alongside Y — was Y-only before.",
   ] },

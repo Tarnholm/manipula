@@ -226,6 +226,11 @@ export default function DataTable({
   // never hidden (it'd defeat the pin) — guarded in the toggle handler below.
   const [hiddenCols, setHiddenCols] = useState(() => new Set());
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
+  // "Hide empty columns" toggle — one-shot at toggle-time. We remember
+  // *which* columns we hid (hiddenByEmptyRef) so toggling off restores
+  // only those, leaving any manually-hidden columns alone.
+  const [emptyHidden, setEmptyHidden] = useState(false);
+  const hiddenByEmptyRef = useRef(new Set());
   // Pinned-column set — keys (column names) that should stay sticky on
   // the left during horizontal scroll. Seeded from pinFirstColumn /
   // pinColumns props; the header right-click menu lets the user pin /
@@ -426,6 +431,49 @@ export default function DataTable({
     // Always keep the pinned first column visible.
     const next = new Set(columns.slice(pinFirstColumn ? 1 : 0));
     setHiddenCols(next);
+  };
+
+  // Columns where every data row is empty/blank. Section + separator rows
+  // are ignored. Re-computes when rows or columns change so the count in
+  // the toolbar button stays accurate.
+  const emptyColumnKeys = useMemo(() => {
+    const out = [];
+    for (let ci = 0; ci < columns.length; ci++) {
+      const c = columns[ci];
+      // Never count the pinned first column as empty — losing it would
+      // strand the user with no row anchor.
+      if (pinFirstColumn && ci === 0) continue;
+      let allEmpty = true;
+      for (const r of rows) {
+        if (!Array.isArray(r)) continue;
+        const v = r[ci];
+        if (v != null && String(v).trim() !== "") { allEmpty = false; break; }
+      }
+      if (allEmpty) out.push(c);
+    }
+    return out;
+  }, [rows, columns, pinFirstColumn]);
+  const toggleEmptyHidden = () => {
+    if (emptyHidden) {
+      setHiddenCols((cur) => {
+        const n = new Set(cur);
+        for (const c of hiddenByEmptyRef.current) n.delete(c);
+        return n;
+      });
+      hiddenByEmptyRef.current = new Set();
+      setEmptyHidden(false);
+    } else {
+      const justHid = new Set();
+      setHiddenCols((cur) => {
+        const n = new Set(cur);
+        for (const c of emptyColumnKeys) {
+          if (!n.has(c)) { n.add(c); justHid.add(c); }
+        }
+        return n;
+      });
+      hiddenByEmptyRef.current = justHid;
+      setEmptyHidden(true);
+    }
   };
 
   // Stable per-cell commit callback. Each Cell calls this with its rowOrigIdx +
@@ -803,6 +851,20 @@ export default function DataTable({
               style={a.destructive ? { borderColor: "#d66c6c", color: "#d66c6c" } : undefined}
             >{a.label}</button>
           ))}
+          {columnsToggleable && (emptyHidden || emptyColumnKeys.length > 0) && (
+            <button
+              type="button"
+              className="btn"
+              onClick={toggleEmptyHidden}
+              title={emptyHidden
+                ? `Show the ${hiddenByEmptyRef.current.size} column(s) hidden by Hide-empty`
+                : `Hide ${emptyColumnKeys.length} columns where every row is blank`}
+            >
+              {emptyHidden
+                ? "Show empty cols"
+                : `Hide empty cols (${emptyColumnKeys.length})`}
+            </button>
+          )}
           {columnsToggleable && (
             <ColumnsPicker
               columns={columns}
@@ -949,8 +1011,33 @@ export default function DataTable({
           </thead>
           {groups.map((g, gi) => (
             <tbody key={`g${gi}`}>
-              {g.section && (
-                <tr key={`s${g.section.origIdx}`} className="dtable-section">
+              {g.section && (() => {
+                const sectionRowId = rowIds ? rowIds[g.section.origIdx] : g.section.origIdx;
+                const sectionSelected = selectedIds.has(sectionRowId);
+                return (
+                <tr
+                  key={`s${g.section.origIdx}`}
+                  className="dtable-section"
+                  style={sectionSelected ? { background: "rgba(220,166,74,0.32)" } : undefined}
+                  onClick={(e) => {
+                    // Modifier-click selects the section row, plain click is
+                    // still consumed by SectionLabel's rename. Matches data-row
+                    // behaviour: only Ctrl/Shift+click flips selection state.
+                    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return;
+                    e.stopPropagation();
+                    setSelectedIds(prev => {
+                      const next = new Set(prev);
+                      if (next.has(sectionRowId)) next.delete(sectionRowId);
+                      else next.add(sectionRowId);
+                      lastClickedRowIdRef.current = sectionRowId;
+                      return next;
+                    });
+                  }}
+                  onContextMenu={onDeleteRow ? (e) => {
+                    e.preventDefault();
+                    setCtxMenu({ x: e.clientX, y: e.clientY, rowOrigIdx: g.section.origIdx, isSection: true });
+                  } : undefined}
+                >
                   <td
                     className="dtable-gutter"
                     style={{ position: "sticky", left: 0, zIndex: 2, width: GUTTER_W, minWidth: GUTTER_W, textAlign: "center", color: "#888", fontSize: 10 }}
@@ -963,7 +1050,8 @@ export default function DataTable({
                     />
                   </td>
                 </tr>
-              )}
+                );
+              })()}
               {g.entries.map(({ row, origIdx }) => {
                 if (isSeparator(row)) {
                   return (
@@ -1762,23 +1850,28 @@ const Cell = React.memo(function Cell({ value, columnKey, rowOrigIdx, meta, edit
 
 function CellEditor({ value, placeholder = "", meta, onChange, onCommit, onCancel, onMove }) {
   const ref = useRef(null);
-  // Auto-focus + select-all so the user can immediately type to filter or
-  // overwrite. The retry on the next tick handles an Electron focus race
-  // observed when a sibling editor was unmounting at the same time: the
-  // focus() call appeared to succeed (cell looked editable) but keystrokes
-  // went nowhere until the user clicked outside the window and back. A
-  // belated check + re-focus turns out to be enough to dislodge it.
+  // Auto-focus + select-all so the user can immediately type. The original
+  // 0ms/30ms retry pair wasn't enough against an Electron focus race that
+  // testers kept hitting: document.activeElement is the input, but keystrokes
+  // are swallowed until the user clicks outside the window and back. Adding
+  // window.focus() up front pokes OS-level focus, and extending the retry
+  // chain + listening for the window-focus event catches the case where the
+  // user's "click outside, click back" lands while the editor is still open.
   useEffect(() => {
     if (!ref.current) return;
+    try { window.focus(); } catch {}
     ref.current.focus();
     if (ref.current.select) { try { ref.current.select(); } catch {} }
-    const t1 = setTimeout(() => {
+    const refocus = () => {
       if (ref.current && document.activeElement !== ref.current) ref.current.focus();
-    }, 0);
-    const t2 = setTimeout(() => {
-      if (ref.current && document.activeElement !== ref.current) ref.current.focus();
-    }, 30);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    };
+    const timers = [0, 30, 80, 160].map((d) => setTimeout(refocus, d));
+    const onWindowFocus = () => refocus();
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      for (const t of timers) clearTimeout(t);
+      window.removeEventListener("focus", onWindowFocus);
+    };
   }, []);
   const onKeyDown = (e) => {
     if (e.key === "Enter") {

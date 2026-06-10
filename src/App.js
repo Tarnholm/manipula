@@ -1254,6 +1254,12 @@ export default function App() {
 
   const importFromEDB = async () => {
     if (!modIndex.recruits) { alert("Load mod files first."); return; }
+    // Replacing the project with 0 units is never useful — it only happens when the
+    // EDB parse failed (or the mod has no recruitment), and going ahead wipes units.json.
+    if (!modIndex.recruits.length) {
+      alert("No recruit lines were parsed from the EDB, so there is nothing to import.\nIf your EDB does have recruitment, the load failed — check the status bar for an error and reload the mod.");
+      return;
+    }
     const imported = parseRecruitsFromEDB();
     if (!window.confirm(`Import ${imported.length} units from EDB?\nThis replaces your current units.json.`)) return;
     history.reset(imported);

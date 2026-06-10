@@ -149,12 +149,15 @@ function computeStats(r, mr, project, unitPriArmour) {
     out["discipline"] = "impetuous";
   } else {
     const unitDisc = num(globals.UnitDiscipline, 1);
-    const qualTrainMdf = num(r.qual && r.qual["Training mdf"], 0);
+    // Was reading "Training mdf" — copy-paste from the training calc below.
+    // Per-faction confirmation from RIS devs: this is supposed to be the
+    // QUAL CLASS's discipline modifier, not training.
+    const qualDiscMdf = num(r.qual && r.qual["Discipline mdf"], 0);
     let soldierDisc;
     if (cat === "foot" || cat === "foot missile" || cat === "handler" || cat === "engine") {
-      soldierDisc = unitDisc + qualTrainMdf + num(r.cult && r.cult["Inf discipline"], 0);
+      soldierDisc = unitDisc + qualDiscMdf + num(r.cult && r.cult["Inf discipline"], 0);
     } else if (cat === "mounted" || cat === "mounted missile" || cat === "special" || cat === "chariot") {
-      soldierDisc = unitDisc + qualTrainMdf + num(r.cult && r.cult["Cav discipline"], 0);
+      soldierDisc = unitDisc + qualDiscMdf + num(r.cult && r.cult["Cav discipline"], 0);
     } else {
       soldierDisc = 1;
     }

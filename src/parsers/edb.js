@@ -118,7 +118,8 @@ export async function parseEDBAsync(text) {
   const recruits = [];
   let curBuilding = null, curBuildingLevels = [], curLevelIdx = -1, inAlias = null;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const raw = lines[i];
+    const line = raw.replace(/;.*$/, "");
     const am = line.match(ALIAS_RE);
     if (am) { inAlias = { name: am[1], startLine: i, requires: null }; aliases.push(inAlias); continue; }
     if (inAlias && /^\s*requires\s+/.test(line) && inAlias.requires == null) {
