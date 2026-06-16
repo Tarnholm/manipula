@@ -49,19 +49,25 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
   const u = unit;
   const set = (patch) => onChange({ ...u, ...patch });
 
-  const ex = parseExtras(u.outsideExtras || []);
+  // Known alias names — used to disambiguate a bare single-token requires from
+  // free-text typed into a "Custom extras" box. Without this, parseExtras treats
+  // ANY single token as an alias, so each letter typed into a custom-extras
+  // textarea round-trips back out as an alias chip (the typing-bug the user hit).
+  const aliasNames = useMemo(() => new Set((opts.aliases || []).map(a => a.value)), [opts]);
+
+  const ex = parseExtras(u.outsideExtras || [], aliasNames);
   const updateOutsideExtras = (kind, list) => {
     const merged = serializeExtras({ ...ex, [kind]: list });
     set({ outsideExtras: merged });
   };
 
-  const cr = parseExtras(u.commonRequires || []);
+  const cr = parseExtras(u.commonRequires || [], aliasNames);
   const updateCommonRequires = (kind, list) => {
     const merged = serializeExtras({ ...cr, [kind]: list });
     set({ commonRequires: merged });
   };
 
-  const ar = parseExtras(u.aorRequires || []);
+  const ar = parseExtras(u.aorRequires || [], aliasNames);
   const updateAorRequires = (kind, list) => {
     const merged = serializeExtras({ ...ar, [kind]: list });
     set({ aorRequires: merged });
@@ -548,7 +554,7 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
        * gets the same set of pickers (hidden_resource / not hidden_resource
        * / custom extras) for AI-side clauses. */}
       {u.ai && u.ai.enabled && (() => {
-        const aiR = parseExtras(u.aiRequires || []);
+        const aiR = parseExtras(u.aiRequires || [], aliasNames);
         const updateAiRequires = (kind, list) => {
           const merged = serializeExtras({ ...aiR, [kind]: list });
           set({ aiRequires: merged });
@@ -899,18 +905,26 @@ function input(width, bold) {
 
 // Parse a list of requires-strings ("hidden_resource X", "alias_name", "major_event \"Y\"", "raw ...")
 // into structured kinds for the editor's pickers.
-function parseExtras(reqs) {
+// knownAliases (optional Set<string>): when supplied, a bare single token is
+// only classified as an alias if it's a recognized alias name; otherwise it
+// stays as raw custom text. This prevents free-text typed into a "Custom extras"
+// box (where each interim keystroke is a bare token) from being hijacked into
+// the alias picker. Falls back to the old greedy "any token is an alias" rule
+// when no set is given.
+function parseExtras(reqs, knownAliases) {
   const ex = { hidden_resource: [], not_hidden_resource: [], resource: [], major_event: [], building_present: [], alias: [], raw: [] };
   for (const r of reqs || []) {
     const s = (r || "").trim();
     if (!s) continue;
     let m;
+    const looksLikeToken = /^[a-z_][a-z0-9_]*$/.test(s);
+    const isAlias = looksLikeToken && (knownAliases ? knownAliases.has(s) : true);
     if ((m = s.match(/^not\s+hidden_resource\s+(\S+)$/))) ex.not_hidden_resource.push(m[1]);
     else if ((m = s.match(/^hidden_resource\s+(\S+)$/))) ex.hidden_resource.push(m[1]);
     else if ((m = s.match(/^resource\s+(\S+)$/))) ex.resource.push(m[1]);
     else if ((m = s.match(/^major_event\s+"([^"]+)"$/))) ex.major_event.push(m[1]);
     else if ((m = s.match(/^building_present_min_level\s+(\S+)\s+(\S+)$/))) ex.building_present.push(`${m[1]}:${m[2]}`);
-    else if (/^[a-z_][a-z0-9_]*$/.test(s)) ex.alias.push(s);
+    else if (isAlias) ex.alias.push(s);
     else ex.raw.push(s);
   }
   return ex;

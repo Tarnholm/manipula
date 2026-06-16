@@ -3,6 +3,19 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.36.113", notes: [
+    "AoR gov-tier cap now also caps colony tier, per canonical MIC tier: tier 1 → \"gov_tier_1 and not colony_tier_2\"; tier 2 → \"gov_tier_1 and not gov_tier_3 and not colony_tier_1\"; tier 3 or 4 → \"gov_tier_1 and not gov_tier_2 and not colony_tier_1\". (Tier 1 gets no gov_tier ceiling, only the colony cap.) Lines that already declare their own \"not gov_tier_N\" / \"not colony_tier_N\" ceiling are left untouched.",
+  ] },
+  { version: "0.36.112", notes: [
+    "AoR gov-tier cap now scales with the unit's canonical MIC tier: tier 1 or 2 emit \"gov_tier_1 and not gov_tier_3\" (recruitable at gov tiers 1-2), tier 3 or 4 emit \"gov_tier_1 and not gov_tier_2\" (recruitable at gov tier 1 only). Previously every gov_tier_1 line capped at not gov_tier_3. Lines that already declare their own \"not gov_tier_N\" ceiling are still left untouched.",
+  ] },
+  { version: "0.36.111", notes: [
+    "Units can now emit tattoo_color / hair_color / hair_style lines in the EDU. Fill the Tattoo Colour / Hair Colour / Hair Style boxes in the unit editor and they're written verbatim after the unit's ethnicity lines (vanilla ordering, e.g. barb naked fanatics). Useful for forcing a hair type on units with hair bands. Blank for the vast majority of units, which are unaffected.",
+  ] },
+  { version: "0.36.110", notes: [
+    "AOR / regional recruit lines gated at gov_tier_1 now also emit \"not gov_tier_3\", so they stop being recruitable at the highest government tiers. Lines that already declare their own \"not gov_tier_N\" ceiling are left untouched.",
+    "Fixed: typing into a \"Custom extras\" box hijacked each keystroke into the alias picker above it. Bare tokens are now only treated as aliases when they match a real alias name, so custom extras text stays put.",
+  ] },
   { version: "0.36.109", notes: [
     "Fixed: EDB recruitment wasn't being read at all since 0.36.98 (a parser crash left every unit showing as \"not coded into EDB\" and the Current EDB panel empty). Recruitment editing works again.",
     "Import from EDB now refuses to run when zero recruit lines were parsed, so a failed EDB load can no longer wipe your project. If yours was wiped: the profiles _backups folder holds your last 8 units.json snapshots; the EDB itself was never touched.",

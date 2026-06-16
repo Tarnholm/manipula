@@ -142,6 +142,17 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   if (unit["ethnicity region"])     out.ethnicityRegion     = unit["ethnicity region"];
   if (unit["ethnicity attributes"]) out.ethnicityAttributes = unit["ethnicity attributes"];
 
+  // Optional appearance overrides emitted verbatim AFTER the ethnicity
+  // block (vanilla ordering — see barb naked fanatics). Editor stores them
+  // under British-spelled space-separated keys; the EDU spelling is the
+  // American underscore form. Absent for the vast majority of units.
+  const tattoo = unit["tattoo colour"];
+  const hairColour = unit["hair colour"];
+  const hairStyle = unit["hair style"];
+  if (tattoo     != null && String(tattoo).trim()     !== "") out.tattooColor = String(tattoo).trim();
+  if (hairColour != null && String(hairColour).trim() !== "") out.hairColor   = String(hairColour).trim();
+  if (hairStyle  != null && String(hairStyle).trim()  !== "") out.hairStyle   = String(hairStyle).trim();
+
   // Ethnicity tag list (VBA L10142 + Case 504). All paths iterate
   // Faction1..Faction(FactionQuantity + 1) — the same cap VBA's two
   // ethnicity loops (L10138, L11161) impose. Anything past the cap is

@@ -13,18 +13,31 @@
 //   GH_OWNER, GH_REPO       — defaults to Tarnholm / manipula.
 const https = require("https");
 
-const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+// Trim defends against a trailing newline/space sneaking in from the env
+// (a stray "\r" makes "token <PAT>\r" and GitHub answers 401 Bad credentials).
+const token = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
 if (!token) { console.error("[prune] no GH_TOKEN / GITHUB_TOKEN — skipping."); process.exit(0); }
 const owner = process.env.GH_OWNER || "Tarnholm";
 const repo  = process.env.GH_REPO  || "manipula";
 const keep  = Number(process.env.KEEP || 3);
 
-function gh(method, pathname) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Statuses worth retrying: GitHub occasionally returns a transient 401
+// "Bad credentials" right after the release-creation API burst (this whole
+// script runs seconds after electron-builder hammers the API), plus the
+// usual rate-limit / server-side blips.
+const RETRYABLE = new Set([401, 403, 429, 500, 502, 503, 504]);
+
+function ghOnce(method, pathname) {
   return new Promise((resolve, reject) => {
     const req = https.request({
       method, hostname: "api.github.com", path: pathname,
       headers: {
-        Authorization: "token " + token,
+        // Bearer is the modern form and works for both classic (ghp_) and
+        // fine-grained PATs; legacy "token <PAT>" still works but Bearer is
+        // the documented default.
+        Authorization: "Bearer " + token,
         "User-Agent": "manipula-prune",
         Accept: "application/vnd.github+json",
       },
@@ -32,7 +45,11 @@ function gh(method, pathname) {
       let buf = "";
       res.on("data", (c) => buf += c);
       res.on("end", () => {
-        if (res.statusCode >= 400) return reject(new Error(`${method} ${pathname} → ${res.statusCode}: ${buf}`));
+        if (res.statusCode >= 400) {
+          const err = new Error(`${method} ${pathname} → ${res.statusCode}: ${buf}`);
+          err.statusCode = res.statusCode;
+          return reject(err);
+        }
         if (!buf) return resolve(null);
         try { resolve(JSON.parse(buf)); } catch { resolve(null); }
       });
@@ -40,6 +57,26 @@ function gh(method, pathname) {
     req.on("error", reject);
     req.end();
   });
+}
+
+// Retry transient failures up to 3 attempts with linear backoff (1s, 2s).
+async function gh(method, pathname, attempts = 3) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await ghOnce(method, pathname);
+    } catch (e) {
+      lastErr = e;
+      const retryable = e.statusCode == null || RETRYABLE.has(e.statusCode);
+      if (i < attempts && retryable) {
+        console.warn(`[prune] ${method} ${pathname} failed (attempt ${i}/${attempts}): ${e.message.slice(0, 120)} — retrying in ${i}s`);
+        await sleep(i * 1000);
+        continue;
+      }
+      break;
+    }
+  }
+  throw lastErr;
 }
 
 (async () => {

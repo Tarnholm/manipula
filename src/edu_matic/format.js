@@ -297,6 +297,14 @@ function formatUnit(row) {
     }
   }
 
+  // Optional appearance overrides, emitted verbatim after the ethnicity
+  // block to match vanilla ordering (e.g. barb naked fanatics:
+  // tattoo_color / hair_color / hair_style). Set per-unit in the editor;
+  // absent for the vast majority of units.
+  if (row.tattooColor) out.push(line("tattoo_color", row.tattooColor));
+  if (row.hairColor)   out.push(line("hair_color",   row.hairColor));
+  if (row.hairStyle)   out.push(line("hair_style",   row.hairStyle));
+
   return out;
 }
 

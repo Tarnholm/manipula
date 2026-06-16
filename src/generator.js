@@ -90,6 +90,30 @@ function fmtExcludeFactions(ex) {
   return `not factions { ${ex.join(", ")}, }`;
 }
 
+// User rule: any player recruit line gated at `gov_tier_1` must also cap the
+// upper government tier AND the colony tier — otherwise the AOR / regional
+// unit stays recruitable at every higher gov / colony tier, which is wrong.
+// The cap depends on the unit's canonical MIC tier:
+//   - canonical mic_tier 1 → `gov_tier_1 and not colony_tier_2`
+//   - canonical mic_tier 2 → `gov_tier_1 and not gov_tier_3 and not colony_tier_1`
+//   - canonical mic_tier 3 or 4 → `gov_tier_1 and not gov_tier_2 and not colony_tier_1`
+// (Tier 1 gets no `not gov_tier_N` clause — only the colony cap.)
+// Skip lines that already declare an explicit `not gov_tier_N` / `not
+// colony_tier_N` ceiling (e.g. imported units that carry their own cap) so we
+// never clobber a tighter one. Unknown tiers fall back to the tier-1 rule.
+function govTierCapSuffix(canonicalMicTier) {
+  const t = Number(canonicalMicTier);
+  if (t >= 3) return " and not gov_tier_2 and not colony_tier_1";
+  if (t === 2) return " and not gov_tier_3 and not colony_tier_1";
+  return " and not colony_tier_2"; // tier 1 (and unknown/NaN fallback)
+}
+function capGovTier(requires, canonicalMicTier) {
+  if (!requires) return requires;
+  if (!/\bgov_tier_1\b/.test(requires)) return requires;
+  if (/\bnot\s+(?:gov_tier|colony_tier)_\d\b/.test(requires)) return requires;
+  return `${requires}${govTierCapSuffix(canonicalMicTier)}`;
+}
+
 // Mercenaries are recruited via descr_mercenaries.txt — they don't have AOR siblings in the EDB.
 function isMercUnit(name) {
   return /^merc\s+/i.test(String(name || "").trim());
@@ -148,19 +172,19 @@ export function generatePlayerLines(unit) {
   if (u.emitGovD) {
     lines.push({
       building: "governmentD", level: "gov4",
-      text: `                recruit "${u.unit}" 0 requires ${homelandReqs()}`,
+      text: `                recruit "${u.unit}" 0 requires ${capGovTier(homelandReqs(), u.canonicalMicTier)}`,
     });
   }
   if (u.emitGovC) {
     lines.push({
       building: "governmentC", level: "gov3",
-      text: `                recruit "${u.unit}" 0 requires ${outsideReqs()}`,
+      text: `                recruit "${u.unit}" 0 requires ${capGovTier(outsideReqs(), u.canonicalMicTier)}`,
     });
   }
   if (u.emitGovB) {
     lines.push({
       building: "governmentB", level: "gov2",
-      text: `                recruit "${u.unit}" 0 requires ${outsideReqs()}`,
+      text: `                recruit "${u.unit}" 0 requires ${capGovTier(outsideReqs(), u.canonicalMicTier)}`,
     });
   }
   return lines;
@@ -203,7 +227,7 @@ export function generateAORPlayerLines(unit) {
   const out = [{
     building: AOR_PLAYER_BUILDING,
     level: AOR_PLAYER_LEVEL,
-    text: `                recruit "${aorName}" 0 requires ${requires}`,
+    text: `                recruit "${aorName}" 0 requires ${capGovTier(requires, u.canonicalMicTier)}`,
     aorVariant: true,
   }];
 
@@ -226,7 +250,7 @@ export function generateAORPlayerLines(unit) {
     out.push({
       building: AOR_PLAYER_BUILDING,
       level: AOR_PLAYER_LEVEL,
-      text: `                recruit "${u.unit}" 0 requires ${factionalReq}`,
+      text: `                recruit "${u.unit}" 0 requires ${capGovTier(factionalReq, u.canonicalMicTier)}`,
       aorVariant: true,
       alsoFactional: true,
     });
