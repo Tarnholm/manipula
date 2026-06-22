@@ -1293,7 +1293,7 @@ const UNITS_HEAD = [
   "general unit", "merc unit", "horde unit", "unique unit",
   "impetuous unit", "no CBs",
   "Formation", "Dwelling", "Culture",
-  "Weapon", "Wpn Quality", "Projectile", "Melee Skeleton",
+  "Weapon", "Wpn Quality", "Projectile", "Precursor Override", "Melee Skeleton",
   "pri missile type",
   "Sec Weapon", "S Wpn Quality", "S Melee Skeleton",
   "Engine", "Engine Pri Proj", "Engine Sec Proj",
@@ -1396,6 +1396,10 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         present.add(k);
       }
     }
+    // The precursor override is a synthetic per-unit toggle: it lives next to
+    // Projectile even when no unit has set it yet, so the column must always be
+    // offered rather than waiting for a value to appear in the data.
+    present.add("Precursor Override");
     let cache = allKeysRef.current;
     if (cache) {
       // Append any newly-seen structural keys (e.g. a freshly-templated
@@ -1484,6 +1488,12 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       const opts = idsOf(tbl);
       if (opts.length) meta[col] = { type: "select", options: opts };
     }
+    // Per-unit precursor override (sits next to Projectile). Blank = "auto":
+    // the category/specialty-derived default in weaponAttrs.js Case 103 wins.
+    // "on"/"off" force the prec attribute regardless of that entanglement.
+    if (allKeys.includes("Precursor Override")) {
+      meta["Precursor Override"] = { type: "select", options: ["", "on", "off"] };
+    }
     // Armour upgrades — pulled from the user's Armour Definitions sheet, not
     // coreData. The "Model Set Name" column is what gets referenced from a
     // unit's Armour Upgr0..3 fields. (Note: Object.keys(armour[0])[0] is "row",
@@ -1536,7 +1546,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   //     just wanted to know which column is `romans_julii`.
   //   - own:<i> columns labeled "ownership_1 .. ownership_4".
   const columnLabels = useMemo(() => {
-    const out = { name: "Unit Name" };
+    const out = { name: "Unit Name", "Precursor Override": "Precursor" };
     factionKeys.forEach((f) => { out[AVAIL_PREFIX + f] = f; });
     out[AVAIL_PREFIX + "slave"] = "slave";
     for (let i = 0; i < 4; i++) out[OWN_PREFIX + i] = `ownership_${i + 1}`;
