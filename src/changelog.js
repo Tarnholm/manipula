@@ -3,6 +3,9 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.36.116", notes: [
+    "AOR lines no longer double-gate when the unit carries an aor_tier_N alias. Those aliases already expand to the full gov/colony-tier cap in the EDB, so the tool now omits its own \"gov_tier_1 and not ... and not colony_tier_N\" suffix (and the gov_tier_1 clause) when one is present: aor_tier_1, aor_tier_2, or aor_tier_3. Lines without one of those aliases still get the cap as before.",
+  ] },
   { version: "0.36.115", notes: [
     "Factional requires now has a \"Reforms excluded\" picker — emits \"not major_event\" on the factional player + AI lines, so a unit recruits until the reform fires and then gates out (the inverse of Reforms required).",
     "Fixed: the \"Custom requires / extras\" boxes wouldn't accept spaces — every keystroke was being normalized, stripping the trailing space before you could type the next word. They now hold your draft as-is while typing and only tidy up (trim + drop blank lines) when you click away.",

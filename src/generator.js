@@ -107,10 +107,25 @@ function govTierCapSuffix(canonicalMicTier) {
   if (t === 2) return " and not gov_tier_3 and not colony_tier_1";
   return " and not colony_tier_2"; // tier 1 (and unknown/NaN fallback)
 }
+
+// These AOR aliases already expand (in the EDB) to the exact gov/colony-tier
+// cap we'd otherwise emit, so adding our own `gov_tier_1` + cap on top of them
+// double-gates the line. When one is present we drop BOTH the gov_tier_1 clause
+// and the cap suffix entirely:
+//   aor_tier_1 → gov_tier_1 and not colony_tier_2
+//   aor_tier_2 → gov_tier_1 and not gov_tier_3 and not colony_tier_1
+//   aor_tier_3 → gov_tier_1 and not gov_tier_2 and not colony_tier_1
+const GOV_TIER_CAP_ALIASES = ["aor_tier_1", "aor_tier_2", "aor_tier_3"];
+function hasGovTierCapAlias(reqs) {
+  if (!Array.isArray(reqs)) return false;
+  return reqs.some(r => GOV_TIER_CAP_ALIASES.includes(String(r || "").trim()));
+}
 function capGovTier(requires, canonicalMicTier) {
   if (!requires) return requires;
   if (!/\bgov_tier_1\b/.test(requires)) return requires;
   if (/\bnot\s+(?:gov_tier|colony_tier)_\d\b/.test(requires)) return requires;
+  // An aor_tier_N alias already carries the full cap — don't append our own.
+  if (/\b(?:aor_tier_1|aor_tier_2|aor_tier_3)\b/.test(requires)) return requires;
   return `${requires}${govTierCapSuffix(canonicalMicTier)}`;
 }
 
@@ -211,6 +226,9 @@ export function generateAORPlayerLines(unit) {
   const exclude = u.aor.aorOnly ? [] : (u.factions || []);
   const factions = ["all"]; // AOR is always factions { all, }
 
+  // When the unit carries an aor_tier_N alias, that alias already encodes the
+  // whole gov_tier_1 + cap, so we omit both our gov_tier_1 clause and the cap.
+  const capAlias = hasGovTierCapAlias(u.aorRequires);
   const requires = joinAnd([
     fmtFactions(factions),
     "is_player",
@@ -222,12 +240,12 @@ export function generateAORPlayerLines(unit) {
     // prevents factional gates (e.g. "hidden_resource italic") from
     // bleeding onto AOR lines, and vice versa.
     ...(u.aorRequires || []),
-    `gov_tier_${u.aor.govTier || 1}`,
+    capAlias ? "" : `gov_tier_${u.aor.govTier || 1}`,
   ]);
   const out = [{
     building: AOR_PLAYER_BUILDING,
     level: AOR_PLAYER_LEVEL,
-    text: `                recruit "${aorName}" 0 requires ${capGovTier(requires, u.canonicalMicTier)}`,
+    text: `                recruit "${aorName}" 0 requires ${capAlias ? requires : capGovTier(requires, u.canonicalMicTier)}`,
     aorVariant: true,
   }];
 
@@ -245,12 +263,12 @@ export function generateAORPlayerLines(unit) {
       "is_player",
       `mic_tier_${u.canonicalMicTier}`,
       ...(u.aorRequires || []),
-      `gov_tier_${u.aor.govTier || 1}`,
+      capAlias ? "" : `gov_tier_${u.aor.govTier || 1}`,
     ]);
     out.push({
       building: AOR_PLAYER_BUILDING,
       level: AOR_PLAYER_LEVEL,
-      text: `                recruit "${u.unit}" 0 requires ${capGovTier(factionalReq, u.canonicalMicTier)}`,
+      text: `                recruit "${u.unit}" 0 requires ${capAlias ? factionalReq : capGovTier(factionalReq, u.canonicalMicTier)}`,
       aorVariant: true,
       alsoFactional: true,
     });
