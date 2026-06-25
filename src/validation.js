@@ -126,6 +126,10 @@ export function validateUnits(units, modIndex, opts = {}) {
         if (!knownResources.has(m[1])) {
           issues.push(issue(u, "warn", "unknown-resource", `Unknown resource "${m[1]}"`));
         }
+      } else if ((m = t.match(/^not\s+major_event\s+"([^"]+)"$/))) {
+        if (knownReforms.size && !knownReforms.has(m[1])) {
+          issues.push(issue(u, "warn", "unknown-reform-negated", `Unknown major_event/reform (negated) "${m[1]}"`));
+        }
       } else if ((m = t.match(/^major_event\s+"([^"]+)"$/))) {
         if (knownReforms.size && !knownReforms.has(m[1])) {
           issues.push(issue(u, "error", "unknown-reform", `Unknown major_event/reform "${m[1]}"`));

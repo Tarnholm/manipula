@@ -3,6 +3,10 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.36.115", notes: [
+    "Factional requires now has a \"Reforms excluded\" picker — emits \"not major_event\" on the factional player + AI lines, so a unit recruits until the reform fires and then gates out (the inverse of Reforms required).",
+    "Fixed: the \"Custom requires / extras\" boxes wouldn't accept spaces — every keystroke was being normalized, stripping the trailing space before you could type the next word. They now hold your draft as-is while typing and only tidy up (trim + drop blank lines) when you click away.",
+  ] },
   { version: "0.36.113", notes: [
     "AoR gov-tier cap now also caps colony tier, per canonical MIC tier: tier 1 → \"gov_tier_1 and not colony_tier_2\"; tier 2 → \"gov_tier_1 and not gov_tier_3 and not colony_tier_1\"; tier 3 or 4 → \"gov_tier_1 and not gov_tier_2 and not colony_tier_1\". (Tier 1 gets no gov_tier ceiling, only the colony cap.) Lines that already declare their own \"not gov_tier_N\" / \"not colony_tier_N\" ceiling are left untouched.",
   ] },

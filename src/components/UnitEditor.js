@@ -346,21 +346,27 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
             onChange={(v) => updateCommonRequires("major_event", v)}
           />
           <Picker
+            label="Reforms excluded (emits not major_event — gates the unit OUT once the reform fires)"
+            options={opts.reforms}
+            value={cr.not_major_event || []}
+            onChange={(v) => updateCommonRequires("not_major_event", v)}
+            placeholder="add not major_event (e.g. marian_reforms)"
+          />
+          <Picker
             label="Aliases"
             options={opts.aliases}
             value={cr.alias || []}
             onChange={(v) => updateCommonRequires("alias", v)}
             placeholder="e.g. land_recruitment"
           />
-          <Field label="Custom requires (one per line — verbatim)">
-            <textarea
-              value={(cr.raw || []).join("\n")}
-              onChange={(e) => updateCommonRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
-              rows={2}
-              style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
-              placeholder='e.g. not hidden_resource island_settlement'
-            />
-          </Field>
+          <RawRequiresField
+            label="Custom requires (one per line — verbatim)"
+            value={cr.raw || []}
+            onCommit={(list) => updateCommonRequires("raw", list)}
+            rows={2}
+            style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
+            placeholder='e.g. not hidden_resource island_settlement'
+          />
         </div>
       </Section>
 
@@ -575,14 +581,13 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
               onChange={(v) => updateAiRequires("not_hidden_resource", v)}
               placeholder="add not hidden_resource"
             />
-            <Field label="Custom extras (one per line — verbatim)">
-              <textarea
-                value={(aiR.raw || []).join("\n")}
-                onChange={(e) => updateAiRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
-                style={{ ...input(420), height: 60, fontFamily: "Consolas, monospace", fontSize: 11 }}
-                placeholder="e.g. event_counter ai_buff_1 1"
-              />
-            </Field>
+            <RawRequiresField
+              label="Custom extras (one per line — verbatim)"
+              value={aiR.raw || []}
+              onCommit={(list) => updateAiRequires("raw", list)}
+              style={{ ...input(420), height: 60, fontFamily: "Consolas, monospace", fontSize: 11 }}
+              placeholder="e.g. event_counter ai_buff_1 1"
+            />
           </Section>
         );
       })()}
@@ -681,15 +686,14 @@ export default function UnitEditor({ unit, onChange, modIndex, allUnits, onFilte
             value={ar.alias || []}
             onChange={(v) => updateAorRequires("alias", v)}
           />
-          <Field label="Custom requires (one per line — verbatim)">
-            <textarea
-              value={(ar.raw || []).join("\n")}
-              onChange={(e) => updateAorRequires("raw", e.target.value.split("\n").map(s => s.trim()).filter(Boolean))}
-              rows={2}
-              style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
-              placeholder='e.g. not hidden_resource island_settlement'
-            />
-          </Field>
+          <RawRequiresField
+            label="Custom requires (one per line — verbatim)"
+            value={ar.raw || []}
+            onCommit={(list) => updateAorRequires("raw", list)}
+            rows={2}
+            style={{ ...input("100%"), fontFamily: "Consolas, monospace", fontSize: 12 }}
+            placeholder='e.g. not hidden_resource island_settlement'
+          />
         </Section>
       )}
 
@@ -881,6 +885,40 @@ function Field({ label, children }) {
     </div>
   );
 }
+
+// A "custom requires" textarea that holds its own draft text while you type and
+// only normalizes (trim per line + drop blanks) on blur. The unit record stores
+// requires as a parsed array, so the old inline `value={raw.join("\n")}` +
+// per-keystroke `split().map(trim).filter()` round-tripped through parseExtras on
+// every keystroke — which stripped the trailing space the instant you typed it,
+// making it impossible to type a space between words. Decoupling the draft from
+// the model fixes that; the commit on blur keeps the stored shape unchanged.
+function RawRequiresField({ label, value, onCommit, rows, style, placeholder }) {
+  const joined = (value || []).join("\n");
+  const [text, setText] = React.useState(joined);
+  const dirty = React.useRef(false);
+  // Re-sync from the model when it changes externally (e.g. switching units),
+  // but never clobber an in-progress edit.
+  React.useEffect(() => {
+    if (!dirty.current) setText(joined);
+  }, [joined]);
+  const commit = () => {
+    dirty.current = false;
+    onCommit(text.split("\n").map((s) => s.trim()).filter(Boolean));
+  };
+  return (
+    <Field label={label}>
+      <textarea
+        value={text}
+        onChange={(e) => { dirty.current = true; setText(e.target.value); }}
+        onBlur={commit}
+        rows={rows}
+        style={style}
+        placeholder={placeholder}
+      />
+    </Field>
+  );
+}
 function Toggle({ label, checked, onChange }) {
   return (
     <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: checked ? "#dca64a" : "#aaa", fontSize: 12, userSelect: "none" }}>
@@ -912,7 +950,7 @@ function input(width, bold) {
 // the alias picker. Falls back to the old greedy "any token is an alias" rule
 // when no set is given.
 function parseExtras(reqs, knownAliases) {
-  const ex = { hidden_resource: [], not_hidden_resource: [], resource: [], major_event: [], building_present: [], alias: [], raw: [] };
+  const ex = { hidden_resource: [], not_hidden_resource: [], resource: [], major_event: [], not_major_event: [], building_present: [], alias: [], raw: [] };
   for (const r of reqs || []) {
     const s = (r || "").trim();
     if (!s) continue;
@@ -920,6 +958,7 @@ function parseExtras(reqs, knownAliases) {
     const looksLikeToken = /^[a-z_][a-z0-9_]*$/.test(s);
     const isAlias = looksLikeToken && (knownAliases ? knownAliases.has(s) : true);
     if ((m = s.match(/^not\s+hidden_resource\s+(\S+)$/))) ex.not_hidden_resource.push(m[1]);
+    else if ((m = s.match(/^not\s+major_event\s+"([^"]+)"$/))) ex.not_major_event.push(m[1]);
     else if ((m = s.match(/^hidden_resource\s+(\S+)$/))) ex.hidden_resource.push(m[1]);
     else if ((m = s.match(/^resource\s+(\S+)$/))) ex.resource.push(m[1]);
     else if ((m = s.match(/^major_event\s+"([^"]+)"$/))) ex.major_event.push(m[1]);
@@ -941,6 +980,7 @@ function serializeExtras(ex) {
     out.push(`building_present_min_level ${b} ${l}`);
   }
   for (const v of ex.major_event || []) out.push(`major_event "${v}"`);
+  for (const v of ex.not_major_event || []) out.push(`not major_event "${v}"`);
   for (const v of ex.raw || []) out.push(v);
   return out;
 }

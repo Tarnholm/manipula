@@ -21,6 +21,7 @@ const ISSUE_DOCS = {
   "unknown-hr-negated": "Same hidden_resource lookup, but in a `not hidden_resource` clause. Less fatal (the negation is always true if the HR is undefined) but signals a typo.",
   "unknown-resource": "This `resource X` clause references a resource not in descr_sm_resources.txt. Resources are different from hidden_resources — make sure you mean the right one.",
   "unknown-reform": "The `major_event` doesn't match any reform in your script files. The recruit line will never be activatable. Check the major_event_scripts/ folder.",
+  "unknown-reform-negated": "Same reform lookup, but in a `not major_event` clause. Less fatal (the negation is always true if the reform is undefined) but signals a typo. Check the major_event_scripts/ folder.",
   "unknown-alias": "This bare alias isn't declared in descr_sm_factions/EDB. Aliases are like `colony_tier_1` — they have to be defined elsewhere in the EDB before they can be referenced in requires.",
   "gov-tier-below-mic": "AOR's gov_tier_X is below this unit's canonical mic_tier_Y. The MIC tier check fires first; the AOR variant won't recruit until the mic tier is reached, regardless of gov_tier. Bump gov_tier to ≥ canonical mic_tier.",
   "tier-conflict": "Two units recruit at the same (faction, mic_tier) with overlapping HR requirements. They'll both appear in the same recruitment list — likely a tier-collision you didn't intend. Tighten one's HR or shift its tier.",
