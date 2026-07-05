@@ -41,6 +41,18 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   MassSnowModifier: 0,
   MassSnowConstant: 0,
   MercCostMultiplier: 1.8,
+  // Recruitment-cost tuning (Case 183): recruit price =
+  // base^UnitCostExponential × UnitCostModifier. The exponent (<1) flattens
+  // the cost curve as units get more expensive; the modifier offsets that
+  // reduction. Defaults reproduce the old hardcoded 0.8 / 1.98. Consumed in
+  // formulas/cost.js.
+  UnitCostExponential: 0.8,
+  UnitCostModifier: 1.98,
+  // Cavalry-bodyguard skirmish class ("Cav BG"): when non-zero, general
+  // cavalry / mounted-missile generals emit `class skirmish` instead of
+  // light/missile. 0 = off (the prior hardcoded behavior). Consumed as
+  // globals.CavBGSkirmish in formulas/misc.js.
+  CavBGSkirmish: 0,
   // NOTE: aor_default_rec_priority (the AoR/Merc recruit_priority_offset)
   // is NOT seeded here — it already ships in the xlsm/globals (RIS sets it
   // to -100) and is editable in Mod Info → Globals. Seeding a default
@@ -598,7 +610,7 @@ const CANONICAL_COLUMN_ORDER = {
   categories: ["Category Type", "Pool refresh rate mdf", "Pool max cap mdf", "Recr cost mdf", "Upk cost mdf", "Minor skill mdf", "Unit size mdf", "Allows hide", "Allows sea_faring", "Allows swim", "Hr Cl Spacing", "Vr Cl Spacing", "Hr Ls Spacing", "Vr ls Spacing", "Formation ranks", "Charge dist"],
   specialties: ["Specialty Type", "Attack mdf", "Charge mdf", "Defence mdf", "Morale mdf", "Recr cost mdf", "Unit size mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "special ability", "special ability 2", "special ability 3", "no precursor", "mass multiplier", "discipline", "training"],
   dwellings: ["Dwelling Type", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "heat modifier", "special ability", "unit size mdf"],
-  cultures: ["Culture Type", "Inf pool refresh rate mdf", "Cav pool refresh rate mdf", "Inf pool max cap mdf", "Cav pool max cap mdf", "Inf recr cost mdf", "Cav recr cost mdf", "Inf upk cost mdf", "Cav upk cost mdf", "Inf unit size mdf", "Cav unit size mdf", "Inf atack mdf", "Cav attack mdf", "Inf charge mdf", "Cav charge mdf", "Inf defence mdf", "Cav defence mdf", "Inf morale mdf", "Cav morale mdf", "Inf discipline", "Cav discipline", "Inf training", "Cav training", "Inf fatigue mdf", "Cav fatigue mdf", "Shieldwall min class", "Hedgehog min class", "Warcry min class", "Tortoise min class", "Wedge min class", "Powercharge min class", "Formed-charge min class", "Fire-by-rank min class", "Cantabrian min class"],
+  cultures: ["Culture Type", "Inf pool refresh rate mdf", "Cav pool refresh rate mdf", "Inf pool max cap mdf", "Cav pool max cap mdf", "Inf recr cost mdf", "Cav recr cost mdf", "Inf upk cost mdf", "Cav upk cost mdf", "Inf unit size mdf", "Cav unit size mdf", "Inf atack mdf", "Cav attack mdf", "Inf charge mdf", "Cav charge mdf", "Inf defence mdf", "Cav defence mdf", "Inf morale mdf", "Cav morale mdf", "Inf discipline", "Cav discipline", "Inf training", "Cav training", "Inf fatigue mdf", "Cav fatigue mdf", "Shieldwall min class", "Hedgehog min class", "Warcry min class", "Tortoise min class", "Wedge min class", "Powercharge min class", "Formed-charge min class", "Fire-by-rank min class", "Cantabrian min class", "Secondary HP"],
   formations: ["Formation Type", "Hr Cl Spacing Mdf", "Vr Cl Spacing Mdf", "Hr Ls Spacing Mdf", "Vr ls Spacing Mdf", "Formation ranks", "Training", "Formation 1", "Formation 2", "scrub", "sand", "forest", "snow"],
   weapons: ["Weapon Type", "Attack", "Charge", "Defence", "Range", "Ammo mdf", "AP", "(light_)spear", "spear_bonus", "short/long_pike", "ranged weapon type", "Allows shld-wall/trts", "Allows phalanx/hedgehog", "Allows inf/cav", "Max shield size", "Frightens", "wpn tech", "dmg type", "sound type", "firing sound type", "min delay", "lethality mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "Cost"],
   projectiles: ["Projectile Type", "Attack", "Range", "Ammo", "AP", "BP", "thrown", "launch", "area", "incendiary", "wpn type", "wpn tech", "dmg type", "sound type", "min delay mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "Cost"],
@@ -1284,7 +1296,7 @@ const DERIVED_COL_KEY_SET = new Set(DERIVED_COLS.map((c) => c.key));
 const UNITS_HEAD = [
   "name", "Entries", "comments",
   "unit id", "dictionary_tag",
-  "Category", "Specialty",
+  "Category", "Class Override", "Specialty",
   "Recruitment", "Quality",
   "voice_type", "voice_indexes",
   "unit variation", "model id",
@@ -1400,6 +1412,10 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     // Projectile even when no unit has set it yet, so the column must always be
     // offered rather than waiting for a value to appear in the data.
     present.add("Precursor Override");
+    // Class override: a synthetic per-unit toggle that forces the EDU `class`
+    // line (missile/light/heavy/spear) regardless of the auto-derived class.
+    // Always offered — sits next to Category even when no unit has set it.
+    present.add("Class Override");
     let cache = allKeysRef.current;
     if (cache) {
       // Append any newly-seen structural keys (e.g. a freshly-templated
@@ -1493,6 +1509,12 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     // "on"/"off" force the prec attribute regardless of that entanglement.
     if (allKeys.includes("Precursor Override")) {
       meta["Precursor Override"] = { type: "select", options: ["", "on", "off"] };
+    }
+    // Per-unit class override (sits next to Category). Blank = "auto": the
+    // mass/weapon-derived class in formulas/misc.js computeClass wins. Any
+    // other value forces the EDU `class` line — "spear" emits `spearmen`.
+    if (allKeys.includes("Class Override")) {
+      meta["Class Override"] = { type: "select", options: ["", "missile", "light", "heavy", "spear"] };
     }
     // Armour upgrades — pulled from the user's Armour Definitions sheet, not
     // coreData. The "Model Set Name" column is what gets referenced from a

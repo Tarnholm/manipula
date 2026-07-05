@@ -22,6 +22,12 @@ function num(v, dflt) {
 function str(v) { return v == null ? "" : String(v); }
 
 function computeClass(r, mr, globals) {
+  // Per-unit override (Units editor "Class Override"): force the EDU `class`
+  // line regardless of the auto-derived value. Blank = auto. "spear" is the
+  // user-facing label for the engine's `spearmen` class. Needed to steer AI
+  // behavior when the mass/weapon heuristic picks the wrong class.
+  const override = str(r.unit["Class Override"]).trim().toLowerCase();
+  if (override) return override === "spear" ? "spearmen" : override;
   const catName = str(r.cat && r.cat["Category Type"]).trim();
   const cat = catName.toLowerCase();
   const priWpnLS = str(r.priWpn && r.priWpn["(light_)spear"]);
@@ -130,8 +136,12 @@ function computePriHP(r, globals) {
 
 function computeSecHP(r, mr, globals) {
   const catName = str(r.cat && r.cat["Category Type"]).trim().toLowerCase();
+  // Per-culture flat secondary-HP bonus (Core Data → cultures "Secondary HP").
+  // Added to every land unit of that culture on top of the computed value
+  // (e.g. Hastati 7 + Roman "Secondary HP" 2 → 9). Ships have no secondary HP.
+  const cultSecHP = num(r.cult && r.cult["Secondary HP"], 0);
   if (catName === "special" || catName === "handler" || catName === "chariot") {
-    return num(r.spMount && r.spMount["Sec HP"], 0);
+    return cint(num(r.spMount && r.spMount["Sec HP"], 0) + cultSecHP);
   }
   if (catName === "ship") return 0;
   const unitSec = num(globals.UnitSecHP, 0);
@@ -170,7 +180,7 @@ function computeSecHP(r, mr, globals) {
     if (cultName === "roman") v += 1;
     if (qualName.startsWith("32. general")) v *= 1.6;
   }
-  return cint(v);
+  return cint(v + cultSecHP);
 }
 
 export { computeClass, computeSpacing, computeFormation2, computePriHP, computeSecHP };

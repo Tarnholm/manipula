@@ -331,7 +331,9 @@ function computeCostsV070(r, out, mr, project, unitSoldiers, unitExtras, stats, 
 
   if (finalize && cat !== "ship") {
     sub *= moraleF;
-    sub = Math.pow(Math.max(sub, 0), 0.8) * 1.98;
+    // Case 183: base^UnitCostExponential × UnitCostModifier. Adjustable via
+    // Mod Info → Globals; defaults reproduce the old hardcoded 0.8 / 1.98.
+    sub = Math.pow(Math.max(sub, 0), num(g.UnitCostExponential, 0.8)) * num(g.UnitCostModifier, 1.98);
     sub *= uHP * unitSoldiers;
     out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * sub);
   } else if (cat === "ship") {

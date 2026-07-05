@@ -3,6 +3,12 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.37.0", notes: [
+    "Recruitment cost is now tunable from Mod Info → Globals: UnitCostExponential (default 0.8) flattens the cost curve as units get pricier, and UnitCostModifier (default 1.98) offsets that reduction. Defaults reproduce the previous hardcoded values, so nothing changes until you tune them (Case 183).",
+    "New CavBGSkirmish global (Mod Info → Globals) controls whether general / cavalry-bodyguard units emit \"class skirmish\". Default 0 keeps the prior behaviour; set non-zero to switch it on.",
+    "Units editor: new \"Class Override\" dropdown next to Category (missile / light / heavy / spear) forces the EDU class line regardless of the auto-derived class — handy for steering AI behaviour. Blank = auto. \"spear\" emits the engine's spearmen class.",
+    "Core Data → Cultures: new \"Secondary HP\" column adds a flat secondary-HP bonus to every land unit of that culture (e.g. Roman +2 turns a 7 into a 9). Ships are unaffected; blank leaves units unchanged.",
+  ] },
   { version: "0.36.116", notes: [
     "AOR lines no longer double-gate when the unit carries an aor_tier_N alias. Those aliases already expand to the full gov/colony-tier cap in the EDB, so the tool now omits its own \"gov_tier_1 and not ... and not colony_tier_N\" suffix (and the gov_tier_1 clause) when one is present: aor_tier_1, aor_tier_2, or aor_tier_3. Lines without one of those aliases still get the cap as before.",
   ] },
