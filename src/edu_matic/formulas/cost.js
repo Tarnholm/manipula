@@ -107,7 +107,7 @@ function v26EngineProjTerm(r, g) {
   return engCost + priP + secP;
 }
 
-function computeCostsV26(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, isM2) {
+function computeCostsV26(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, isM2, isHorde) {
   const out = {};
   const g = project.globals || {};
   const cat = str(r.cat && r.cat["Category Type"]).trim().toLowerCase();
@@ -175,6 +175,7 @@ function computeCostsV26(r, mr, project, unitSoldiers, unitExtras, unitPriArmour
   else if (cat === "foot" || cat === "foot missile") upkeep = price * upkToCost * upkMdf * qualUpk * catUpk * num(r.cult && r.cult["Inf upk cost mdf"], 1);
   else if (cat === "mounted" || cat === "mounted missile") upkeep = price * upkToCost * upkMdf * qualUpk * catUpk * num(r.cult && r.cult["Cav upk cost mdf"], 1);
   else upkeep = price * upkToCost * upkMdf * qualUpk * catUpk;
+  if (isHorde) upkeep *= num(r.cult && r.cult["Horde upk cost mdf"], 1);
   out["upkeep"] = cint(num(g.GlobalUpkCostMdf, 1) * upkeep);
 
   return { out, price, recrCostMdf, upgradeBonusWpn, upgradeBonusArm, armCost0, wpnT };
@@ -190,7 +191,7 @@ function defCost(coeff, ce, armour, armourMdf, def, shield, shieldMdf, avgDef) {
   return coeff * Math.pow(ce, (armour * armourMdf + def + shield * shieldMdf) - avgDef);
 }
 
-function computeCostsV070(r, out, mr, project, unitSoldiers, unitExtras, stats, isM2) {
+function computeCostsV070(r, out, mr, project, unitSoldiers, unitExtras, stats, isM2, isHorde) {
   const g = project.globals || {};
   const cat = str(r.cat && r.cat["Category Type"]).trim().toLowerCase();
   const isMerc = str(r.unit["merc unit"]);
@@ -351,6 +352,7 @@ function computeCostsV070(r, out, mr, project, unitSoldiers, unitExtras, stats, 
   else if (cat === "foot" || cat === "foot missile") upkeep = price * upkToCost * upkMdf * qualUpk * catUpk * num(r.cult && r.cult["Inf upk cost mdf"], 1);
   else if (cat === "mounted" || cat === "mounted missile") upkeep = price * upkToCost * upkMdf * qualUpk * catUpk * num(r.cult && r.cult["Cav upk cost mdf"], 1);
   else upkeep = price * upkToCost * upkMdf * qualUpk * catUpk;
+  if (isHorde) upkeep *= num(r.cult && r.cult["Horde upk cost mdf"], 1);
   out["upkeep"] = cint(num(g.GlobalUpkCostMdf, 1) * upkeep);
 
   return { price, recrCostMdf };
@@ -411,10 +413,15 @@ function computeUpgradeCosts(r, out, project, unitSoldiers, unitExtras, unitPriA
   }
   out["arm upg"] = cint(armUpg);
 
-  out["cb cost"] = cint(num(g.CBCostMultiplier, 0) * price / (recrCostMdf || 1));
+  // Per-culture custom-battle cost multipliers (Core Data → cultures
+  // "Inf CB cost mdf" / "Cav CB cost mdf"). Blank = 1 (no change).
+  let cultCB = 1;
+  if (cat === "foot" || cat === "foot missile") cultCB = num(r.cult && r.cult["Inf CB cost mdf"], 1);
+  else if (cat === "mounted" || cat === "mounted missile") cultCB = num(r.cult && r.cult["Cav CB cost mdf"], 1);
+  out["cb cost"] = cint(num(g.CBCostMultiplier, 0) * price / (recrCostMdf || 1) * cultCB);
   if (isM2) {
     out["cb unit lim"] = num(r.qual && r.qual["CB unit limit"], 0);
-    out["cb cost pen"] = cint(price * num(g.CBCostMultiplier, 0) / 2);
+    out["cb cost pen"] = cint(price * num(g.CBCostMultiplier, 0) / 2 * cultCB);
   }
 }
 
@@ -427,13 +434,17 @@ function computeCosts(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, s
   const g = project.globals || {};
   const isM2 = String(project.modInfo?.platform || "") === "M2TW" ||
                String(project.modInfo?.platform || "") === "KGDM";
+  // Horde entries: the v0.7.0 "Horde" entry type, or the v2.6 per-unit
+  // "horde unit" flag (both end up emitting can_horde). The culture's
+  // "Horde upk cost mdf" applies only to these; 0 = free upkeep.
+  const isHorde = entryType === "Horde" || str(r.unit["horde unit"]) !== "";
 
   if (isV070(g)) {
     const { price, recrCostMdf } = computeCostsV070(r, out, mr, project,
-                                                     unitSoldiers, unitExtras, stats, isM2);
+                                                     unitSoldiers, unitExtras, stats, isM2, isHorde);
     computeUpgradeCosts(r, out, project, unitSoldiers, unitExtras, unitPriArmour, isM2, price, recrCostMdf, 0);
   } else {
-    const res = computeCostsV26(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, isM2);
+    const res = computeCostsV26(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, isM2, isHorde);
     Object.assign(out, res.out);
     computeUpgradeCosts(r, out, project, unitSoldiers, unitExtras, unitPriArmour, isM2, res.price, res.recrCostMdf, res.armCost0);
   }

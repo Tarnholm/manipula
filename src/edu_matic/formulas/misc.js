@@ -139,7 +139,13 @@ function computeSecHP(r, mr, globals) {
   // Per-culture flat secondary-HP bonus (Core Data → cultures "Secondary HP").
   // Added to every land unit of that culture on top of the computed value
   // (e.g. Hastati 7 + Roman "Secondary HP" 2 → 9). Ships have no secondary HP.
-  const cultSecHP = num(r.cult && r.cult["Secondary HP"], 0);
+  // Elephants (special mount marked "Is Elephant") and chariots (Chariot
+  // category) are excluded — the bonus would land on the animal/vehicle
+  // secondary HP, not the crew.
+  const isElephant = str(r.spMount && r.spMount["Is Elephant"]) === "Y";
+  const cultSecHP = (isElephant || catName === "chariot")
+    ? 0
+    : num(r.cult && r.cult["Secondary HP"], 0);
   if (catName === "special" || catName === "handler" || catName === "chariot") {
     return cint(num(r.spMount && r.spMount["Sec HP"], 0) + cultSecHP);
   }

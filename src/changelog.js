@@ -3,6 +3,11 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.38.0", notes: [
+    "Core Data → Cultures: new \"Horde upk cost mdf\" column (after Cav upk cost mdf) multiplies the upkeep of horde units of that culture — both v0.7.0 Horde entries and units flagged \"horde unit\". Set it to 0 for free horde upkeep; blank leaves upkeep unchanged.",
+    "Core Data → Cultures: new \"Inf CB cost mdf\" and \"Cav CB cost mdf\" columns multiply the custom-battle cost of that culture's infantry (foot / foot missile) and cavalry (mounted / mounted missile) respectively. Recruitment price and upkeep are untouched; blank = 1.",
+    "The culture \"Secondary HP\" bonus no longer applies to elephant and chariot units (special mounts marked \"Is Elephant\" and the Chariot category) — it was inflating the animal/vehicle hit points rather than the crew's. Other land units are unchanged.",
+  ] },
   { version: "0.37.0", notes: [
     "Recruitment cost is now tunable from Mod Info → Globals: UnitCostExponential (default 0.8) flattens the cost curve as units get pricier, and UnitCostModifier (default 1.98) offsets that reduction. Defaults reproduce the previous hardcoded values, so nothing changes until you tune them (Case 183).",
     "New CavBGSkirmish global (Mod Info → Globals) controls whether general / cavalry-bodyguard units emit \"class skirmish\". Default 0 keeps the prior behaviour; set non-zero to switch it on.",
