@@ -1,6 +1,7 @@
 // formulas/defence.js — port of CreateUnitData Cases 154–168.
 //
-//   Case 154 'primary armour'     — (Upgr0ArmourValue + MountArmour) × GlobalArmourMdf
+//   Case 154 'primary armour'     — (Upgr0ArmourValue + MountArmour) × GlobalArmourMdf,
+//                                   then the optional ArmorSoftCap taper
 //   Case 155 'primary defence'    — see formula below
 //   Case 156 'primary shield'     — Upgr0ShieldValue
 //   Case 157 'primary hit sound'  — Upgr0ArmourHitSoundValue
@@ -37,6 +38,30 @@ function num(v, dflt) {
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
 /**
+ * Armour soft cap (Mod Info → Globals: ArmorSoftCap + ArmorSoftCapMdf).
+ *
+ * Every armour point ABOVE the cap counts for ArmorSoftCapMdf of a point:
+ *
+ *   capped = cap + (raw − cap) × mdf          (raw > cap)
+ *
+ * e.g. cap 15, mdf 0.5, raw 19  →  15 + 4 × 0.5 = 17.
+ *
+ * Both globals must carry a value; if either is blank the cap is inactive
+ * and the raw value passes through untouched (blank is the default, so
+ * existing projects compute exactly as before). Applied here — before the
+ * value is written to the `armour` stat — so the whole downstream chain
+ * (stats, and both cost models, which read that stat) prices the unit at
+ * its capped armour rather than its raw armour.
+ */
+function applyArmourSoftCap(value, globals) {
+  const cap = num(globals && globals.ArmorSoftCap, null);
+  const mdf = num(globals && globals.ArmorSoftCapMdf, null);
+  if (cap === null || mdf === null) return value;
+  if (!(value > cap)) return value;
+  return cap + (value - cap) * mdf;
+}
+
+/**
  * Compute the full defensive triad + sec mount stats in one pass since
  * they all share the armour-resolver result and the unit mass context.
  *
@@ -63,9 +88,9 @@ function computeDefensiveTriad(r, mr, project) {
   const mountArmour = num(r.mount && r.mount["Armour mdf"], 0);
   if (cat === "ship") {
     const shipArmour = num(r.ship && r.ship["Armour"], 0);
-    out["armour"] = clamp(cint(shipArmour), 0, 63);
+    out["armour"] = clamp(cint(applyArmourSoftCap(shipArmour, globals)), 0, 63);
   } else {
-    out["armour"] = clamp(cint((mr.armour.value + mountArmour) * gArm), 0, 63);
+    out["armour"] = clamp(cint(applyArmourSoftCap((mr.armour.value + mountArmour) * gArm, globals)), 0, 63);
   }
 
   // ── Case 155: primary defence ───────────────────────────────
@@ -153,4 +178,4 @@ function computeDefensiveTriad(r, mr, project) {
   return out;
 }
 
-export { computeDefensiveTriad };
+export { computeDefensiveTriad, applyArmourSoftCap };

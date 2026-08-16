@@ -13,6 +13,7 @@
 
 
 import { cint } from "./attack";
+import { specIs } from "../resolve";
 
 function num(v, dflt) {
   if (v === null || v === undefined || v === "") return dflt;
@@ -130,8 +131,8 @@ function computeFormation2(r, mr, globals, platform) {
 
 function computePriHP(r, globals) {
   const base = num(globals.UnitPriHP, 1);
-  const specName = str(r.spec && r.spec["Specialty Type"]);
-  return specName === "Chariot" ? base * 2 : base;
+  // Matches when "Chariot" sits in EITHER specialty slot.
+  return specIs(r.spec, "Chariot") ? base * 2 : base;
 }
 
 function computeSecHP(r, mr, globals) {

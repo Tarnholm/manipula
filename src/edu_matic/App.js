@@ -26,8 +26,9 @@ import DataTable from "./components/DataTable";
 // produces. Reused across the Mod Info and Core Data screens.
 const NATURAL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-// Globals that the new heat / sand / snow / merc formulas read but that
-// legacy xlsm projects don't carry as defined names. Seeded into
+// Globals that newer formulas (heat / sand / snow / merc / cost tuning /
+// armour soft cap) read but that legacy xlsm projects don't carry as
+// defined names. Seeded into
 // project.globals the first time a project is loaded so they show up —
 // editable — in the Mod Info Globals table. The defaults reproduce the
 // original VBA result (heat: 1.0 / 0.7 multipliers; sand/snow: no mass
@@ -60,6 +61,14 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   // Comma-separated factions that never get an ethnicity line (culture
   // umbrellas / placeholder / rebel slots). Edit in Mod Info → Globals.
   EthnicityExcludeFactions: "greeks, germanics, gauls, scythians, hellenistic_rebels, dummies",
+  // Armour soft cap: every armour point above ArmorSoftCap counts for
+  // ArmorSoftCapMdf of a point (cap 15 / mdf 0.5 turns a raw 19 into
+  // 15 + 4×0.5 = 17). Applied before costing, so the unit prices as a 17
+  // armour unit too. BOTH must be filled in for the cap to do anything —
+  // blank (the default) leaves armour exactly as it was. Consumed in
+  // formulas/defence.js.
+  ArmorSoftCap: "",
+  ArmorSoftCapMdf: "",
 };
 
 // Rename a faction tag everywhere it's referenced across the project, so
@@ -1296,7 +1305,7 @@ const DERIVED_COL_KEY_SET = new Set(DERIVED_COLS.map((c) => c.key));
 const UNITS_HEAD = [
   "name", "Entries", "comments",
   "unit id", "dictionary_tag",
-  "Category", "Class Override", "Specialty",
+  "Category", "Class Override", "Specialty", "Specialty 2",
   "Recruitment", "Quality",
   "voice_type", "voice_indexes",
   "unit variation", "model id",
@@ -1416,6 +1425,10 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     // line (missile/light/heavy/spear) regardless of the auto-derived class.
     // Always offered — sits next to Category even when no unit has set it.
     present.add("Class Override");
+    // Second specialty (Specialty2), layered over Specialty1 by resolve.js.
+    // Blank on every unit until the user picks one, and it isn't a column in
+    // the xlsm, so it has to be offered unconditionally too.
+    present.add("Specialty 2");
     let cache = allKeysRef.current;
     if (cache) {
       // Append any newly-seen structural keys (e.g. a freshly-templated
@@ -1482,6 +1495,7 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
       "Quality":          "qualityClasses",
       "Category":         "categories",
       "Specialty":        "specialties",
+      "Specialty 2":      "specialties",
       "Formation":        "formations",
       "Dwelling":         "dwellings",
       "Culture":          "cultures",
@@ -1568,7 +1582,15 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
   //     just wanted to know which column is `romans_julii`.
   //   - own:<i> columns labeled "ownership_1 .. ownership_4".
   const columnLabels = useMemo(() => {
-    const out = { name: "Unit Name", "Precursor Override": "Precursor" };
+    // "Specialty" keeps its storage key (it's the xlsm column name and what
+    // every formula / validator looks up) but reads as Specialty1 in the
+    // grid, next to the Specialty2 column layered over it.
+    const out = {
+      name: "Unit Name",
+      "Precursor Override": "Precursor",
+      "Specialty": "Specialty1",
+      "Specialty 2": "Specialty2",
+    };
     factionKeys.forEach((f) => { out[AVAIL_PREFIX + f] = f; });
     out[AVAIL_PREFIX + "slave"] = "slave";
     for (let i = 0; i < 4; i++) out[OWN_PREFIX + i] = `ownership_${i + 1}`;

@@ -37,6 +37,7 @@ const UNIT_TO_CORE = {
   "Quality":           { table: "qualityClasses",     required: true  },
   "Category":          { table: "categories",         required: true  },
   "Specialty":         { table: "specialties",        required: true  },
+  "Specialty 2":       { table: "specialties",        required: false },   // optional second specialty, layered over the first
   "Formation":         { table: "formations",         required: true  },
   "Dwelling":          { table: "dwellings",          required: true  },
   "Culture":           { table: "cultures",           required: true  },

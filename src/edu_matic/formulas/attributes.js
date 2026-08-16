@@ -25,11 +25,14 @@ function qualMeets(qualName, thresholdFromCulture) {
 }
 
 /** True if the unit's specialty has the given "special ability" in any of
- *  its three ability slots. */
+ *  its ability slots. The core-data table ships three; a row merged from
+ *  Specialty 1 + Specialty 2 (see resolve.js) can carry more, so match the
+ *  slot names by pattern rather than by a fixed list. */
 function specHasAbility(spec, ability) {
   if (!spec) return false;
-  for (const k of ["special ability", "special ability 2", "special ability 3"]) {
-    if (str(spec[k]).toLowerCase() === ability) return true;
+  for (const [k, v] of Object.entries(spec)) {
+    if (!/^special ability(\s+\d+)?$/i.test(k)) continue;
+    if (str(v).trim().toLowerCase() === ability) return true;
   }
   return false;
 }

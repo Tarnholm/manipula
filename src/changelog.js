@@ -3,6 +3,11 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.39.0", notes: [
+    "Units editor: the Specialty column now reads Specialty1, with a new Specialty2 column beside it. Specialty2 is blank by default and layers over Specialty1 — blank cells leave Specialty1's values alone (so the two combine, e.g. Very Hardy + Swim), filled cells override it where they contradict. Special abilities from both are combined rather than replaced.",
+    "Every dropdown cell now has a \"Clear Cell\" entry pinned at the top of the list — one click empties the cell. Typing and pressing Enter still picks the first match, so nothing gets cleared by accident.",
+    "New ArmorSoftCap / ArmorSoftCapMdf globals (Mod Info → Globals). With cap 15 and mdf 0.5, every armour point above 15 counts for half — a raw 19 becomes 17, and the unit is priced as a 17-armour unit because the taper is applied before costing. Both must carry a value; blank (the default) leaves armour untouched.",
+  ] },
   { version: "0.38.0", notes: [
     "Core Data → Cultures: new \"Horde upk cost mdf\" column (after Cav upk cost mdf) multiplies the upkeep of horde units of that culture — both v0.7.0 Horde entries and units flagged \"horde unit\". Set it to 0 for free horde upkeep; blank leaves upkeep unchanged.",
     "Core Data → Cultures: new \"Inf CB cost mdf\" and \"Cav CB cost mdf\" columns multiply the custom-battle cost of that culture's infantry (foot / foot missile) and cavalry (mounted / mounted missile) respectively. Recruitment price and upkeep are untouched; blank = 1.",

@@ -16,6 +16,7 @@
 
 
 import { resolveArmour } from "../armour";
+import { specIs } from "../resolve";
 
 function num(v, dflt) {
   if (v === null || v === undefined || v === "") return dflt;
@@ -44,7 +45,9 @@ function computeMass(r, project) {
   const horseMass    = mountMassMdf * baseHorseMass;
 
   const catName  = String((r.cat  && r.cat["Category Type"])   || "").toLowerCase();
-  const specName = String((r.spec && r.spec["Specialty Type"]) || "").toLowerCase();
+  // Name-keyed override — matches when "Naked Warriors" sits in EITHER
+  // specialty slot, not just whichever name won the merge.
+  const isNakedWarriors = specIs(r.spec, "naked warriors");
   const specMassMult = num(r.spec && r.spec["mass multiplier"], null);
 
   let mass = null;
@@ -59,7 +62,7 @@ function computeMass(r, project) {
   } else {
     // Foot / Foot Missile / Foot General / Handler / Engine
     mass = gMassMdf * soldierMass;
-    if (specName === "naked warriors") {
+    if (isNakedWarriors) {
       mass = 0.3 + gMassMdf * soldierMass;
     } else if (specMassMult != null) {
       mass = specMassMult * gMassMdf * soldierMass;

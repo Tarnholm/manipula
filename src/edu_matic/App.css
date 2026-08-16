@@ -576,9 +576,20 @@ select.dtable-cell-input {
   background: rgba(220, 166, 74, 0.18);
   color: var(--accent, #dca64a);
 }
-.dtable-combo-opt--none {
-  color: var(--fg-dim, #888);
+/* Pinned "Clear Cell" action at the top of every dropdown. Dimmed and
+   rule-separated so it reads as an action rather than as one of the
+   column's values; highlights in the error colour, not the accent, so a
+   destructive pick never looks like an ordinary selection. */
+.dtable-combo-opt--clear {
+  color: var(--fg-dim, #9a9a9a);
   font-style: italic;
+  border-bottom: 1px solid var(--border-strong, #3a3a3a);
+  margin-bottom: 2px;
+}
+.dtable-combo-opt--clear.is-active,
+.dtable-combo-opt--clear:hover {
+  background: rgba(214, 108, 108, 0.16);
+  color: var(--err, #d66c6c);
 }
 .dtable-combo-empty {
   padding: 6px 10px;

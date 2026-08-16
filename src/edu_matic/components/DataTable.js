@@ -1941,7 +1941,22 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
     return starts.concat(contains);
   }, [value, options]);
 
-  useEffect(() => { setHighlightIdx(0); }, [value]);
+  // What the popover actually lists: a pinned "Clear Cell" row first, then
+  // the matching options. Any blank option coming from the column's own
+  // list is dropped — "Clear Cell" IS that choice, and offering both an
+  // empty row and a clear row side by side just looks broken.
+  const items = useMemo(() => {
+    const list = [{ value: "", label: "Clear Cell", clear: true }];
+    for (const o of filtered) {
+      if (o === null || o === undefined || String(o) === "") continue;
+      list.push({ value: o, label: String(o) });
+    }
+    return list;
+  }, [filtered]);
+  // Highlight the first real option, not "Clear Cell" — Enter after typing
+  // a few letters must still pick the match, and clearing should take a
+  // deliberate click or an ArrowUp onto the pinned row.
+  useEffect(() => { setHighlightIdx(items.length > 1 ? 1 : 0); }, [value, items.length]);
 
   useLayoutEffect(() => {
     if (!inputRef.current) return;
@@ -1987,13 +2002,17 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
   const onKeyDown = (e) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlightIdx((i) => Math.min(filtered.length - 1, i + 1));
+      setHighlightIdx((i) => Math.min(items.length - 1, i + 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setHighlightIdx((i) => Math.max(0, i - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (filtered[highlightIdx] != null) commitWith(filtered[highlightIdx]);
+      const it = items[highlightIdx];
+      // When nothing matched, the pinned Clear row is the only item —
+      // Enter there has to keep what the user typed (that's what the
+      // "no match" hint promises), not silently wipe the cell.
+      if (it && !(it.clear && items.length === 1)) commitWith(it.value);
       else onCommit();
       onMove && onMove("down");
     } else if (e.key === "Escape") {
@@ -2055,20 +2074,21 @@ function ComboboxEditor({ value, placeholder, options, onChange, onCommit, onCan
           // bubble out of the popover.
           onClick={(e) => e.stopPropagation()}
         >
-          {filtered.length === 0 && (
-            <div className="dtable-combo-empty">no match — Enter to keep "{value}"</div>
-          )}
-          {filtered.map((opt, i) => (
+          {items.map((it, i) => (
             <div
-              key={opt}
+              key={it.clear ? "__clear__" : "opt:" + it.value}
               data-combo-idx={i}
-              className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "") + (opt === "" ? " dtable-combo-opt--none" : "")}
+              className={"dtable-combo-opt" + (i === highlightIdx ? " is-active" : "") + (it.clear ? " dtable-combo-opt--clear" : "")}
               onMouseEnter={() => setHighlightIdx(i)}
-              onClick={() => commitWith(opt)}
+              onClick={() => commitWith(it.value)}
+              title={it.clear ? "Empty this cell" : undefined}
             >
-              {opt === "" ? "(none)" : opt}
+              {it.label}
             </div>
           ))}
+          {items.length === 1 && (
+            <div className="dtable-combo-empty">no match — Enter to keep "{value}"</div>
+          )}
         </div>,
         document.body
       )}
