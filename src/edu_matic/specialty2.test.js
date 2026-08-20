@@ -125,9 +125,33 @@ describe("resolveUnit with two specialties", () => {
   test("the merged row is what drives the attribute flags", () => {
     const r = resolveUnit({ Specialty: "Very Hardy", "Specialty 2": "Swim" }, idx);
     r.unit = {};
-    r.cat = { "Category Type": "Chariot" };   // reaches the spec-ability can_swim branch
+    r.cat = { "Category Type": "Chariot" };
     const attrs = computeAttributes(r, { soldierMass: 1, horseMass: 0 }, { globals: {}, modInfo: {} });
     expect(attrs["can_swim"]).toBe("can_swim");
+  });
+
+  // A specialty that names can_swim is an explicit authoring decision, so it
+  // beats the category's "Allows swim" column and the mass thresholds.
+  test.each([
+    ["Foot",    { soldierMass: 99, horseMass: 0 }],
+    ["Mounted", { soldierMass: 99, horseMass: 99 }],
+    ["Special", { soldierMass: 1,  horseMass: 0 }],
+  ])("spec can_swim overrides a category with Allows swim unset (%s)", (catType, mr) => {
+    const r = resolveUnit({ Specialty: "Very Hardy", "Specialty 2": "Swim" }, idx);
+    r.unit = {};
+    r.cat = { "Category Type": catType, "Allows swim": "N" };
+    const globals = { MediumInfThreshold: 2, HeavyInfThreshold: 3, MediumCavThreshold: 4 };
+    const attrs = computeAttributes(r, mr, { globals, modInfo: {} });
+    expect(attrs["can_swim"]).toBe("can_swim");
+  });
+
+  test("without a spec can_swim the category still gates the flag", () => {
+    const r = resolveUnit({ Specialty: "Very Hardy" }, idx);
+    r.unit = {};
+    r.cat = { "Category Type": "Foot", "Allows swim": "N" };
+    const globals = { MediumInfThreshold: 2, HeavyInfThreshold: 3 };
+    const attrs = computeAttributes(r, { soldierMass: 1, horseMass: 0 }, { globals, modInfo: {} });
+    expect(attrs["can_swim"]).toBeUndefined();
   });
 
   test("a name-keyed rule still fires from the first slot after a merge", () => {

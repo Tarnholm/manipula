@@ -71,13 +71,16 @@ function computeAttributes(r, mr, project) {
   if (catAllowSea || isGeneralUnit) out["sea_faring"] = "sea_faring";
 
   // Case 43 can_swim
+  //  An explicit can_swim on Specialty 1 or Specialty 2 always grants the
+  //  attribute - it overrides the category's "Allows swim" setting and the
+  //  mass thresholds, so swimmers can be authored per unit.
   let canSwim = false;
-  if (cat === "foot" || cat === "foot missile" || cat === "handler") {
+  if (specHasAbility(spec, "can_swim")) {
+    canSwim = true;
+  } else if (cat === "foot" || cat === "foot missile" || cat === "handler") {
     if (catAllowSwim && (sMass < medInf || (sMass < hvyInf && dwelAb === "can_swim"))) canSwim = true;
   } else if (cat === "mounted" || cat === "mounted missile") {
     if (catAllowSwim && (2 * sMass) + (hMass / 2) < medCav) canSwim = true;
-  } else if (specHasAbility(spec, "can_swim")) {
-    canSwim = true;
   } else if ((cat === "special" || cat === "engine") && catAllowSwim) {
     canSwim = true;
   }
