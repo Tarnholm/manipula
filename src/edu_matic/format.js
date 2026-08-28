@@ -172,7 +172,7 @@ function formatUnit(row) {
     "can_horde", "free_upk", "knight", "can_withdraw", "stakes", "form_charge",
     "cannot_skrm", "gunpowder", "gunmen_cav/xbow/pike/incendiary/artillery",
     "st_n_phlnx/skrm", "fire_rank", "peasant", "can/mor/roc/wag/stdr", "explode",
-    "unique unit",
+    "unique unit", "non_scaling",
   ];
   const attrFlags = ATTR_COLS.map((c) => row[c]).filter((v) => v);
   if (attrFlags.length) out.push(line("attributes", attrFlags.join(", ")));

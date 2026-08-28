@@ -26,7 +26,7 @@ import { computeCharge } from "./formulas/charge";
 import { computePrimaryWeaponFields } from "./formulas/primary";
 import { computeDefensiveTriad } from "./formulas/defence";
 import { computeStats } from "./formulas/stats";
-import { computeAttributes } from "./formulas/attributes";
+import { computeAttributes, globalFlagOn } from "./formulas/attributes";
 import { computeClass, computeSpacing, computeFormation2, computePriHP, computeSecHP } from "./formulas/misc";
 import { computeWeaponAttrs } from "./formulas/weaponAttrs";
 import { computeSecondary } from "./formulas/secondary";
@@ -285,10 +285,27 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   Object.assign(out, computeCosts(r, mr, project,
                                    men || 0, extras, out["armour"] || 0, out, entryType));
 
+  // ShipNonScaling (Mod Info -> Globals): ships sail with a crew of 1.
+  // Applied AFTER computeCosts on purpose - every cost/upkeep/upgrade term
+  // above still sees the real crew from the ships table ("Men per ship",
+  // normally 6), so the ship is priced exactly as it was before the toggle;
+  // only the number written into the EDU soldier line changes. The matching
+  // non_scaling attribute is emitted in formulas/attributes.js.
+  if (shipNonScalingOn(project.globals, catName)) {
+    out["# of men"] = 1;
+    out["No. of men"] = 1;
+  }
+
   return out;
 }
 
 // ── helpers ────────────────────────────────────────────────────────
+
+/** ShipNonScaling: on when the global reads 1 / Y and the unit is a ship. */
+function shipNonScalingOn(globals, catName) {
+  return String(catName || "").trim().toLowerCase() === "ship"
+      && globalFlagOn((globals || {}).ShipNonScaling);
+}
 
 function put(out, col, value) {
   // Mirrors VBA: blank strings and null/undefined are omitted entirely.

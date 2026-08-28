@@ -54,6 +54,12 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   // light/missile. 0 = off (the prior hardcoded behavior). Consumed as
   // globals.CavBGSkirmish in formulas/misc.js.
   CavBGSkirmish: 0,
+  // Ships-only override: with ShipNonScaling on (1 or Y), every ship entry
+  // gets the `non_scaling` attribute and a crew of 1 man, while still being
+  // priced on its real "Men per ship" crew (6 in stock data). 0 / blank = off,
+  // the previous behaviour. Consumed in formulas/attributes.js (attribute)
+  // and compute.js (the men override).
+  ShipNonScaling: 0,
   // NOTE: aor_default_rec_priority (the AoR/Merc recruit_priority_offset)
   // is NOT seeded here — it already ships in the xlsm/globals (RIS sets it
   // to -100) and is editable in Mod Info → Globals. Seeding a default
@@ -183,7 +189,7 @@ const PREVIEW_EDU_ORDER = [
   "sea_faring", "can_swim", "hide_forest", "hide_l_grass", "can_sap",
   "frighten_f", "frighten_m", "can_amok", "gen_unit",
   "cant_circle/warcry/druid", "no_custom", "command", "merc_unit",
-  "hardy", "p_charge", "is_peas", "can_horde",
+  "hardy", "p_charge", "is_peas", "can_horde", "non_scaling",
   "h. cl. spacing", "v. cl. spacing", "h. l. spacing", "v. l. spacing", "ranks",
   "formation1", "formation2",
   "hp", "sec hp",

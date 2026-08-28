@@ -3,6 +3,10 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.40.0", notes: [
+    "New ShipNonScaling global (Mod Info → Globals). Set it to 1 or Y and every ship entry gets the non_scaling attribute and a crew of 1 man, while still being priced and upkept on its real \"Men per ship\" crew (6 in stock data) — so ship costs do not move. Blank / 0 = off, the previous behaviour.",
+    "New docs/GLOBALS.md documents every Mod Info global: what reads it, what changes in the EDU when you change it, and which ones are currently inert (including the ones Validate still demands a value for).",
+  ] },
   { version: "0.39.0", notes: [
     "Units editor: the Specialty column now reads Specialty1, with a new Specialty2 column beside it. Specialty2 is blank by default and layers over Specialty1 — blank cells leave Specialty1's values alone (so the two combine, e.g. Very Hardy + Swim), filled cells override it where they contradict. Special abilities from both are combined rather than replaced.",
     "Every dropdown cell now has a \"Clear Cell\" entry pinned at the top of the list — one click empties the cell. Typing and pressing Enter still picks the first match, so nothing gets cleared by accident.",

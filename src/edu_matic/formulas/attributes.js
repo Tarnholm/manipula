@@ -14,6 +14,16 @@ function num(v, dflt) {
 }
 function has(s, v) { return s === v; }
 
+/** A Mod Info global used as an on/off switch. Accepts the spreadsheet
+ *  conventions the workbook already mixes — 1 / Y / yes / true (any case) —
+ *  so "ShipNonScaling = Y" and "ShipNonScaling = 1" behave identically.
+ *  Blank, 0, N and anything unrecognised read as off. */
+function globalFlagOn(v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
+  if (!s) return false;
+  return s === "1" || s === "y" || s === "yes" || s === "true";
+}
+
 /** Quality-vs-minimum check. The culture table holds a threshold quality
  *  class; the unit qualifies if its quality is lexically ≥ that threshold
  *  AND the threshold is actually defined. Undefined threshold → never
@@ -331,7 +341,13 @@ function computeAttributes(r, mr, project) {
   // Case 72 unique_unit
   if (str(r.unit["unique unit"])) out["unique unit"] = "unique_unit";
 
+  // ShipNonScaling (Mod Info → Globals): tag every ship with
+  // non_scaling, so the engine stops multiplying its crew by the player's
+  // unit-size setting. Paired with the "No. of men → 1" override in
+  // compute.js; costs are unaffected (see the note there).
+  if (cat === "ship" && globalFlagOn(g.ShipNonScaling)) out["non_scaling"] = "non_scaling";
+
   return out;
 }
 
-export { computeAttributes };
+export { computeAttributes, globalFlagOn };
