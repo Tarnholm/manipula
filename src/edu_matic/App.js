@@ -60,6 +60,11 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   // the previous behaviour. Consumed in formulas/attributes.js (attribute)
   // and compute.js (the men override).
   ShipNonScaling: 0,
+  // Terrain bonuses (scrub / sand / forest / snow) of a unit with a secondary
+  // weapon blend the two weapons by MeleeFraction. Set this to 0 to switch
+  // that off — both weapons then add 1:1. 1 / blank = on, the VBA result.
+  // Consumed in formulas/stats.js.
+  MeleeFractionImpactingTerrainEffect: 1,
   // NOTE: aor_default_rec_priority (the AoR/Merc recruit_priority_offset)
   // is NOT seeded here — it already ships in the xlsm/globals (RIS sets it
   // to -100) and is editable in Mod Info → Globals. Seeding a default

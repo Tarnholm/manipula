@@ -26,8 +26,19 @@ function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 function str(v) { return v == null ? "" : String(v); }
 function hasWpn(row) { return !!(row && row["Weapon Type"]); }
 
+/** MeleeFractionImpactingTerrainEffect is a switch that defaults ON, so a
+ *  project that never set it keeps the VBA blend. Only an explicit 0 / N /
+ *  no / false (any case) turns it off. */
+function meleeFractionTerrainOn(v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
+  if (!s) return true;
+  if (s === "n" || s === "no" || s === "false") return false;
+  const n = Number(s);
+  return !(Number.isFinite(n) && n === 0);
+}
+
 /** Sum of terrain bonus contributions across all row sources (as per VBA). */
-function groundBonus(r, key, isM2_unused, meleeFraction) {
+function groundBonus(r, key, isM2_unused, meleeFraction, blendWeapons = true) {
   // Column key is literal in core-data (e.g. "scrub", "sand", "forest", "snow").
   const spec = num(r.spec && r.spec[key], 0);
   const form = num(r.form && r.form[key], 0);
@@ -42,7 +53,10 @@ function groundBonus(r, key, isM2_unused, meleeFraction) {
   // When a secondary weapon is present, primary/secondary weapons blend
   // by MeleeFraction (VBA L7602). Note "forest" re-includes FormationForestBon
   // (L7630) but the other three don't — faithful VBA replication.
-  let v = spec + dwel + priW * meleeFraction + secW * (1 - meleeFraction) + mnt + spMt;
+  // With MeleeFractionImpactingTerrainEffect = 0 the blend is skipped and
+  // both weapons add 1:1, like mount_effect does since 0.41.0.
+  const wpn = blendWeapons ? priW * meleeFraction + secW * (1 - meleeFraction) : priW + secW;
+  let v = spec + dwel + wpn + mnt + spMt;
   if (key === "forest") v += form;
   return v;
 }
@@ -108,12 +122,15 @@ function computeStats(r, mr, project, unitPriArmour) {
   // light units gain and heavy units lose). All four globals default
   // to 0, which keeps pre-existing projects byte-identical to VBA.
   const meleeFrac = num(globals.MeleeFraction, 0.5);
+  // MeleeFractionImpactingTerrainEffect (Mod Info → Globals): 0 / N turns
+  // the MeleeFraction blend off for terrain. Blank / 1 = on, the VBA result.
+  const blendTerrain = meleeFractionTerrainOn(globals.MeleeFractionImpactingTerrainEffect);
   const massSandMdf   = num(globals.MassSandModifier, 0);
   const massSandConst = num(globals.MassSandConstant, 0);
   const massSnowMdf   = num(globals.MassSnowModifier, 0);
   const massSnowConst = num(globals.MassSnowConstant, 0);
   for (const k of ["scrub", "sand", "forest", "snow"]) {
-    let v = groundBonus(r, k, isM2, meleeFrac);
+    let v = groundBonus(r, k, isM2, meleeFrac, blendTerrain);
     if (k === "sand") v += massSandConst - massSandMdf * mr.soldierMass;
     else if (k === "snow") v += massSnowConst - massSnowMdf * mr.soldierMass;
     out[k] = clamp(cint(v), -8, 8);

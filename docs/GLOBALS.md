@@ -197,7 +197,8 @@ weapon / projectile actually carries the flag. All blank → 0.
 
 | Global | | What it does |
 |---|---|---|
-| `MeleeFraction` | ✔ | When a unit carries a secondary weapon, its terrain bonuses and vs-bonuses blend as `primary × MeleeFraction + secondary × (1 − MeleeFraction)`. Blank → 0.5. |
+| `MeleeFraction` | ✔ | When a unit carries a secondary weapon, its terrain bonuses (scrub / sand / forest / snow) blend as `primary × MeleeFraction + secondary × (1 − MeleeFraction)`. Blank → 0.5. Since 0.41.0 it no longer touches `mount_effect`: the vs horse / elephant / chariot / camel values from every weapon add 1:1. |
+| `MeleeFractionImpactingTerrainEffect` | ✔ **[Manipula]** | Switch for the terrain blend above. 0 (or N) turns it off: the primary and secondary weapons' scrub / sand / forest / snow values then add 1:1, so a secondary spear's −4 forest counts as −4 instead of −1. Blank / 1 → on, the VBA result. On the RIS roster, 0 changes `stat_ground` on 612 units and nothing else. |
 | `ArmourMoraleMdf` | ✔ | Morale added per point of armour — armour makes men brave. Blank → 0. |
 | `HorseMassHeatModifier` | ✔ **[Manipula]** | Weight of *horse* mass in the cavalry heat term. Blank → 1 (the old hardcoded VBA value). |
 | `RiderMassHeatModifier` | ✔ **[Manipula]** | Weight of *rider* mass in the same term. Blank → 0.7. |

@@ -3,6 +3,10 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.41.0", notes: [
+    "Core Data → Weapons: the vs horse / vs elephant / vs chariot / vs camel values now go into mount_effect exactly as typed. Previously they were scaled by MeleeFraction whenever the unit had a secondary weapon — a secondary weapon's value was multiplied by 0.25, so you had to type 12 to get +3. Now 3 gives +3, added on top of the specialty, dwelling, mount and special-mount values as before.",
+    "New MeleeFractionImpactingTerrainEffect global (Mod Info → Globals). Set it to 0 and the terrain bonuses (scrub / sand / forest / snow) of a unit with a secondary weapon stop being blended by MeleeFraction: both weapons' values count in full, so a secondary spear's −4 forest is −4, not −1. Blank / 1 = on, the previous behaviour.",
+  ] },
   { version: "0.40.0", notes: [
     "New ShipNonScaling global (Mod Info → Globals). Set it to 1 or Y and every ship entry gets the non_scaling attribute and a crew of 1 man, while still being priced and upkept on its real \"Men per ship\" crew (6 in stock data) — so ship costs do not move. Blank / 0 = off, the previous behaviour.",
     "New docs/GLOBALS.md documents every Mod Info global: what reads it, what changes in the EDU when you change it, and which ones are currently inert (including the ones Validate still demands a value for).",

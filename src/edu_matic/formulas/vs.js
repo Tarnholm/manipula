@@ -2,8 +2,12 @@
 // elephant / chariot / camel bonuses).
 //
 // VBA L6423–6551:
-//   1. sum contributions from spec + dwell + weapons + mount + special mount,
-//      blended by MeleeFraction when a secondary weapon is present
+//   1. sum contributions from spec + dwell + weapons + mount + special mount
+//      (Manipula 0.41: every table adds its value 1:1. The VBA blended the
+//      weapons by MeleeFraction when a secondary was present — a secondary
+//      weapon's value was multiplied by 0.25 at the default 0.75, so you had
+//      to type 12 to get +3. The primary weapon, its projectile and the
+//      secondary weapon now each add exactly what is typed in Core Data.)
 //   2. clamp each to ±50
 //   3. "keep top 2 magnitude" filter: if all four are nonzero, zero the
 //      smallest-magnitude pair (VBA does it via two nested comparisons —
@@ -20,7 +24,7 @@ function num(v, dflt) {
 }
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
-function sumBonus(r, keyTable, priKey, projKey, withSec, meleeFrac) {
+function sumBonus(r, keyTable, priKey, projKey) {
   const spec = num(r.spec    && r.spec[keyTable],    0);
   const dwel = num(r.dwel    && r.dwel[keyTable],    0);
   const priW = num(r.priWpn  && r.priWpn[priKey],    0);
@@ -28,16 +32,13 @@ function sumBonus(r, keyTable, priKey, projKey, withSec, meleeFrac) {
   const secW = num(r.secWpn  && r.secWpn[priKey],    0);
   const mnt  = num(r.mount   && r.mount[keyTable],   0);
   const spMt = num(r.spMount && r.spMount[keyTable], 0);
-  if (!withSec) return spec + dwel + priW + proj + mnt + spMt;
-  return spec + dwel + (priW + proj) * meleeFrac + secW * (1 - meleeFrac) + mnt + spMt;
+  return spec + dwel + priW + proj + secW + mnt + spMt;
 }
 
 /** @param {import("../resolve").ResolvedUnit} r */
 function computeVS(r, project) {
   const globals = project.globals || {};
   const out = {};
-  const withSec = !!r.secWpn;
-  const mf = num(globals.MeleeFraction, 0.5);
   const fractions = {
     horse:    num(globals.HorseFraction,    0),
     elephant: num(globals.ElephantFraction, 0),
@@ -57,7 +58,7 @@ function computeVS(r, project) {
   const vals = { horse: 0, elephant: 0, chariot: 0, camel: 0 };
   for (const k of Object.keys(fractions)) {
     if (fractions[k] > 0) {
-      vals[k] = clamp(sumBonus(r, cols[k][0], cols[k][1], cols[k][1], withSec, mf), -50, 50);
+      vals[k] = clamp(sumBonus(r, cols[k][0], cols[k][1], cols[k][1]), -50, 50);
     }
   }
 
