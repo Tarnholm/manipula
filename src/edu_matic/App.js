@@ -82,6 +82,15 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   ArmorSoftCapMdf: "",
 };
 
+// Per-row price multipliers added after projects were imported: Core Data
+// table -> column. Rows without the column are seeded with 1 (no change)
+// on load so the value shows, editable, in Core Data. formulas/cost.js
+// reads a blank cell as 1 too.
+const NEW_COREDATA_PRICE_MULTS = {
+  weapons: "Per-Weapon Cost",
+  projectiles: "Per-Projectile Cost",
+};
+
 // Rename a faction tag everywhere it's referenced across the project, so
 // a Mod Info rename (e.g. "rhaetians" → "breuni") fully propagates instead
 // of leaving stale references in unit ownership strings or Core Data
@@ -282,6 +291,21 @@ export default function App({ externalProject = null, onProjectChange, controlle
   }, [showToast]);
 
   // (kept for future uses — currently consumed only by ExportScreen)
+
+  // Seed the Per-Weapon / Per-Projectile Cost columns (see
+  // NEW_COREDATA_PRICE_MULTS). One-shot per row: once a row carries the
+  // key the next pass finds nothing to add.
+  useEffect(() => {
+    if (!project || !project.coreData) return;
+    let next = null;
+    for (const [table, col] of Object.entries(NEW_COREDATA_PRICE_MULTS)) {
+      const rows = project.coreData[table];
+      if (!Array.isArray(rows) || !rows.some((r) => r && !(col in r))) continue;
+      next = next || { ...project.coreData };
+      next[table] = rows.map((r) => (r && !(col in r) ? { ...r, [col]: 1 } : r));
+    }
+    if (next) setProject({ ...project, coreData: next });
+  }, [project, setProject]);
 
   return (
     <div className="app">
@@ -632,8 +656,8 @@ const CANONICAL_COLUMN_ORDER = {
   dwellings: ["Dwelling Type", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "heat modifier", "special ability", "unit size mdf"],
   cultures: ["Culture Type", "Inf pool refresh rate mdf", "Cav pool refresh rate mdf", "Inf pool max cap mdf", "Cav pool max cap mdf", "Inf recr cost mdf", "Cav recr cost mdf", "Inf upk cost mdf", "Cav upk cost mdf", "Horde upk cost mdf", "Inf CB cost mdf", "Cav CB cost mdf", "Inf unit size mdf", "Cav unit size mdf", "Inf atack mdf", "Cav attack mdf", "Inf charge mdf", "Cav charge mdf", "Inf defence mdf", "Cav defence mdf", "Inf morale mdf", "Cav morale mdf", "Inf discipline", "Cav discipline", "Inf training", "Cav training", "Inf fatigue mdf", "Cav fatigue mdf", "Shieldwall min class", "Hedgehog min class", "Warcry min class", "Tortoise min class", "Wedge min class", "Powercharge min class", "Formed-charge min class", "Fire-by-rank min class", "Cantabrian min class", "Secondary HP"],
   formations: ["Formation Type", "Hr Cl Spacing Mdf", "Vr Cl Spacing Mdf", "Hr Ls Spacing Mdf", "Vr ls Spacing Mdf", "Formation ranks", "Training", "Formation 1", "Formation 2", "scrub", "sand", "forest", "snow"],
-  weapons: ["Weapon Type", "Attack", "Charge", "Defence", "Range", "Ammo mdf", "AP", "(light_)spear", "spear_bonus", "short/long_pike", "ranged weapon type", "Allows shld-wall/trts", "Allows phalanx/hedgehog", "Allows inf/cav", "Max shield size", "Frightens", "wpn tech", "dmg type", "sound type", "firing sound type", "min delay", "lethality mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "Cost"],
-  projectiles: ["Projectile Type", "Attack", "Range", "Ammo", "AP", "BP", "thrown", "launch", "area", "incendiary", "wpn type", "wpn tech", "dmg type", "sound type", "min delay mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "Cost"],
+  weapons: ["Weapon Type", "Attack", "Charge", "Defence", "Range", "Ammo mdf", "AP", "(light_)spear", "spear_bonus", "short/long_pike", "ranged weapon type", "Allows shld-wall/trts", "Allows phalanx/hedgehog", "Allows inf/cav", "Max shield size", "Frightens", "wpn tech", "dmg type", "sound type", "firing sound type", "min delay", "lethality mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "scrub", "sand", "forest", "snow", "Cost", "Per-Weapon Cost"],
+  projectiles: ["Projectile Type", "Attack", "Range", "Ammo", "AP", "BP", "thrown", "launch", "area", "incendiary", "wpn type", "wpn tech", "dmg type", "sound type", "min delay mdf", "vs horse", "vs elephant", "vs chariot", "vs camel", "Cost", "Per-Projectile Cost"],
   armourAttributes: ["Attribute", "Head", "Face", "Shoulders", "Chest", "Up. Back", "Abdom.", "Low. Back", "Loins", "Up. Arm", "Low. Arm", "Hands", "Up. Leg", "Low. Leg", "Feet", "Total"],
   armourHead: ["Armour Type", "Head Coverage", "Face Coverage", "Cost"],
   armourTorso: ["Armour Type", "Shoulders Coverage", "Chest Coverage", "Up. Back Coverage", "Abdom. Coverage", "Low. Back Coverage", "Loins Coverage", "Up. Arm Coverage", "Low. Arm Coverage", "Up. Leg Coverage", "Cost"],

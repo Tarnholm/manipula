@@ -14,6 +14,13 @@
 //                        Morale factor: (1 − (1 − (0.25 + 0.55×morale×0.0833)) × FactorByCategory).
 //
 // v0.7.0 is chosen when the workbook has the new globals (CombatExp, AttackCostCoeff, …).
+//
+// Per-Weapon Cost / Per-Projectile Cost (Core Data → weapons / projectiles,
+// blank = 1) scale the part of the recruitment price that the unit's weapon
+// or projectile row adds. Linear terms are simply multiplied. In the
+// exponential branches a term's share is not separable, so it is measured:
+// share = price − price-with-that-term-zeroed, and the price drops by
+// (1 − multiplier) × share. All multipliers at 1 leave the price untouched.
 
 
 import { cint } from "./attack";
@@ -41,6 +48,16 @@ function isV070(globals) {
   return globals.CombatExp !== undefined &&
          globals.AttackCostCoeff !== undefined &&
          globals.DefenceCostCoeff !== undefined;
+}
+
+// ── Per-row price multipliers (Core Data, blank = 1) ────────────────
+
+function priceMults(r) {
+  return {
+    pri:  num(r.priWpn     && r.priWpn["Per-Weapon Cost"],         1),
+    sec:  num(r.secWpn     && r.secWpn["Per-Weapon Cost"],         1),
+    proj: num(r.projectile && r.projectile["Per-Projectile Cost"], 1),
+  };
 }
 
 // ── Shared weapon-expansion multipliers ─────────────────────────────
@@ -86,15 +103,15 @@ function engineProjExpansion(row, g) {
 
 // ── v2.6 legacy formula ────────────────────────────────────────────
 
-function v26WpnTerm(r, g) {
+function v26WpnTerm(r, g, m) {
   const priWpnCost = num(r.priWpn && r.priWpn["Cost"], 0);
   const projCost   = num(r.projectile && r.projectile["Cost"], 0);
   const secWpnCost = num(r.secWpn && r.secWpn["Cost"], 0);
   const priQualMdf = num(r.priWpnQual && r.priWpnQual["Cost mdf"], 1);
   const secQualMdf = num(r.secWpnQual && r.secWpnQual["Cost mdf"], 1);
-  return priWpnCost * priWpnExpansion(r, g) * priQualMdf
-       + projCost   * projectileExpansion(r, g)
-       + secWpnCost * secWpnExpansion(r, g) * secQualMdf;
+  return priWpnCost * priWpnExpansion(r, g) * priQualMdf * m.pri
+       + projCost   * projectileExpansion(r, g)            * m.proj
+       + secWpnCost * secWpnExpansion(r, g) * secQualMdf * m.sec;
 }
 function v26SpMountTerm(r, g) {
   if (!r.spMount) return 0;
@@ -135,7 +152,7 @@ function computeCostsV26(r, mr, project, unitSoldiers, unitExtras, unitPriArmour
   }
 
   const costPerMan = num(g.CostPerMan, 0);
-  const wpnT = v26WpnTerm(r, g);
+  const wpnT = v26WpnTerm(r, g, priceMults(r));
   const armCost0 = num(mr.armour && mr.armour.cost, 0);
   let price = 0;
   if (cat === "ship") price = num(r.ship && r.ship["Cost"], 0) * catCostMdf;
@@ -274,71 +291,85 @@ function computeCostsV070(r, out, mr, project, unitSoldiers, unitExtras, stats, 
     return 1 - (1 - (0.25 + 0.55 * uMorale * 0.0833)) * num(factorVal, 1);
   }
 
-  let sub = 0, moraleF = 1, finalize = true;
-
-  if (cat === "ship") {
-    sub = num(r.ship && r.ship["Cost"], 0) * catCostMdf;
-    finalize = false;           // no exponential transform for ships
-  } else if (cat === "foot" && priRange !== 0) {
-    sub = costPerMan + priRangedCost + avg(secAtkCost(infChgF), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
-    moraleF = moraleFactor(g.FootMoraleFactor);
-  } else if (cat === "foot" && priRange === 0 && uSecAtk !== 0) {
-    sub = costPerMan + avg(priMeleeAtkCost(infChgF), secAtkCost(infChgF), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
-    moraleF = moraleFactor(g.FootMoraleFactor);
-  } else if (cat === "foot" && priRange === 0) {
-    sub = costPerMan + avg(priMeleeAtkCost(infChgF), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
-    moraleF = moraleFactor(g.FootMoraleFactor);
-  } else if (cat === "foot missile") {
-    sub = costPerMan + pxMslRangedCost + avg(secAtkCost(infChgF * mmFrac), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
-    moraleF = moraleFactor(g.FootMissileMoraleFactor);
-  } else if (cat === "mounted" && priRange !== 0) {
-    sub = costPerMan + priRangedCost + avg(secAtkCost(cavChgF), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
-    moraleF = moraleFactor(g.CavMoraleFactor);
-  } else if (cat === "mounted" && priRange === 0 && uSecAtk !== 0) {
-    sub = costPerMan + avg(priMeleeAtkCost(cavChgF), secAtkCost(cavChgF), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
-    moraleF = moraleFactor(g.CavMoraleFactor);
-  } else if (cat === "mounted" && priRange === 0) {
-    sub = costPerMan + avg(priMeleeAtkCost(cavChgF), dcost);
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
-    moraleF = moraleFactor(g.CavMoraleFactor);
-  } else if (cat === "mounted missile") {
-    sub = costPerMan + mmMslRangedCost + 1.1 * avg(secAtkCost(cavChgF * mmFrac * 2), defCost(defCoeff, CE, uArm, armMdf * 2, uDef, uShd, shdMdf, avgDef));
-    sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
-    moraleF = moraleFactor(g.CavMissileMoraleFactor);
-  } else if (cat === "handler" || cat === "special" || cat === "chariot") {
-    // Linear branch — no exponential transform. Resembles v2.6.
-    const wpnT = v26WpnTerm(r, g);
-    let s = costPerMan + wpnT + (armMdf * uArm + shdMdf * uShd);
-    s *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf;
-    s *= unitSoldiers;
-    s += (r.spMount ? num(r.spMount["Cost"], 0) * spMountExpansion(r, g) : 0) * unitExtras;
-    out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * s);
-    finalize = false;
-  } else if (cat === "engine") {
-    const wpnT = v26WpnTerm(r, g);
-    let s = costPerMan + wpnT + (armMdf * uArm + shdMdf * uShd);
-    s *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf;
-    s *= unitSoldiers;
-    s += v26EngineProjTerm(r, g) * unitExtras;
-    out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * s);
-    finalize = false;
-  }
-
-  if (finalize && cat !== "ship") {
+  // Exponential-branch price for per-term scales k (1 = full term, 0 = term
+  // removed): rng = ranged attack, pri = primary melee attack, sec =
+  // secondary attack. Unrounded. Categories with no branch here price at 0.
+  function expPrice(k) {
+    let sub = 0, moraleF = 1;
+    if (cat === "foot" && priRange !== 0) {
+      sub = costPerMan + k.rng * priRangedCost + avg(k.sec * secAtkCost(infChgF), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
+      moraleF = moraleFactor(g.FootMoraleFactor);
+    } else if (cat === "foot" && priRange === 0 && uSecAtk !== 0) {
+      sub = costPerMan + avg(k.pri * priMeleeAtkCost(infChgF), k.sec * secAtkCost(infChgF), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
+      moraleF = moraleFactor(g.FootMoraleFactor);
+    } else if (cat === "foot" && priRange === 0) {
+      sub = costPerMan + avg(k.pri * priMeleeAtkCost(infChgF), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
+      moraleF = moraleFactor(g.FootMoraleFactor);
+    } else if (cat === "foot missile") {
+      sub = costPerMan + k.rng * pxMslRangedCost + avg(k.sec * secAtkCost(infChgF * mmFrac), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultInfRecr;
+      moraleF = moraleFactor(g.FootMissileMoraleFactor);
+    } else if (cat === "mounted" && priRange !== 0) {
+      sub = costPerMan + k.rng * priRangedCost + avg(k.sec * secAtkCost(cavChgF), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
+      moraleF = moraleFactor(g.CavMoraleFactor);
+    } else if (cat === "mounted" && priRange === 0 && uSecAtk !== 0) {
+      sub = costPerMan + avg(k.pri * priMeleeAtkCost(cavChgF), k.sec * secAtkCost(cavChgF), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
+      moraleF = moraleFactor(g.CavMoraleFactor);
+    } else if (cat === "mounted" && priRange === 0) {
+      sub = costPerMan + avg(k.pri * priMeleeAtkCost(cavChgF), dcost);
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
+      moraleF = moraleFactor(g.CavMoraleFactor);
+    } else if (cat === "mounted missile") {
+      sub = costPerMan + k.rng * mmMslRangedCost + 1.1 * avg(k.sec * secAtkCost(cavChgF * mmFrac * 2), defCost(defCoeff, CE, uArm, armMdf * 2, uDef, uShd, shdMdf, avgDef));
+      sub *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf * cultCavRecr;
+      moraleF = moraleFactor(g.CavMissileMoraleFactor);
+    }
     sub *= moraleF;
     // Case 183: base^UnitCostExponential × UnitCostModifier. Adjustable via
     // Mod Info → Globals; defaults reproduce the old hardcoded 0.8 / 1.98.
     sub = Math.pow(Math.max(sub, 0), num(g.UnitCostExponential, 0.8)) * num(g.UnitCostModifier, 1.98);
     sub *= uHP * unitSoldiers;
+    return num(g.GlobalRecrCostMdf, 1) * sub;
+  }
+
+  const m = priceMults(r);
+  if (cat === "ship") {
+    // No exponential transform for ships.
+    const sub = num(r.ship && r.ship["Cost"], 0) * catCostMdf;
     out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * sub);
-  } else if (cat === "ship") {
-    out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * sub);
+  } else if (cat === "handler" || cat === "special" || cat === "chariot") {
+    // Linear branch — no exponential transform. Resembles v2.6.
+    const wpnT = v26WpnTerm(r, g, m);
+    let s = costPerMan + wpnT + (armMdf * uArm + shdMdf * uShd);
+    s *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf;
+    s *= unitSoldiers;
+    s += (r.spMount ? num(r.spMount["Cost"], 0) * spMountExpansion(r, g) : 0) * unitExtras;
+    out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * s);
+  } else if (cat === "engine") {
+    const wpnT = v26WpnTerm(r, g, m);
+    let s = costPerMan + wpnT + (armMdf * uArm + shdMdf * uShd);
+    s *= recrCostMdf * qualCostMdf * catCostMdf * specCostMdf;
+    s *= unitSoldiers;
+    s += v26EngineProjTerm(r, g) * unitExtras;
+    out["price"] = Math.round(num(g.GlobalRecrCostMdf, 1) * s);
+  } else {
+    const all = { rng: 1, pri: 1, sec: 1 };
+    const full = expPrice(all);
+    // The ranged term comes from both the primary (ranged) weapon and the
+    // projectile, so it takes both multipliers.
+    const mults = { rng: m.pri * m.proj, pri: m.pri, sec: m.sec };
+    let price = full;
+    for (const key of Object.keys(mults)) {
+      if (mults[key] === 1) continue;
+      const share = full - expPrice({ ...all, [key]: 0 });
+      price -= (1 - mults[key]) * share;
+    }
+    out["price"] = Math.round(Math.max(price, 0));
   }
 
   // ── upkeep ─────────────────────────────────────────────────

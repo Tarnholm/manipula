@@ -3,6 +3,10 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.42.0", notes: [
+    "Core Data → Weapons: new \"Per-Weapon Cost\" column (default 1). It multiplies the part of a unit's recruitment price that the weapon adds: 0.8 on a weapon whose share of the price is 100 makes that share 80. It works for both primary and secondary weapons. For missile units it scales the ranged part of the price, which the ranged weapon and the projectile share.",
+    "Core Data → Projectiles: new \"Per-Projectile Cost\" column (default 1), the same for projectiles. For example, Stone bullet at 0.8 takes 20% off the ranged part of every slinger's price. Upkeep and custom-battle cost follow the price. The existing \"Cost\" columns are unchanged and still feed elephant/chariot/engine prices and weapon upgrade cost.",
+  ] },
   { version: "0.41.0", notes: [
     "Core Data → Weapons: the vs horse / vs elephant / vs chariot / vs camel values now go into mount_effect exactly as typed. Previously they were scaled by MeleeFraction whenever the unit had a secondary weapon — a secondary weapon's value was multiplied by 0.25, so you had to type 12 to get +3. Now 3 gives +3, added on top of the specialty, dwelling, mount and special-mount values as before.",
     "New MeleeFractionImpactingTerrainEffect global (Mod Info → Globals). Set it to 0 and the terrain bonuses (scrub / sand / forest / snow) of a unit with a secondary weapon stop being blended by MeleeFraction: both weapons' values count in full, so a secondary spear's −4 forest is −4, not −1. Blank / 1 = on, the previous behaviour.",
