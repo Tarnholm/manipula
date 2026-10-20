@@ -1863,32 +1863,20 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
     if (window.toast) window.toast(`Auto-linked ${linked} variant${linked === 1 ? "" : "s"} to their base unit.`, "ok", 3500);
   }, [project, setProject]);
 
-  // One-click: write each unit's "rec priority" = its Quality class
-  // "Recruitment Priority", cleaning up stale per-unit values (the EDU
-  // output already derives from the class; this just makes the column match
-  // so it isn't misleading). Only touches units whose class defines a value.
-  const syncRecPriorityFromQuality = useCallback(() => {
-    const qc = (project.coreData && project.coreData.qualityClasses) || [];
-    const prioByClass = new Map();
-    for (const row of qc) {
-      if (!row) continue;
-      const key = String(row["Quality Class"] ?? "").trim().toLowerCase();
-      const p = row["Recruitment Priority"];
-      if (key && p != null && p !== "") prioByClass.set(key, p);
-    }
+  // One-click: blank every unit's "rec priority". A filled cell overrides
+  // the Quality class "Recruitment Priority" in the EDU, so this puts every
+  // unit back on its class value. Undoable like any other edit.
+  const clearRecPriority = useCallback(() => {
     let changed = 0;
     const nextUnits = project.units.map((u) => {
       if (!u || u.kind !== "unit") return u;
-      const cls = String(u.Quality ?? "").trim().toLowerCase();
-      if (!cls || !prioByClass.has(cls)) return u;
-      const p = prioByClass.get(cls);
-      if (String(u["rec priority"] ?? "") === String(p)) return u;
+      if (String(u["rec priority"] ?? "").trim() === "") return u;
       changed++;
-      return { ...u, "rec priority": p };
+      return { ...u, "rec priority": "" };
     });
     if (changed > 0) setProject({ ...project, units: nextUnits });
     if (window.toast) window.toast(
-      changed ? `Synced "rec priority" on ${changed} unit${changed === 1 ? "" : "s"} from their Quality class.` : "All units already match their Quality class — nothing to sync.",
+      changed ? `Cleared "rec priority" on ${changed} unit${changed === 1 ? "" : "s"} — they now use their Quality class.` : "No unit has a \"rec priority\" value — nothing to clear.",
       changed ? "ok" : "info", 3000);
   }, [project, setProject]);
 
@@ -2344,9 +2332,9 @@ function UnitsScreen({ project: rawProject, setProject, modDataDir, recruitUnits
         >↪ Auto-link AOR variants</button>
         <button
           className="btn"
-          onClick={syncRecPriorityFromQuality}
-          title="Write each unit's 'rec priority' = its Quality class 'Recruitment Priority', cleaning up stale per-unit values so the column matches the EDU output."
-        >⟳ Sync rec priority from Quality</button>
+          onClick={clearRecPriority}
+          title="Blank every unit's 'rec priority'. A filled 'rec priority' overrides the Quality class 'Recruitment Priority'; cleared units go back to their class value."
+        >✕ Clear rec priority</button>
         <button
           className={`btn${showComputed ? " btn-accent" : ""}`}
           onClick={() => setShowComputed((v) => !v)}

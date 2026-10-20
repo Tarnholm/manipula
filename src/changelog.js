@@ -3,6 +3,10 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.43.0", notes: [
+    "EDU Builder → Units: a value in a unit's \"rec priority\" column now becomes its recruit_priority_offset, overriding the Quality class \"Recruitment Priority\" (Core Data → Quality Classes). A blank cell still uses the class value, so units with nothing entered are unchanged. AoR and Merc entries still use aor_default_rec_priority.",
+    "The \"Sync rec priority from Quality\" button is replaced by \"Clear rec priority\", which blanks the column on every unit so they all go back to their class value (undoable). The warning about a unit's rec priority differing from its class is gone, since a different value is now an intentional override.",
+  ] },
   { version: "0.42.0", notes: [
     "Core Data → Weapons: new \"Per-Weapon Cost\" column (default 1). It multiplies the part of a unit's recruitment price that the weapon adds: 0.8 on a weapon whose share of the price is 100 makes that share 80. It works for both primary and secondary weapons. For missile units it scales the ranged part of the price, which the ranged weapon and the projectile share.",
     "Core Data → Projectiles: new \"Per-Projectile Cost\" column (default 1), the same for projectiles. For example, Stone bullet at 0.8 takes 20% off the ranged part of every slinger's price. Upkeep and custom-battle cost follow the price. The existing \"Cost\" columns are unchanged and still feed elephant/chariot/engine prices and weapon upgrade cost.",

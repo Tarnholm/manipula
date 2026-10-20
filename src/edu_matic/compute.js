@@ -425,14 +425,14 @@ function writeRecruitPriority(out, unit, r, entryType, globals) {
   if ((entryType === "AoR" || entryType === "Merc") && globals) {
     v = toNum(globals["aor_default_rec_priority"] ?? globals["AorRecrPriority"]);
   } else {
-    // Factional priority is driven by the unit's Quality class
-    // "Recruitment Priority" so every unit of a class shares it (e.g. all
-    // "02. levy slinger" units → 215), mirroring the xlsm's VLOOKUP. The
-    // per-unit "rec priority" field is only a fallback for classes that
-    // don't define a Recruitment Priority — it no longer lets a stale /
-    // mismatched per-unit value override the class.
-    const fromClass = toNum(r && r.qual && r.qual["Recruitment Priority"]);
-    v = fromClass != null ? fromClass : toNum(unit["rec priority"]);
+    // A value in the unit's own "rec priority" column wins. Blank falls
+    // back to its Quality class "Recruitment Priority", so every unit of a
+    // class shares it (e.g. all "02. levy slinger" units → 215) unless one
+    // is deliberately set apart. A whitespace-only cell counts as blank —
+    // Number("  ") is 0, which would silently become a 0 offset.
+    const raw = unit["rec priority"];
+    const own = typeof raw === "string" && raw.trim() === "" ? null : toNum(raw);
+    v = own != null ? own : toNum(r && r.qual && r.qual["Recruitment Priority"]);
   }
   if (v != null) out["recruit_priority_offset"] = v;
 }
