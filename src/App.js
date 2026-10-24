@@ -3676,6 +3676,23 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
   const dirty = status && status.isRepo && status.dirtyCount > 0;
   const ahead = status && status.ahead;
   const behind = status && status.behind;
+  // Detached HEAD: plain push / pull fail with "not currently on a branch".
+  // Route every sync action through git-reattach instead, then reload the
+  // project — the reattach rebases onto the remote, so teammates' newer
+  // commits land on disk and the in-memory state must follow.
+  const detached = !!(status && status.isRepo && status.detached);
+  const reattach = async (push) => {
+    const r = await api.gitReattach(projectDir, { push });
+    if (r && r.ok && onReloadFromDisk) await onReloadFromDisk();
+    return r;
+  };
+  const pushOrReattach = () => (detached && api.gitReattach) ? reattach(true) : api.gitPush(projectDir);
+  // Same guard as Pull: the post-repair reload re-reads the project from
+  // disk and would drop edits that were never Saved.
+  const confirmReattachReload = () => !(detached && projectDirty) || window.confirm(
+    `You have unsaved project changes. Repairing the sync reloads the project from disk and discards those edits.\n\n` +
+    `Save Project first (Ctrl+S) if you want to keep them. Continue anyway?`
+  );
   const indicator = !status?.isRepo ? "no-git"
     : dirty ? "dirty"
     : (ahead && ahead > 0) ? "ahead"
@@ -3761,6 +3778,19 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                   {status.branch}
                   {status.upstream ? <span style={{ color: "#555", fontWeight: 400 }}> → <span style={{ color: "#888" }}>{status.upstream}</span></span> : <span style={{ color: "#666", fontWeight: 400 }}> · no upstream</span>}
                 </div>
+                {detached && (
+                  <div style={{ marginTop: 6, padding: "6px 8px", background: "rgba(214,108,108,0.10)", border: "1px solid rgba(214,108,108,0.4)", borderRadius: 4, fontSize: 11, color: "#e88", lineHeight: 1.4 }}>
+                    <div>⚠ Not on a branch{status.rebasing ? " (an interrupted pull left a rebase half-done)" : ""} — your commits can't reach GitHub as they are.</div>
+                    <div style={{ color: "#bbb", marginTop: 3 }}>Commit + Push repairs this automatically: it moves your work back onto <b>{(status.remoteBranch || "origin/main").replace(/^origin\//, "")}</b> on top of teammates' newer commits, then pushes. Nothing is discarded.</div>
+                    {!dirty && api.gitReattach && (
+                      <button
+                        disabled={busy}
+                        onClick={() => { if (confirmReattachReload()) run("Repair + push", () => reattach(true)); }}
+                        style={{ marginTop: 6, background: "#d66c6c", color: "#1a1a1a", border: "none", padding: "2px 8px", borderRadius: 3, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                      >Repair + push</button>
+                    )}
+                  </div>
+                )}
                 <div style={{ color: "#888", fontSize: 11, marginTop: 4, display: "flex", gap: 10 }}>
                   <span style={{ color: dirty ? "#d66c6c" : "#666" }}>● {status.dirtyCount} dirty</span>
                   <span style={{ color: (ahead || 0) > 0 ? "#dca64a" : "#666" }}>↑ {ahead ?? 0} ahead</span>
@@ -3876,7 +3906,9 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                       );
                       if (!ok) return;
                     }
-                    const r = await run("Pull", () => api.gitPull(projectDir));
+                    const r = await run("Pull", () => (detached && api.gitReattach)
+                      ? api.gitReattach(projectDir, { push: false })
+                      : api.gitPull(projectDir));
                     // The root cause of "I pulled but didn't see his
                     // changes" — git pull updates JSONs on disk but
                     // Manipula's in-memory state stays stale. Re-read the
@@ -3926,6 +3958,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                       );
                       if (!ok) return;
                     }
+                    if (!confirmReattachReload()) return;
                     setCommitPrompt("Manipula update");
                   }}
                   style={syncBtn("#7c9", dirty)}
@@ -3953,7 +3986,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                           await run("Commit + push", async () => {
                             const c = await api.gitCommitAll(projectDir, msg);
                             if (!c.ok) return c;
-                            const p = await api.gitPush(projectDir);
+                            const p = await pushOrReattach();
                             if (p.ok && webhookUrl) {
                               // Fire-and-forget Discord-style POST. Failures
                               // are non-fatal and we don't surface them in
@@ -3986,7 +4019,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                           await run("Commit + push", async () => {
                             const c = await api.gitCommitAll(projectDir, msg);
                             if (!c.ok) return c;
-                            const p = await api.gitPush(projectDir);
+                            const p = await pushOrReattach();
                             if (p.ok && webhookUrl) {
                               // Fire-and-forget Discord-style POST. Failures
                               // are non-fatal and we don't surface them in
@@ -4010,7 +4043,7 @@ function SyncButton({ projectDir, saveTick = 0, validationErrors = [], onViewVal
                 )}
                 <button
                   disabled={busy || (ahead || 0) === 0}
-                  onClick={() => run("Push", () => api.gitPush(projectDir))}
+                  onClick={() => { if (confirmReattachReload()) run("Push", pushOrReattach); }}
                   style={syncBtn("#465", (ahead || 0) > 0)}
                   title="git push (no commit)"
                 >

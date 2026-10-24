@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld("eduAPI", {
   gitStatus: (dir) => ipcRenderer.invoke("git-status", dir),
   gitPull: (dir) => ipcRenderer.invoke("git-pull", dir),
   gitPush: (dir) => ipcRenderer.invoke("git-push", dir),
+  gitReattach: (dir, opts) => ipcRenderer.invoke("git-reattach", dir, opts),
   gitFetch: (dir) => ipcRenderer.invoke("git-fetch", dir),
   gitDiscardAndPull: (dir) => ipcRenderer.invoke("git-discard-and-pull", dir),
   checkModPaths: (relPaths) => ipcRenderer.invoke("check-mod-paths", relPaths),

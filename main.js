@@ -1698,9 +1698,16 @@ ipcMain.handle("git-status", async (_e, dir) => {
   const porcelain = await runGit(dir, ["status", "--porcelain"]);
   // ahead/behind requires upstream to exist. If not, those are null.
   const upstream = await runGit(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  // Detached HEAD (rev-parse prints the literal "HEAD") has no upstream, so
+  // without this every "remote is ahead, pull first" guard went silent and
+  // Commit + Push failed with "You are not currently on a branch". Count
+  // against the remote default branch instead so the guards keep working.
+  const detached = branch.ok && branch.stdout.trim() === "HEAD";
+  const rebasing = await isRebaseInProgress(dir);
+  const compareRef = upstream.ok ? "@{u}" : (detached ? await defaultRemoteBranch(dir) : null);
   let ahead = null, behind = null;
-  if (upstream.ok) {
-    const counts = await runGit(dir, ["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
+  if (compareRef) {
+    const counts = await runGit(dir, ["rev-list", "--left-right", "--count", `HEAD...${compareRef}`]);
     if (counts.ok) {
       const m = counts.stdout.trim().split(/\s+/).map(n => parseInt(n, 10));
       if (m.length === 2 && m.every(Number.isFinite)) { ahead = m[0]; behind = m[1]; }
@@ -1712,10 +1719,32 @@ ipcMain.handle("git-status", async (_e, dir) => {
     isRepo: true,
     branch: branch.stdout.trim(),
     upstream: upstream.ok ? upstream.stdout.trim() : null,
+    detached, rebasing,
+    remoteBranch: detached ? compareRef : null,
     dirtyCount: dirtyLines.length,
     ahead, behind,
   };
 });
+
+// "origin/main" (or whatever origin/HEAD points at). Falls back to probing
+// origin/main then origin/master for clones whose origin/HEAD was never set.
+async function defaultRemoteBranch(dir) {
+  const sym = await runGit(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  if (sym.ok && sym.stdout.trim()) return sym.stdout.trim();
+  for (const ref of ["origin/main", "origin/master"]) {
+    const r = await runGit(dir, ["rev-parse", "--verify", "--quiet", ref]);
+    if (r.ok) return ref;
+  }
+  return null;
+}
+
+async function isRebaseInProgress(dir) {
+  for (const name of ["rebase-merge", "rebase-apply"]) {
+    const r = await runGit(dir, ["rev-parse", "--git-path", name]);
+    if (r.ok && fs.existsSync(path.resolve(dir, r.stdout.trim()))) return true;
+  }
+  return false;
+}
 
 // git-pull — rebase strategy. Manipula's per-file JSON layout makes
 // rebase succeed silently in the >99% case: different files don't
@@ -1739,6 +1768,77 @@ ipcMain.handle("git-pull", async (_e, dir) => {
   return r;
 });
 ipcMain.handle("git-push", async (_e, dir) => runGit(dir, ["push"]));
+// git-reattach — get a detached HEAD (usually a pull --rebase that was cut
+// off when Manipula closed mid-pull) back onto the default branch without
+// losing anything, then optionally push. Sequence:
+//   1. quit any half-finished rebase, keeping HEAD and the working tree
+//   2. pin HEAD to a local manipula-rescue-* branch if it has unpushed commits
+//   3. back up the local branch if it holds commits HEAD doesn't
+//   4. checkout -B <branch> at HEAD (no working-tree change), track origin
+//   5. pull --rebase --autostash to replay local commits onto the remote
+//   6. on conflict: abort, push HEAD to rescue/<stamp> on origin so a
+//      teammate can merge it, and report
+// Used by Commit + Push / Push only / Pull whenever git-status says detached.
+ipcMain.handle("git-reattach", async (_e, dir, opts = {}) => {
+  const out = [];
+  const step = async (args) => {
+    const r = await runGit(dir, args);
+    out.push(`$ git ${args.join(" ")}` + (r.stdout.trim() ? "\n" + r.stdout.trim() : "") + (r.stderr.trim() ? "\n" + r.stderr.trim() : ""));
+    return r;
+  };
+  const done = (ok, extra = "") => ({ ok, code: ok ? 0 : 1, stdout: out.join("\n"), stderr: extra });
+
+  await step(["fetch", "--quiet", "origin"]);
+  const remote = await defaultRemoteBranch(dir);
+  if (!remote) return done(false, "Couldn't find origin/main — is the remote set up?");
+  const local = remote.replace(/^origin\//, "");
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+
+  if (await isRebaseInProgress(dir)) {
+    const q = await step(["rebase", "--quit"]);
+    if (!q.ok) return done(false, "A half-finished rebase is blocking the repo and `git rebase --quit` failed.");
+  }
+
+  const unpushed = await runGit(dir, ["rev-list", "--count", "HEAD", `^${remote}`]);
+  if (unpushed.ok && parseInt(unpushed.stdout, 10) > 0) {
+    await step(["branch", "-f", `manipula-rescue-${stamp}`, "HEAD"]);
+  }
+  const localExists = (await runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${local}`])).ok;
+  if (localExists) {
+    const orphan = await runGit(dir, ["rev-list", "--count", local, "^HEAD", `^${remote}`]);
+    if (orphan.ok && parseInt(orphan.stdout, 10) > 0) {
+      await step(["branch", "-f", `manipula-rescue-${stamp}-${local}`, local]);
+    }
+  }
+
+  const co = await step(["checkout", "-B", local]);
+  if (!co.ok) return done(false, `Couldn't switch back to ${local}.`);
+  await step(["branch", `--set-upstream-to=${remote}`, local]);
+
+  const pull = await step(["pull", "--rebase", "--autostash"]);
+  if (!pull.ok) {
+    // Not a conflict (offline, auth, ...): the repo is already back on the
+    // branch, so a later plain Pull / Push will work once git can connect.
+    if (!(await isRebaseInProgress(dir))) {
+      return done(false, `Back on ${local}, but the pull failed — see the log. Nothing was lost; try Pull again.`);
+    }
+    await step(["rebase", "--abort"]);
+    const rescueRef = `rescue/${stamp}`;
+    const pr = await step(["push", "origin", `HEAD:refs/heads/${rescueRef}`]);
+    return done(false, pr.ok
+      ? `Your commits clash with a teammate's newer ones. They are safe on GitHub as branch "${rescueRef}" — ask a teammate to merge it, and don't Discard.`
+      : `Your commits clash with a teammate's newer ones and couldn't be uploaded. They are safe locally on branch "manipula-rescue-${stamp}" — don't Discard.`);
+  }
+
+  if (opts.push) {
+    const ahead = await runGit(dir, ["rev-list", "--count", `${remote}..HEAD`]);
+    if (ahead.ok && parseInt(ahead.stdout, 10) > 0) {
+      const p = await step(["push", "-u", "origin", local]);
+      if (!p.ok) return done(false, "Re-attached, but the push failed.");
+    }
+  }
+  return done(true);
+});
 // Destructive escape hatch — wipe every local change (tracked + untracked)
 // then pull. Used by the Sync popover's "Discard local + pull" button when
 // the user is stuck with unstageable changes that block the rebase pull

@@ -3,6 +3,11 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.44.0", notes: [
+    "Sync: if the project folder ends up \"not on a branch\" (shown as HEAD · no upstream — usually a Pull that was cut off when Manipula closed), Commit + Push no longer fails with \"You are not currently on a branch\". It moves your commits back onto main on top of teammates' newer commits, pushes, and reloads the project. A red banner in the Sync panel explains the state and has a Repair + push button.",
+    "If your commits clash with a teammate's newer ones, nothing is lost: they are uploaded to GitHub as a rescue/… branch for a teammate to merge, and kept locally as a manipula-rescue-… branch.",
+    "While not on a branch, the \"remote has commits you haven't pulled\" warnings now work again (they were silently skipped before).",
+  ] },
   { version: "0.43.0", notes: [
     "EDU Builder → Units: a value in a unit's \"rec priority\" column now becomes its recruit_priority_offset, overriding the Quality class \"Recruitment Priority\" (Core Data → Quality Classes). A blank cell still uses the class value, so units with nothing entered are unchanged. AoR and Merc entries still use aor_default_rec_priority.",
     "The \"Sync rec priority from Quality\" button is replaced by \"Clear rec priority\", which blanks the column on every unit so they all go back to their class value (undoable). The warning about a unit's rec priority differing from its class is gone, since a different value is now an intentional override.",
