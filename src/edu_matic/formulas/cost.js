@@ -24,6 +24,7 @@
 
 
 import { cint } from "./attack";
+import { globalFlagOn } from "./attributes";
 
 function num(v, dflt) {
   if (v === null || v === undefined || v === "") return dflt;
@@ -487,7 +488,27 @@ function computeCosts(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, s
     out["price"] = cint(1.5 * out["price"]);
   }
 
+  // RoundedUnitCosts (Mod Info → Globals, 1 / Y): every denarii figure on
+  // stat_cost goes to the nearest 10, a tie (735) upwards. Applied last, so
+  // upkeep / upgrades / cb still derive from the unrounded price and each
+  // number is the toggle-off number rounded. Turns and the M2 "cb unit lim"
+  // (a unit count) are not money and stay as they are.
+  if (globalFlagOn(g.RoundedUnitCosts)) {
+    for (const col of ROUNDED_COST_COLS) {
+      if (out[col] != null) out[col] = roundToTen(out[col]);
+    }
+  }
+
   return out;
 }
 
-export { computeCosts };
+const ROUNDED_COST_COLS = ["price", "upkeep", "wpn upg", "arm upg", "cb cost", "cb cost pen"];
+
+/** Nearest 10, halves away from zero (735 → 740, 734 → 730). */
+function roundToTen(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return v;
+  return Math.sign(n) * Math.floor(Math.abs(n) / 10 + 0.5) * 10;
+}
+
+export { computeCosts, roundToTen };

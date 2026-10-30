@@ -68,6 +68,12 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   // and loses him. 0 / blank = off, the previous behaviour. Consumed in
   // formulas/misc.js computeFormation2.
   DisableGeneralWedge: 0,
+  // Rounded Unit Costs: with RoundedUnitCosts on (1 or Y), every denarii
+  // figure on stat_cost (price, upkeep, upgrades, custom battle) is rounded
+  // to the nearest 10, an exact 5 upwards (743 → 740, 735 → 740).
+  // Recruitment turns are untouched. 0 / blank = off. Consumed at the end of
+  // formulas/cost.js computeCosts.
+  RoundedUnitCosts: 0,
   // Terrain bonuses (scrub / sand / forest / snow) of a unit with a secondary
   // weapon blend the two weapons by MeleeFraction. Set this to 0 to switch
   // that off — both weapons then add 1:1. 1 / blank = on, the VBA result.
