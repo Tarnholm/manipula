@@ -18,6 +18,7 @@ import { compute } from "./compute";
 import { formatEdu } from "./format";
 import { formatMerc, parseDescrMercenaries, refreshRegionsFromFile } from "./merc";
 import { cleanFactionList, factionOrderFromGlobals } from "./factionOrder";
+import { SPECIALTY_ABILITIES } from "./formulas/attributes";
 import DataTable from "./components/DataTable";
 
 // Natural-sort comparator — sorts "Faction1, Faction2, ... Faction10" the
@@ -60,6 +61,13 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   // the previous behaviour. Consumed in formulas/attributes.js (attribute)
   // and compute.js (the men override).
   ShipNonScaling: 0,
+  // Disable General Wedge: with DisableGeneralWedge on (1 or Y), a general's
+  // unit never gets the wedge formation from the culture's "Wedge min class"
+  // or the Formations table — only a specialty with "wedge" in a special
+  // ability slot gives it one. The AI wedges its general into the enemy line
+  // and loses him. 0 / blank = off, the previous behaviour. Consumed in
+  // formulas/misc.js computeFormation2.
+  DisableGeneralWedge: 0,
   // Terrain bonuses (scrub / sand / forest / snow) of a unit with a secondary
   // weapon blend the two weapons by MeleeFraction. Set this to 0 to switch
   // that off — both weapons then add 1:1. 1 / blank = on, the VBA result.
@@ -1073,16 +1081,17 @@ function CoreDataScreen({ project, setProject }) {
   // Per-table column edit metadata. Currently used to swap the free-text
   // editor for a dropdown on a handful of well-known enum columns —
   // most importantly the specialties table's three "special ability"
-  // slots, which only accept a fixed set of RTW attribute keywords.
-  // Options are derived from the values already present in the column
-  // so user-added attributes appear in the picker next time.
+  // slots, which only accept a fixed set of keywords: every ability the
+  // formulas understand (formulas/attributes.js SPECIALTY_ABILITIES —
+  // attributes, the special-ability button, formation overrides,
+  // not_hardy), plus any other value already present in the column.
   const coreDataColumnMeta = useMemo(() => {
     const meta = {};
     const t = tables[active];
     if (!Array.isArray(t) || t.length === 0) return meta;
     if (active === "specialties") {
       const SA_COLS = ["special ability", "special ability 2", "special ability 3"];
-      const seen = new Set();
+      const seen = new Set(SPECIALTY_ABILITIES);
       for (const row of t) {
         for (const c of SA_COLS) {
           const v = row && row[c];

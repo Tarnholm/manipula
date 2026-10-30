@@ -241,6 +241,7 @@ a 17-armour unit too.
 | Global | | What it does |
 |---|---|---|
 | `CavBGSkirmish` | ✔ **[Manipula]** | Non-zero makes general / cavalry-bodyguard units emit `class skirmish` instead of `light` / `missile`. Blank → 0 (the prior behaviour). |
+| `DisableGeneralWedge` | ✔ **[Manipula]** | `1` or `Y`: a general's unit (the entry carrying `general_unit`) never gets `wedge` as formation2 from the culture's *Wedge min class* or the Formations table. A specialty with `wedge` in a special ability slot still gives it one. Blank / `0` → off (the prior behaviour). |
 | `aor_default_rec_priority` | ✔ | The `recruit_priority_offset` written on AoR and Merc entries (RIS uses −100 to push them below factional units). Also accepted under the old name `AorRecrPriority`. |
 
 ## 12. M2TW-only

@@ -6,6 +6,8 @@
 // gunmen_cav/xbow/pike/..., etc.); we write under those exact labels.
 
 
+import { precursorOn } from "./weaponAttrs";
+
 function str(v) { return v == null ? "" : String(v); }
 function num(v, dflt) {
   if (v === null || v === undefined || v === "") return dflt;
@@ -45,6 +47,43 @@ function specHasAbility(spec, ability) {
     if (str(v).trim().toLowerCase() === ability) return true;
   }
   return false;
+}
+
+/** Every value the Core Data → Specialties "special ability" slots
+ *  understand (the editor's dropdown). The first group predates the
+ *  override set and keeps its old, conditional meaning (can_swim forces
+ *  swimming; very_hardy / extremely_hardy step up from the culture's
+ *  fatigue; berserker / peasant / hide_anywhere feed their attribute
+ *  rules). Everything in SPECIALTY_OVERRIDES is a straight override: the
+ *  unit gets exactly that, whatever its category, quality or culture
+ *  would otherwise give it — and not_hardy strips any hardy level. */
+const SPECIALTY_OVERRIDES = [
+  "screeching_women", "druid", "warcry", "cantabrian_circle", "power_charge",
+  "wedge", "schiltrom", "shield_wall", "testudo", "phalanx",
+  "hide_long_grass", "hide_improved_forest", "command", "hardy", "not_hardy",
+];
+const SPECIALTY_ABILITIES = [
+  "berserker", "can_sap", "can_swim", "extremely_hardy", "frighten_foot",
+  "frighten_mounted", "hide_anywhere", "peasant", "very_hardy",
+  ...SPECIALTY_OVERRIDES,
+].sort();
+
+/** The unit's single "special ability" button. The DATA sheet keeps all of
+ *  these in one slot (cant_circle/warcry/druid), so a unit carries one. */
+const SPECIAL_BUTTON_ABILITIES = ["screeching_women", "druid", "warcry", "cantabrian_circle"];
+/** Formation-2 overrides, read by formulas/misc.js computeFormation2. */
+const FORMATION_ABILITIES = ["wedge", "schiltrom", "shield_wall", "testudo", "phalanx"];
+
+/** First of `candidates` named in the specialty's ability slots, in slot
+ *  order (a merged Specialty 1 + 2 row lists Specialty 2's first), or "". */
+function specFirstAbility(spec, candidates) {
+  if (!spec) return "";
+  for (const [k, v] of Object.entries(spec)) {
+    if (!/^special ability(\s+\d+)?$/i.test(k)) continue;
+    const a = str(v).trim().toLowerCase();
+    if (candidates.includes(a)) return a;
+  }
+  return "";
 }
 
 /**
@@ -119,6 +158,8 @@ function computeAttributes(r, mr, project) {
   } else if ((cat === "special" || cat === "engine") && catAllowHide) {
     hideVal = "hide_forest";
   }
+  // Specialty override: hide_improved_forest regardless of category/mass.
+  if (specHasAbility(spec, "hide_improved_forest")) hideVal = "hide_improved_forest";
   if (hideVal) out["hide_forest(3)"] = hideVal;
 
   // Case 45 hide_long_grass (VBA L8970). Dwelling/specialty ability
@@ -140,6 +181,8 @@ function computeAttributes(r, mr, project) {
           (!light && dwelOrSpec("hide_anywhere"))) hideLG = "hide_long_grass";
     }
   }
+  // Specialty override: hide_long_grass regardless of category/mass.
+  if (specHasAbility(spec, "hide_long_grass")) hideLG = "hide_long_grass";
   if (hideLG) out["hide_l_grass"] = hideLG;
 
   // Case 46 can_sap
@@ -184,14 +227,24 @@ function computeAttributes(r, mr, project) {
   // Case 50 general_unit / general_unit_upgrade
   if (isGeneralUnit) out["gen_unit"] = isGeneralUnit;
 
-  // Case 51 cantabrian_circle / warcry / druid
+  // Case 51 cantabrian_circle / warcry / druid / screeching_women
+  //  A specialty naming one of them sets it outright (override). Otherwise:
+  //  warcry for foot at the culture's "Warcry min class" (or berserkers),
+  //  and cantabrian_circle for cavalry (mounted / mounted missile) whose
+  //  missiles are not precursors, at the culture's "Cantabrian min class".
+  //  Was: every "Mounted Missile" unit at that class — a horse-javelin unit
+  //  that throws before charging (prec) shouldn't circle, and a "Mounted"
+  //  unit with a no-precursor specialty should.
   const warcryMin = r.cult && r.cult["Warcry min class"];
   const cantMin   = r.cult && r.cult["Cantabrian min class"];
-  if (cat === "foot" && specHasAbility(spec, "druid")) {
-    out["cant_circle/warcry/druid"] = "druid";
+  const priRangeA = num(r.priWpn && r.priWpn["Range"], 0);
+  const specButton = specFirstAbility(spec, SPECIAL_BUTTON_ABILITIES);
+  if (specButton) {
+    out["cant_circle/warcry/druid"] = specButton;
   } else if (cat === "foot" && (qualMeets(qualName, warcryMin) || specHasAbility(spec, "berserker"))) {
     out["cant_circle/warcry/druid"] = "warcry";
-  } else if (cat === "mounted missile" && qualMeets(qualName, cantMin)) {
+  } else if ((cat === "mounted" || cat === "mounted missile") && priRangeA !== 0 &&
+             !precursorOn(r, project) && qualMeets(qualName, cantMin)) {
     out["cant_circle/warcry/druid"] = "cantabrian_circle";
   }
 
@@ -201,7 +254,7 @@ function computeAttributes(r, mr, project) {
   // Case 53 command
   const recrCmd = has(str(r.recr && r.recr["Allows command"]), "Y");
   const qualCmd = has(str(r.qual && r.qual["Allows command"]), "Y");
-  if (recrCmd && qualCmd) out["command"] = "command";
+  if ((recrCmd && qualCmd) || specHasAbility(spec, "command")) out["command"] = "command";
 
   // Case 54 merc_unit
   if (str(r.unit["merc unit"])) out["merc_unit"] = "mercenary_unit";
@@ -209,21 +262,25 @@ function computeAttributes(r, mr, project) {
   // Case 55 hardy / very_hardy / extremely_hardy
   if (cat !== "special" && cat !== "engine" && cat !== "ship" && cat !== "chariot") {
     const cultFat = (cat === "mounted" || cat === "mounted missile") ? cultCavFat : cultInfFat;
+    // "hardy" used to be one more step here (one level above the culture's
+    // fatigue); it is now an override, applied below.
     const specHV = specHasAbility(spec, "very_hardy");
-    const specH  = specHasAbility(spec, "hardy");
     const specEH = specHasAbility(spec, "extremely_hardy");
     if (specEH && cultFat > -1) out["hardy(2)"] = "extremely_hardy";
-    else if ((specHV && cultFat > -1) || (specH && cultFat > 0) ||
-             (!specHV && !specH && cultFat > 1))
+    else if ((specHV && cultFat > -1) || (!specHV && cultFat > 1))
       out["hardy(2)"] = "very_hardy";
-    else if ((specHV && cultFat === -1) || (specH && cultFat === 0) ||
-             (!specHV && !specH && cultFat === 1))
+    else if ((specHV && cultFat === -1) || (!specHV && cultFat === 1))
       out["hardy(2)"] = "hardy";
   }
+  // Specialty overrides: hardy sets exactly `hardy`; not_hardy removes any
+  // hardy level the unit would otherwise have (and beats hardy).
+  if (specHasAbility(spec, "hardy")) out["hardy(2)"] = "hardy";
+  if (specHasAbility(spec, "not_hardy")) delete out["hardy(2)"];
 
   // Case 56 power_charge
   const pwrMin = r.cult && r.cult["Powercharge min class"];
-  if ((cat === "mounted" || cat === "mounted missile") && qualMeets(qualName, pwrMin)) {
+  if (((cat === "mounted" || cat === "mounted missile") && qualMeets(qualName, pwrMin)) ||
+      specHasAbility(spec, "power_charge")) {
     out["p_charge"] = "power_charge";
   }
 
@@ -350,4 +407,7 @@ function computeAttributes(r, mr, project) {
   return out;
 }
 
-export { computeAttributes, globalFlagOn };
+export {
+  computeAttributes, globalFlagOn, specFirstAbility,
+  SPECIALTY_ABILITIES, SPECIALTY_OVERRIDES, FORMATION_ABILITIES,
+};

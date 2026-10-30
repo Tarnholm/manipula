@@ -14,6 +14,7 @@
 
 import { cint } from "./attack";
 import { specIs } from "../resolve";
+import { specFirstAbility, globalFlagOn, FORMATION_ABILITIES } from "./attributes";
 
 function num(v, dflt) {
   if (v === null || v === undefined || v === "") return dflt;
@@ -85,7 +86,22 @@ function computeSpacing(r) {
   };
 }
 
-function computeFormation2(r, mr, globals, platform) {
+/** formation2 (wedge / phalanx / testudo / shield_wall / schiltrom / horde).
+ *  A formation named in the specialty's ability slots wins outright.
+ *  DisableGeneralWedge (Mod Info → Globals, 1 / Y): a general's unit
+ *  (`isGeneral` — the entry that carries general_unit) never gets wedge
+ *  from the culture's "Wedge min class" or the Formations table; only a
+ *  specialty wedge gives it one. Generals wedging into the enemy line is
+ *  how the AI loses them. */
+function computeFormation2(r, mr, globals, platform, isGeneral) {
+  const specForm = specFirstAbility(r.spec, FORMATION_ABILITIES);
+  if (specForm) return specForm;
+  const f2 = autoFormation2(r, mr, platform);
+  if (f2 === "wedge" && isGeneral && globalFlagOn(globals && globals.DisableGeneralWedge)) return "";
+  return f2;
+}
+
+function autoFormation2(r, mr, platform) {
   const isM2 = platform === "M2TW" || platform === "KGDM";
   const catName = str(r.cat && r.cat["Category Type"]).trim();
   const cat = catName.toLowerCase();

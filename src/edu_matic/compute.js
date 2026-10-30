@@ -264,7 +264,8 @@ function computeUnit(unit, idx, project, isM2, entryType) {
   out["hp"]    = computePriHP(r, project.globals || {});
   out["sec hp"] = computeSecHP(r, mr, project.globals || {});
   Object.assign(out, computeSpacing(r));
-  const f2 = computeFormation2(r, mr, project.globals || {}, String(project.modInfo?.platform || ""));
+  const f2 = computeFormation2(r, mr, project.globals || {}, String(project.modInfo?.platform || ""),
+                               !!out["gen_unit"]);
   if (f2) out["formation2"] = f2;
 
   // ── Weapon attribute flags (ap/bp/spear/pike/prec/thrown/…) ─
@@ -296,10 +297,25 @@ function computeUnit(unit, idx, project, isM2, entryType) {
     out["No. of men"] = 1;
   }
 
+  // A unit with a ranged primary and a melee secondary shows its primary
+  // (missile) charge bonus in game, although that charge is never used.
+  // Write the melee charge onto the primary too. Also AFTER computeCosts on
+  // purpose: the price still sees the real primary charge, so no unit's
+  // cost moves.
+  if (hasRangedAndMelee(out)) out["charge"] = out["s charge"];
+
   return out;
 }
 
 // ── helpers ────────────────────────────────────────────────────────
+
+/** Ranged primary (missile range > 0) + a melee secondary that attacks. */
+function hasRangedAndMelee(out) {
+  return Number(out["msl range"]) > 0
+      && out["s wpn type"] === "melee"
+      && Number(out["s attack"]) > 0
+      && out["s charge"] != null;
+}
 
 /** ShipNonScaling: on when the global reads 1 / Y and the unit is a ship. */
 function shipNonScalingOn(globals, catName) {

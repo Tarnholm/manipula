@@ -15,11 +15,30 @@ function str(v) { return v == null ? "" : String(v); }
 
 const SPEAR_BONUS = { "4": "spear_bonus_4", "6": "spear_bonus_6", "8": "spear_bonus_8", "10": "spear_bonus_10", "12": "spear_bonus_12" };
 
+/** Case 103: does the unit's primary missile carry `prec` (thrown before
+ *  the charge)? RTW/ALX only; prec is not a valid M2TW attribute, so the
+ *  override can't conjure it there. The auto default is entangled with the
+ *  category + specialty ("no precursor"); the per-unit "Precursor Override"
+ *  toggle ("on"/"off", blank = auto) wins over that entanglement. Shared
+ *  with formulas/attributes.js, which gives cantabrian_circle to cavalry
+ *  whose missiles are NOT precursors. */
+function precursorOn(r, project) {
+  const platform = String(project.modInfo?.platform || "");
+  if (platform === "M2TW" || platform === "KGDM") return false;
+  const cat = str(r.cat && r.cat["Category Type"]).trim().toLowerCase();
+  const priRange = num(r.priWpn && r.priWpn["Range"], 0);
+  const specNoPrec = str(r.spec && r.spec["no precursor"]);
+  const precOverride = str(r.unit && r.unit["Precursor Override"]).trim().toLowerCase();
+  if (precOverride === "on")  return true;
+  if (precOverride === "off") return false;
+  return priRange !== 0 &&
+      cat !== "foot missile" && cat !== "mounted missile" &&
+      cat !== "special" && cat !== "chariot" && specNoPrec !== "Y";
+}
+
 /** @param {import("../resolve").ResolvedUnit} r */
 function computeWeaponAttrs(r, project) {
   const out = {};
-  const platform = String(project.modInfo?.platform || "");
-  const isM2 = platform === "M2TW" || platform === "KGDM";
   const cat = str(r.cat && r.cat["Category Type"]).trim().toLowerCase();
   const priRange = num(r.priWpn && r.priWpn["Range"], 0);
   const priWpnAP     = str(r.priWpn && r.priWpn["AP"]);
@@ -31,10 +50,6 @@ function computeWeaponAttrs(r, project) {
   const projThr  = str(r.projectile && r.projectile["thrown"]);
   const projLau  = str(r.projectile && r.projectile["launch"]);
   const projArea = str(r.projectile && r.projectile["area"]);
-  const specNoPrec = str(r.spec && r.spec["no precursor"]);
-  // Per-unit precursor override (UI: "Precursor" toggle next to Projectile).
-  // "" = auto (use the category/specialty default below); "on"/"off" force it.
-  const precOverride = str(r.unit && r.unit["Precursor Override"]).trim().toLowerCase();
 
   // Case 93 primary min delay. VBA default is 25 when the weapon is
   // missing (ships carry no pri weapon).
@@ -57,18 +72,8 @@ function computeWeaponAttrs(r, project) {
   // Case 102 pike
   if (priWpnSP === "long_pike" || priWpnSP === "short_pike") out["pike"] = priWpnSP;
 
-  // Case 103 prec (RTW/ALX only; prec is not a valid M2TW attribute, so the
-  // override can't conjure it there). The auto default is entangled with the
-  // category + specialty; the per-unit override wins over that entanglement.
-  if (!isM2) {
-    const precAuto = priRange !== 0 &&
-        cat !== "foot missile" && cat !== "mounted missile" &&
-        cat !== "special" && cat !== "chariot" && specNoPrec !== "Y";
-    const precOn = precOverride === "on"  ? true
-                 : precOverride === "off" ? false
-                 : precAuto;
-    if (precOn) out["prec"] = "prec";
-  }
+  // Case 103 prec — see precursorOn() above.
+  if (precursorOn(r, project)) out["prec"] = "prec";
 
   // Case 104 thrown
   if (projThr === "Y") out["thrown"] = "thrown";
@@ -125,4 +130,4 @@ function computeWeaponAttrs(r, project) {
   return out;
 }
 
-export { computeWeaponAttrs };
+export { computeWeaponAttrs, precursorOn };

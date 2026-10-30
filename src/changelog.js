@@ -3,6 +3,12 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.45.0", notes: [
+    "Units with a ranged and a melee attack now show the melee charge bonus on both weapons in game (the ranged weapon's own charge bonus is never used). This is applied after pricing, so no unit's cost changes. On the RIS roster this changes the stat_pri charge of 863 entries.",
+    "cantabrian_circle now goes to cavalry (Mounted and Mounted Missile) whose missiles are not precursors, at the culture's \"Cantabrian min class\" as before. Previously it went to every Mounted Missile unit. On the RIS roster, 65 javelin cavalry entries with a no-precursor specialty (Campanian, Oscan, Messapian cavalry, …) gain it, and none lose it. A unit whose Precursor toggle is set to On does not get it.",
+    "New DisableGeneralWedge global (Mod Info → Globals). Set it to 1 or Y and general units no longer get the wedge formation, unless their specialty gives them wedge. The AI kept wedging its generals into the enemy line and losing them. Blank / 0 = off. On the RIS roster, 1 removes wedge from 65 general entries and changes nothing else.",
+    "Core Data → Specialties: the special ability dropdowns now list every ability the builder understands. The new ones override whatever the unit would otherwise get: screeching_women, druid, warcry and cantabrian_circle (the unit's special-ability button), power_charge, command, hide_long_grass, hide_improved_forest, the formations wedge, schiltrom, shield_wall, testudo and phalanx, hardy (exactly hardy, whatever the culture's fatigue), and not_hardy, which removes any hardy level. Abilities from Specialty 2 are combined with Specialty 1's, so a unit can carry up to six.",
+  ] },
   { version: "0.44.0", notes: [
     "Sync: if the project folder ends up \"not on a branch\" (shown as HEAD · no upstream — usually a Pull that was cut off when Manipula closed), Commit + Push no longer fails with \"You are not currently on a branch\". It moves your commits back onto main on top of teammates' newer commits, pushes, and reloads the project. A red banner in the Sync panel explains the state and has a Repair + push button.",
     "If your commits clash with a teammate's newer ones, nothing is lost: they are uploaded to GitHub as a rescue/… branch for a teammate to merge, and kept locally as a manipula-rescue-… branch.",
