@@ -491,8 +491,9 @@ function computeCosts(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, s
   // RoundedUnitCosts (Mod Info → Globals, 1 / Y): every denarii figure on
   // stat_cost goes to the nearest 10, a tie (735) upwards. Applied last, so
   // upkeep / upgrades / cb still derive from the unrounded price and each
-  // number is the toggle-off number rounded. Turns and the M2 "cb unit lim"
-  // (a unit count) are not money and stay as they are.
+  // number is the toggle-off number rounded. A figure below 5 stays as it is
+  // (RIS weapon upgrades of 1 would otherwise become 0). Turns and the M2
+  // "cb unit lim" (a unit count) are not money and stay as they are.
   if (globalFlagOn(g.RoundedUnitCosts)) {
     for (const col of ROUNDED_COST_COLS) {
       if (out[col] != null) out[col] = roundToTen(out[col]);
@@ -504,11 +505,11 @@ function computeCosts(r, mr, project, unitSoldiers, unitExtras, unitPriArmour, s
 
 const ROUNDED_COST_COLS = ["price", "upkeep", "wpn upg", "arm upg", "cb cost", "cb cost pen"];
 
-/** Nearest 10, halves away from zero (735 → 740, 734 → 730). */
+/** Nearest 10, a 5 upwards (735 → 740, 734 → 730); below 5 is kept (4 → 4). */
 function roundToTen(v) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return v;
-  return Math.sign(n) * Math.floor(Math.abs(n) / 10 + 0.5) * 10;
+  if (!Number.isFinite(n) || n < 5) return v;
+  return Math.floor(n / 10 + 0.5) * 10;
 }
 
 export { computeCosts, roundToTen };

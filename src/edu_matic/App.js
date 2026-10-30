@@ -70,8 +70,8 @@ const NEW_HEAT_TERRAIN_GLOBALS = {
   DisableGeneralWedge: 0,
   // Rounded Unit Costs: with RoundedUnitCosts on (1 or Y), every denarii
   // figure on stat_cost (price, upkeep, upgrades, custom battle) is rounded
-  // to the nearest 10, an exact 5 upwards (743 → 740, 735 → 740).
-  // Recruitment turns are untouched. 0 / blank = off. Consumed at the end of
+  // to the nearest 10, an exact 5 upwards (743 → 740, 735 → 740). A cost
+  // below 5 is left as it is. Recruitment turns are untouched. 0 / blank = off. Consumed at the end of
   // formulas/cost.js computeCosts.
   RoundedUnitCosts: 0,
   // Terrain bonuses (scrub / sand / forest / snow) of a unit with a secondary

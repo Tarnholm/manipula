@@ -2,7 +2,7 @@
 //
 // With the toggle on, every denarii figure on stat_cost (price, upkeep,
 // weapon / armour upgrade, custom battle cost) is rounded to the nearest 10,
-// an exact 5 upwards. Recruitment turns never move.
+// an exact 5 upwards. A cost below 5 is kept. Recruitment turns never move.
 
 import { compute } from "./compute";
 import { roundToTen } from "./formulas/cost";
@@ -40,14 +40,15 @@ function projectWith(rounded) {
 const COST_COLS = ["price", "upkeep", "wpn upg", "arm upg", "cb cost"];
 
 describe("roundToTen", () => {
-  test("nearest 10, an exact 5 upwards", () => {
+  test("nearest 10, an exact 5 upwards, below 5 kept", () => {
     expect(roundToTen(743)).toBe(740);
     expect(roundToTen(735)).toBe(740);
     expect(roundToTen(734)).toBe(730);
     expect(roundToTen(746)).toBe(750);
     expect(roundToTen(740)).toBe(740);
     expect(roundToTen(5)).toBe(10);
-    expect(roundToTen(4)).toBe(0);
+    expect(roundToTen(4)).toBe(4);
+    expect(roundToTen(1)).toBe(1);
     expect(roundToTen(0)).toBe(0);
   });
 });
@@ -68,7 +69,7 @@ describe("RoundedUnitCosts", () => {
       for (const col of COST_COLS) {
         if (off[i][col] == null) continue;
         expect(on[i][col]).toBe(roundToTen(off[i][col]));
-        expect(on[i][col] % 10).toBe(0);
+        if (off[i][col] >= 5) expect(on[i][col] % 10).toBe(0);
       }
     }
     // The fixture has to exercise real rounding, not already-round numbers.

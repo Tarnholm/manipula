@@ -4,7 +4,7 @@
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
   { version: "0.46.0", notes: [
-    "New RoundedUnitCosts global (Mod Info → Globals). Set it to 1 or Y and every cost on a unit's stat_cost line is rounded to the nearest 10 denarii: 743 becomes 740, and an exact 5 rounds up, so 735 becomes 740. That covers price, upkeep, the weapon and armour upgrade costs and the custom battle cost; recruitment turns are not touched. Blank / 0 = off, the previous behaviour. On the RIS roster, 1 changes the stat_cost line of every entry and nothing else. RIS weapon upgrade costs of 1 become 0.",
+    "New RoundedUnitCosts global (Mod Info → Globals). Set it to 1 or Y and every cost on a unit's stat_cost line is rounded to the nearest 10 denarii: 743 becomes 740, and an exact 5 rounds up, so 735 becomes 740. That covers price, upkeep, the weapon and armour upgrade costs and the custom battle cost; recruitment turns are not touched, and a cost below 5 (such as a weapon upgrade cost of 1) is left as it is. Blank / 0 = off, the previous behaviour. On the RIS roster, 1 changes the stat_cost line of every entry and nothing else.",
   ] },
   { version: "0.45.0", notes: [
     "Units with a ranged and a melee attack now show the melee charge bonus on both weapons in game (the ranged weapon's own charge bonus is never used). This is applied after pricing, so no unit's cost changes. On the RIS roster this changes the stat_pri charge of 863 entries.",
