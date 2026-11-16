@@ -5,6 +5,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { readEdumatic } = require("./xlsmReader");
+const { makeTurboEdu, turboBaseName } = require("./turboEdu");
 const { autoUpdater } = require("electron-updater");
 
 // Stable AppUserModelID — must match the appId in package.json AND stay constant across
@@ -1426,6 +1427,21 @@ ipcMain.handle("edm-choose-export-dir", async () => {
   if (r.canceled || !r.filePaths[0]) return null;
   return r.filePaths[0];
 });
+// The RR Turbo copy of the unit file, written next to every EDU export (turboEdu.js): the normal EDU
+// with the Turbo-only rules applied. Both files go into the mod - export_descr_unit_turbo.txt must
+// never be a plain copy of export_descr_unit.txt. Returns { path, report } or null.
+function writeTurboEdu(eduText, outDir, baseName, hhmm) {
+  const turboBase = turboBaseName(baseName);
+  if (!turboBase) return null;
+  const { text, report } = makeTurboEdu(eduText);
+  for (const r of report) {
+    if (!r.ok) console.warn(`[turbo-edu] ${r.matches} matches for "${r.why}" - outside the expected range`);
+  }
+  const p = path.join(outDir, `${turboBase}_${hhmm}.txt`);
+  fs.writeFileSync(p, text, "utf8");
+  return { path: p, report };
+}
+
 ipcMain.handle("edm-export-edu", async (_e, text, outDir, baseName) => {
   try {
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
@@ -1433,6 +1449,7 @@ ipcMain.handle("edm-export-edu", async (_e, text, outDir, baseName) => {
     const fileName = `${baseName || "export_descr_unit"}_${hhmm}.txt`;
     const full = path.join(outDir, fileName);
     fs.writeFileSync(full, text, "utf8");
+    writeTurboEdu(text, outDir, baseName, hhmm);
     return full;
   } catch (e) { console.error("[edm] export-edu:", e.message); return null; }
 });
@@ -2155,6 +2172,8 @@ ipcMain.handle("export-bundle", async (_e, edbText, eduText, baseEdb = "export_d
       const p = path.join(dir, `${baseEdu}_${hhmm}.txt`);
       fs.writeFileSync(p, eduText, "utf8");
       out.eduPath = p;
+      const t = writeTurboEdu(eduText, dir, baseEdu, hhmm);
+      if (t) out.eduTurboPath = t.path;
     }
     return out;
   } catch (e) {

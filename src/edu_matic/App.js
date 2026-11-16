@@ -296,7 +296,8 @@ export default function App({ externalProject = null, onProjectChange, controlle
     if (!dir) return null;
     const out = await window.eduAPI.exportEdu(text, dir, baseName || "export_descr_unit");
     if (out) {
-      showToast(`Wrote ${out}`, "success");
+      const isEdu = (baseName || "export_descr_unit") === "export_descr_unit";
+      showToast(isEdu ? `Wrote ${out} and its RR Turbo copy (export_descr_unit_turbo_….txt): copy both into the mod` : `Wrote ${out}`, "success");
       window.eduAPI.revealInFolder?.(out);
     } else {
       showToast("Export failed — see log.", "error");

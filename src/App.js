@@ -2207,6 +2207,7 @@ export default function App() {
     const parts = [];
     if (r.edbPath) parts.push("EDB → " + r.edbPath);
     if (r.eduPath) parts.push("EDU → " + r.eduPath);
+    if (r.eduTurboPath) parts.push("RR Turbo EDU → " + r.eduTurboPath);
     setStatus("Exported · " + parts.join(" · "));
     // Record export hashes so subsequent writes can warn on external edits.
     try {

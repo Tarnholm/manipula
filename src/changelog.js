@@ -3,6 +3,9 @@
 // localStorage). Newest first; keep entries short and user-facing. When you
 // ship a notable version, add an entry here for it.
 const CHANGELOG = [
+  { version: "0.47.0", notes: [
+    "Export now also writes the RR Turbo copy of the unit file next to the normal one: export_descr_unit_turbo_HHMM.txt beside export_descr_unit_HHMM.txt. Copy both into the mod: the first as export_descr_unit.txt, the second as export_descr_unit_turbo.txt. The Turbo copy is the same file with RR Turbo's own changes applied (today: the AI recruits AoR units at half priority, recruit_priority_offset -50 instead of -100). Do not copy the normal file over export_descr_unit_turbo.txt: that removes RR Turbo's changes.",
+  ] },
   { version: "0.46.0", notes: [
     "New RoundedUnitCosts global (Mod Info → Globals). Set it to 1 or Y and every cost on a unit's stat_cost line is rounded to the nearest 10 denarii: 743 becomes 740, and an exact 5 rounds up, so 735 becomes 740. That covers price, upkeep, the weapon and armour upgrade costs and the custom battle cost; recruitment turns are not touched, and a cost below 5 (such as a weapon upgrade cost of 1) is left as it is. Blank / 0 = off, the previous behaviour. On the RIS roster, 1 changes the stat_cost line of every entry and nothing else.",
   ] },
